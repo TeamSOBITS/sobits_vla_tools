@@ -125,11 +125,13 @@
         button_mapping: # TODO: Check if this is the correct mapping for your gamepad
           record: 8
           pause: 8
+          resume: 8
           save: 7
           delete: 6
       keyboard:
         button_mapping:
           record: "r"
-          pause: "p"
+          pause: "r"
+          resume: "r"
           save: "s"
           delete: "d"
