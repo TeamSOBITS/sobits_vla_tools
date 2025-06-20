@@ -14,8 +14,52 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 
-# find_package(TODO REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(rcl_interfaces REQUIRED)
+find_package(sobits_interfaces REQUIRED)
 
+# Find libraries
+include_directories(include)
+
+# Library
+add_library(${PROJECT_NAME} SHARED
+  src/gamepad_clt.cpp
+  # src/rosbag_manager.cpp
+)
+
+# Link libraries
+rclcpp_components_register_node(${PROJECT_NAME}
+  PLUGIN "sobits_vla::GamepadClient"
+  EXECUTABLE gamepad_clt_node
+)
+
+ament_target_dependencies(${PROJECT_NAME}
+  "rclcpp"
+  "rclcpp_action"
+  "rclcpp_components"
+  "sobits_interfaces"
+  "sensor_msgs"
+  "rcl_interfaces"
+)
+
+install(TARGETS ${PROJECT_NAME}
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+install(DIRECTORY
+  config DESTINATION share/${PROJECT_NAME}
+  # launch DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY include/${PROJECT_NAME}
+  DESTINATION include
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
