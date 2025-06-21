@@ -3,11 +3,11 @@
     # Robot information
     robot_info:
       # Name of the robot
-      robot_name: "sobit_light"
+      name: "sobit_light"
       # Version of the robot
-      robot_version: "1.0.0"
+      version: "1.0.0"
       # Description of the robot
-      robot_morphology:
+      morphology:
         # Type of the robot (e.g., "mobile_manipulator", "humanoid", "quadruped", etc.)
         type: "mobile_manipulator"
         parts:
@@ -15,16 +15,12 @@
           - manipulator
           - end_effector
           - mobile_base
-          - legs
+          # - legs
         head:
-          count: 1
-          dof: 2
           joint_names:
             - "head_pan"
             - "head_tilt"
         manipulator:
-          count: 1
-          dof: 6
           joint_names:
             - "arm_joint_1"
             - "arm_joint_2"
@@ -33,23 +29,17 @@
             - "arm_joint_5"
             - "arm_joint_6"
         end_effector:
-          count: 1
-          dof: 1
           joint_names:
             - "gripper"
         mobile_base:
-          count: 1
-          dof: 2
           joint_names:
             - "base_wheel_left"
             - "base_wheel_right"
-        legs:
-          count: 0
-          dof: 0
-          joint_names:
-            - ""
+        # legs:
+        #   joint_names:
+        #     - ""
       # List of sensors on the robot
-      robot_sensors:
+      sensors:
         types:
           - rgbd # color and depth camera
           - lidar # light detection and ranging sensor
@@ -58,38 +48,32 @@
           - depth_camera # depth camera without color
           - fish_eye # fisheye camera
         rgbd:
-          count: 2
-          names: ["camera_front", "camera_rear", "head_camera", "hand_camera"]
-          models: ["unk", "unk", "realsense_d435", "realsense_d455"]
+          names: ["head_camera", "hand_camera"]
+          models: ["realsense_d435", "realsense_d455"]
         lidar:
-          count: 1
           names: ["lidar_front"]
           models: ["unk"]
         imu:
-          count: 0
           names: [""]
           models: [""]
         camera:
-          count: 0
           names: [""]
           models: [""]
         depth_camera:
-          count: 0
           names: [""]
           models: [""]
         fish_eye:
-          count: 0
-          names: [""]
-          models: [""]
+          names: ["camera_front", "camera_rear"]
+          models: ["unk", "unk"]
 
     # User information for contact
     user_info:
       # Name of the user
-      user_name: ""
+      name: ""
       # Location of the user
-      user_location: ""
+      location: ""
       # Contact email for the user
-      user_email: ""
+      email: ""
 
     # ROS bag recording configuration
     rosbag_config:
@@ -109,17 +93,19 @@
       recording_duration: 0
       # Format for the recorded bag files (e.g., "mcap", "sqlite3")
       conversion_format: "mcap" 
-      # Whether to compress the output bag files ("zstd" is the only supported compression format)
+      # Whether to compress the output bag files
       compress_output: false
-      # Specify the compression mode ("none", "file", "message")
-      compression_mode: "none"
-      # Source the storage configuration file if required
+      # If compression is enabled, specify the compression format ("zstd" is the only supported compression format)
+      compression_format: "zstd"
+      # Specify the compression mode ("file", "message")
+      compression_mode: "file"
+      # We will try to use a custom storage configuration file if available
       storage_config_file: "/path/to/storage_config.yaml"
 
     # Control settings for the gamepad
     gamepad_config:
       # Gamepad type (e.g., "dualshock4", "keyboard")
-      gamepad_name: "dualshock4"
+      name: "dualshock4"
       # Mapping of gamepad buttons to actions
       dualshock4:
         button_mapping: # TODO: Check if this is the correct mapping for your gamepad
