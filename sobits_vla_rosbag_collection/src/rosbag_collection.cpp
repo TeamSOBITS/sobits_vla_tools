@@ -94,17 +94,52 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   previous_state_ = current_state_;
   current_task_name_ = "default_task";
   previous_task_name_ = current_task_name_;
-  current_bag_name_ = "default_bag_episode_0";
+  current_task_path_ = rosbag_info.recording_dir + "/" + current_task_name_ ;
+  previous_task_path_ = current_task_path_;
+  current_bag_id_ = 0;
+  previous_bag_id_ = current_bag_id_;
+  current_bag_name_ = "episode_" + std::to_string(current_bag_id_);
   previous_bag_name_ = current_bag_name_;
-  current_bag_path_ = rosbag_recording_dir_ + "/" + current_bag_name_;
+  current_bag_path_ = current_task_path_ + "/" + current_bag_name_;
   previous_bag_path_ = current_bag_path_;
-  rosbag_dir_ = rosbag_info_.recording_dir;
+
+  rosbag_collection_dir_ = rosbag_info_.recording_dir;
+  rosbag_options_ = "";
+  
+  for (const auto & topic : rosbag_info_.topics_to_record) {
+  // Prepare the rosbag configuration
+  if (rosbag_info_.record_directory.empty()) {
+    RCLCPP_ERROR(this->get_logger(), "Recording directory is not specified in the rosbag configuration");
+    throw std::runtime_error("Recording directory is not specified");
+  }
+  if (rosbag_info_.topics_to_record.empty()) {
+    RCLCPP_ERROR(this->get_logger(), "No topics to record specified in the rosbag configuration");
+    throw std::runtime_error("No topics to record specified");
+  }
+  if (rosbag_info_.services_to_record.empty()) {
+    RCLCPP_WARN(this->get_logger(), "No services to record specified in the rosbag configuration");
+  }
+  if (rosbag_info_.actions_to_record.empty()) {
+    RCLCPP_WARN(this->get_logger(), "No actions to record specified in the rosbag configuration");
+  }
+  if (!rosbag_info_.storage_config_file.empty()) {
+    RCLCPP_INFO(this->get_logger(), "Using storage configuration file: %s", rosbag_info_.storage_config_file.c_str());
+  } else {
+    RCLCPP_WARN(this->get_logger(), "No storage configuration file specified, using default settings");
+
+    if (rosbag_info_.recording_duration <= 0) {
+      RCLCPP_WARN(this->get_logger(), "Recording will not stop automatically");
+    }
+    if (rosbag_info_.compress_output) {
+      RCLCPP_INFO(this->get_logger(), "Output compression is enabled with format: %s", rosbag_info_.compression_format.c_str());
+    }
+  }
 
   // Create the recording directory if it does not exist
-  if (!std::filesystem::exists(rosbag_dir_)) {
+  if (!std::filesystem::exists(rosbag_collection_dir_)) {
     try {
-      std::filesystem::create_directories(rosbag_dir_);
-      RCLCPP_INFO(this->get_logger(), "Created recording directory: %s", rosbag_dir_.c_str());
+      std::filesystem::create_directories(rosbag_collection_dir_);
+      RCLCPP_INFO(this->get_logger(), "Created recording directory: %s", rosbag_collection_dir_.c_str());
     } catch (const std::filesystem::filesystem_error & e)
     {
       RCLCPP_ERROR(this->get_logger(), "Failed to create recording directory: %s", e.what());
@@ -148,33 +183,87 @@ void RosbagCollection::handleAccepted(
   this->execute(goal_handle);
 }
 
+void RosbagCollection::createRosbag()
+{
+  RCLCPP_INFO(this->get_logger(), "Starting recording...");
+  previous_bag_id_ = current_bag_id_;
+  current_bag_id_++;
+
+  previous_state_ = current_state_;
+  current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+
+  previous_task_path_ = current_task_path_;
+  current_task_path_ = rosbag_collection_dir_ + "/" + current_task_name_;
+
+  previous_bag_name_ = current_bag_name_;
+  current_bag_name_ = "episode_" + std::to_string(current_bag_id_);
+
+  previous_bag_path_ = current_bag_path_;
+  current_bag_path_ = current_task_path_ + "/" + current_bag_name_;
+
+  // Create the directory for the current bag
+  if (!std::filesystem::exists(current_task_path_)) {
+    try {
+      std::filesystem::create_directories(current_task_path_);
+      RCLCPP_INFO(this->get_logger(), "Created bag directory: %s", current_bag_path_.c_str());
+    } catch (const std::filesystem::filesystem_error & e) {
+      RCLCPP_DEBUG(this->get_logger(), "The directory %s already exists, skipping creation", current_task_path_.c_str());
+    }
+  }
+
+  // TODO: Call the rosbag record command
+
+}
+
+// TODO
+void RosbagCollection::removeRosbag()
+{
+  RCLCPP_INFO(this->get_logger(), "Removing rosbag...");
+}
+
+void RosbagCollection::saveRosbag()
+{
+  RCLCPP_INFO(this->get_logger(), "Saving rosbag...");
+}
+
+void RosbagCollection::pauseRosbag()
+{
+  RCLCPP_INFO(this->get_logger(), "Pausing rosbag...");
+}
+
+void RosbagCollection::resumeRosbag()
+{
+  RCLCPP_INFO(this->get_logger(), "Resuming rosbag...");
+}
+
+void RosbagCollection::createRosbagYaml()
+{
+  RCLCPP_INFO(this->get_logger(), "Creating rosbag YAML file...");
+}
+
+bool RosbagCollection::updateRosbagYaml()
+{
+  RCLCPP_INFO(this->get_logger(), "Updating rosbag YAML file...");  
+  return true;
+}
+
+
 // TODO: Implement the execute function to handle the recording state changes
 void RosbagCollection::execute(
   const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>> goal_handle)
 {
   const auto goal = goal_handle->get_goal();
 
-  switch (goal->command)
-  {
-    case sobits_interfaces::action::VlaRecordState_Goal::RECORD:
-      RCLCPP_INFO(this->get_logger(), "Starting recording...");
-    case sobits_interfaces::action::VlaRecordState_Goal::PAUSE:
-      RCLCPP_INFO(this->get_logger(), "Pausing recording...");
-      break;
-    case sobits_interfaces::action::VlaRecordState_Goal::RESUME:
-      RCLCPP_INFO(this->get_logger(), "Resuming recording...")
-    case sobits_interfaces::action::VlaRecordState_Goal::SAVE:
-      RCLCPP_INFO(this->get_logger(), "Saving recording...");
-      break;
-    case sobits_interfaces::action::VlaRecordState_Goal::DELETE:
-      RCLCPP_INFO(this->get_logger(), "Deleting recording...");
-    default:
-      RCLCPP_ERROR(this->get_logger(), "Unknown command: %d", goal->command);
+  if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::RECORD) {
+    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
+      RCLCPP_WARN(this->get_logger(), "Cannot start recording while already in state: %d", current_state_);
       auto result = std::make_shared<sobits_interfaces::action::VlaRecordState::Result>();
-      result->result = sobits_interfaces::action::VlaRecordState_Result::FAILURE;
+      result->result = sobits_interfaces::action::VlaRecordState_Result::FAILED;
       goal_handle->abort(result);
       return;
-  }
+    }
+    createRosbag();
+
 
   auto result = std::make_shared<sobits_interfaces::action::VlaRecordState::Result>();
   result->result = sobits_interfaces::action::VlaRecordState_Result::SUCCESS;
