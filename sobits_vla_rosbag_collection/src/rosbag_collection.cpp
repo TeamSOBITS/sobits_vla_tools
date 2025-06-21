@@ -189,6 +189,12 @@ void RosbagCollection::taskUpdateCallback(
   RCLCPP_INFO(this->get_logger(), "Received task update request: %s", request->label.c_str());
   
   // Update the task name
+  if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
+    RCLCPP_WARN(this->get_logger(), "Cannot update task name while recording is in progress");
+    response->success = false;
+    response->message = "Cannot update task name while recording is in progress";
+    return;
+  }
   if (request->label != current_task_name_) {
     previous_task_name_ = current_task_name_;
     current_task_name_ = request->new_task_name;
