@@ -51,19 +51,15 @@ public:
   explicit RosbagCollection(const rclcpp::NodeOptions & options);
   ~RosbagCollection();
 
-  void createRosbag(const std::string & task_name);
-  void removeRosbag(const std::string & task_name);
-  void saveRosbag(const std::string & task_name);
+  void createRosbag();
+  void removeRosbag();
+  void saveRosbag();
   void pauseRosbag();
   void resumeRosbag();
-  void updateTaskName(
-    const std::string & old_task_name,
-    const std::string & new_task_name);
+  void updateTaskName();
 
   void createRosbagYaml();
-  void updateRosbagYaml( 
-    const std::string & task_name,
-    const std::string & bag_dir);
+  bool updateRosbagYaml();
 
 private:
   // TODO: service server for update task name
@@ -95,12 +91,17 @@ private:
   uint8_t previous_state_;
   std::string current_task_name_;
   std::string previous_task_name_;
+  std::string current_task_path_;
+  std::string previous_task_path_;
   std::string current_bag_name_;
   std::string previous_bag_name_;
   std::string current_bag_path_;
   std::string previous_bag_path_;
+  uint8_t current_bag_id_;
+  uint8_t previous_bag_id_;
 
-  std::string rosbag_dir_;
+  std::string rosbag_collection_dir_;
+  std::string rosbag_options_;
 
 };
 
