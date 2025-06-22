@@ -21,6 +21,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(sobits_interfaces REQUIRED)
 
+find_package(yaml_cpp_vendor REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 
@@ -29,15 +30,15 @@ include_directories(include)
 
 # Library
 add_library(${PROJECT_NAME} SHARED
-  src/gamepad_clt.cpp
+  # src/gamepad_clt.cpp
   src/rosbag_collection.cpp
 )
 
 # Link libraries
-rclcpp_components_register_node(${PROJECT_NAME}
-  PLUGIN "sobits_vla::GamepadClient"
-  EXECUTABLE gamepad_clt_node
-)
+# rclcpp_components_register_node(${PROJECT_NAME}
+#   PLUGIN "sobits_vla::GamepadClient"
+#   EXECUTABLE gamepad_clt_node
+# )
 rclcpp_components_register_node(${PROJECT_NAME}
   PLUGIN "sobits_vla::RosbagCollection"
   EXECUTABLE rosbag_collection_node
@@ -50,7 +51,7 @@ ament_target_dependencies(${PROJECT_NAME}
   "sensor_msgs"
   "rcl_interfaces"
   "sobits_interfaces"
-  "yaml-cpp"
+  "yaml_cpp_vendor"
 )
 
 install(TARGETS ${PROJECT_NAME}

@@ -25,6 +25,7 @@
   <depend>rclcpp</depend>
   <depend>rclcpp_action</depend>
   <depend>rclcpp_components</depend>
+  <depend>yaml_cpp_vendor</depend>
   <depend>sensor_msgs</depend>
   <depend>rcl_interfaces</depend>
   <depend>sobits_interfaces</depend>
