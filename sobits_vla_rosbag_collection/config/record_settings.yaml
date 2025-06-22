@@ -93,14 +93,10 @@
       recording_duration: 0
       # Format for the recorded bag files (e.g., "mcap", "sqlite3")
       conversion_format: "mcap" 
-      # Whether to compress the output bag files
-      compress_output: false
+      # Specify the compression mode ("none", "file", "message")
+      compression_mode: "none"
       # If compression is enabled, specify the compression format ("zstd" is the only supported compression format)
       compression_format: "zstd"
-      # Specify the compression mode ("file", "message")
-      compression_mode: "file"
-      # We will try to use a custom storage configuration file if available
-      storage_config_file: "/path/to/storage_config.yaml"
 
     # Control settings for the gamepad
     gamepad_config:
