@@ -3,7 +3,7 @@
     # Robot information
     robot_info:
       # Name of the robot
-      name: "sobit_light"
+      name: "robot_name"
       # Version of the robot
       version: "1.0.0"
       # Description of the robot
@@ -48,11 +48,11 @@
           - depth_camera # depth camera without color
           - fish_eye # fisheye camera
         rgbd:
-          names: ["head_camera", "hand_camera"]
-          models: ["realsense_d435", "realsense_d455"]
+          names: [""]
+          models: [""]
         lidar:
-          names: ["lidar_front"]
-          models: ["unk"]
+          names: [""]
+          models: [""]
         imu:
           names: [""]
           models: [""]
@@ -63,8 +63,8 @@
           names: [""]
           models: [""]
         fish_eye:
-          names: ["camera_front", "camera_rear"]
-          models: ["unk", "unk"]
+          names: [""]
+          models: [""]
 
     # User information for contact
     user_info:
@@ -83,10 +83,10 @@
       topics_to_record:
         - "/camera/image_raw"
         - "/camera/camera_info"
-      # List of services to record (if any)
+      # List of services to record (TODO: not available until ROS 2 Jazzy)
       services_to_record:
         - "/camera/get_image"
-      # List of actions to record (if any)
+      # List of actions to record (TODO: not available until ROS 2 Kilted)
       actions_to_record:
         - "/robot/move_base"
       # Duration of each recording in seconds (set to 0 for continuous recording)
@@ -104,12 +104,12 @@
       name: "dualshock4"
       # Mapping of gamepad buttons to actions
       dualshock4:
-        button_mapping: # TODO: Check if this is the correct mapping for your gamepad
-          record: 8
-          pause: 8
-          resume: 8
-          save: 7
-          delete: 6
+        button_mapping:
+          record: 7 # Top
+          pause: 7 # Bottom
+          resume: 7 # Bottom 
+          save: 6 # Left
+          delete: 6 # Right
       keyboard:
         button_mapping:
           record: "r"
