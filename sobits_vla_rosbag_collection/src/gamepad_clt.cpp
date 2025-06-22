@@ -78,15 +78,20 @@ GamepadClient::~GamepadClient()
 void GamepadClient::joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg)
 {
   // Check button states
-  if (msg->buttons[record_button_] && current_state_ != sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
+  if (msg->buttons[abs(record_button_)] > 0
+    && current_state_ != sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::RECORD);
-  } else if (msg->buttons[pause_button_] && current_state_ == sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
+  } else if (msg->buttons[abs(pause_button_)] < 0
+    && current_state_ == sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::PAUSE);
-  } else if (msg->buttons[resume_button_] && current_state_ == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
+  } else if (msg->buttons[abs(resume_button_)] < 0
+    && current_state_ == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::RESUME);
-  } else if (msg->buttons[save_button_] && current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
+  } else if (msg->buttons[abs(save_button_)] > 0
+    && current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::SAVE);
-  } else if (msg->buttons[delete_button_]) {
+  } else if (msg->buttons[abs(delete_button_)] < 0
+    && current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::DELETE);
   }
 }
