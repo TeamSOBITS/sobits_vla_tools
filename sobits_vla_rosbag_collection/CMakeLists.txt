@@ -21,6 +21,9 @@ find_package(sensor_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(sobits_interfaces REQUIRED)
 
+find_package(yaml-cpp REQUIRED)
+
+
 # Find libraries
 include_directories(include)
 
@@ -44,9 +47,10 @@ ament_target_dependencies(${PROJECT_NAME}
   "rclcpp"
   "rclcpp_action"
   "rclcpp_components"
-  "sobits_interfaces"
   "sensor_msgs"
   "rcl_interfaces"
+  "sobits_interfaces"
+  "yaml-cpp"
 )
 
 install(TARGETS ${PROJECT_NAME}
@@ -56,8 +60,8 @@ install(TARGETS ${PROJECT_NAME}
 )
 
 install(DIRECTORY
-  config DESTINATION share/${PROJECT_NAME}
-  # launch DESTINATION share/${PROJECT_NAME}
+  config
+  launch DESTINATION share/${PROJECT_NAME}
 )
 
 install(
