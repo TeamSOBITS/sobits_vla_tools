@@ -1,10 +1,12 @@
 #include <rcl_interfaces/msg/parameter_type.hpp>
-#include <sobits_interfaces/srv/vla_task_update.hpp>
+#include <sobits_interfaces/srv/vla_update_task.hpp>
 #include <sobits_interfaces/action/vla_record_state.hpp>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+
+#include <filesystem> 
 
 namespace sobits_vla
 {
@@ -16,10 +18,10 @@ public:
   std::string version;
   std::string morphology;
   std::vector<std::string> parts;
-  std::map<std::string, std::string> joint_names;
+  std::map<std::string, std::vector<std::string>> joint_names;
   std::vector<std::string> sensor_types;
-  std::map<std::string, std::string> sensor_names;
-  std::map<std::string, std::string> sensor_models;
+  std::map<std::string, std::vector<std::string>> sensor_names;
+  std::map<std::string, std::vector<std::string>> sensor_models;
 };
 
 class UserInfo
@@ -33,16 +35,16 @@ public:
 class RosbagInfo
 {
 public:
-  std::string recording_dir_;
-  std::string topics_to_record_;
-  std::string services_to_record_;
-  std::string actions_to_record_;
-  uint8_t recording_duration_;
-  std::string conversion_format_;
-  bool compress_output_;
-  std::string compression_format_;
-  std::string compression_mode_;
-  std::string storage_config_file_;
+  std::string recording_dir;
+  std::vector<std::string> topics_to_record;
+  std::vector<std::string> services_to_record;
+  std::vector<std::string> actions_to_record;
+  uint8_t recording_duration;
+  std::string conversion_format;
+  bool compress_output;
+  std::string compression_format;
+  std::string compression_mode;
+  std::string storage_config_file;
 };
 
 class RosbagCollection : public rclcpp::Node
@@ -64,8 +66,8 @@ public:
 private:
   // TODO: service server for update task name
   void taskUpdateCallback(
-    const std::shared_ptr<sobits_interfaces::srv::VlaTaskUpdate::Request> request,
-    std::shared_ptr<sobits_interfaces::srv::VlaTaskUpdate::Response> response);
+    const std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Request> request,
+    std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Response> response);
   // TODO: action server for save/remove/pause the rosbag
   rclcpp_action::GoalResponse handleGoal(
     const rclcpp_action::GoalUUID & uuid,
@@ -78,7 +80,11 @@ private:
     const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>> goal_handle);
 
   rclcpp_action::Server<sobits_interfaces::action::VlaRecordState>::SharedPtr record_action_server_;
-  rclcpp::Service<sobits_interfaces::srv::VlaTaskUpdate>::SharedPtr task_update_service_;
+  rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr task_update_service_;
+
+
+  FILE* bag_process_;
+  pid_t bag_pid_;
 
   // Parameters
   RobotInfo robot_info_;
