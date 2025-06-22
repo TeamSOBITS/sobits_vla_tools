@@ -62,7 +62,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   user_info_.location = this->get_parameter("user_info.location").as_string();
 
   // (3) Rosbag parameters
-  this->declare_parameter<std::string>("rosbag_config.recording_dir", "/path/to/recorded_bags");
+  this->declare_parameter<std::string>("rosbag_config.record_directory", "/path/to/recorded_bags");
   this->declare_parameter<std::vector<std::string>>("rosbag_config.topics_to_record", std::vector<std::string>{"/topic1", "/topic2"});
   this->declare_parameter<std::vector<std::string>>("rosbag_config.services_to_record", std::vector<std::string>{"/topic1", "/topic2"});
   this->declare_parameter<std::vector<std::string>>("rosbag_config.actions_to_record", std::vector<std::string>{"/topic1", "/topic2"});
@@ -70,7 +70,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("rosbag_config.conversion_format", "mcap");
   this->declare_parameter<std::string>("rosbag_config.compression_format", "zstd");
   this->declare_parameter<std::string>("rosbag_config.compression_mode", "none");
-  rosbag_info_.recording_dir      = this->get_parameter("rosbag_config.recording_dir").as_string();
+  rosbag_info_.recording_dir      = this->get_parameter("rosbag_config.record_directory").as_string();
   rosbag_info_.topics_to_record   = this->get_parameter("rosbag_config.topics_to_record").as_string_array();
   rosbag_info_.services_to_record = this->get_parameter("rosbag_config.services_to_record").as_string_array();
   rosbag_info_.actions_to_record  = this->get_parameter("rosbag_config.actions_to_record").as_string_array();
