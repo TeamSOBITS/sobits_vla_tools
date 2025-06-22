@@ -7,6 +7,8 @@
 #include <rclcpp_components/register_node_macro.hpp>
 
 #include <filesystem> 
+#include <fstream>
+#include <yaml-cpp/yaml.h>
 
 namespace sobits_vla
 {
@@ -58,17 +60,15 @@ public:
   void saveRosbag();
   void pauseRosbag();
   void resumeRosbag();
-  void updateTaskName();
 
   void createRosbagYaml();
   bool updateRosbagYaml();
 
 private:
-  // TODO: service server for update task name
   void taskUpdateCallback(
     const std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Request> request,
     std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Response> response);
-  // TODO: action server for save/remove/pause the rosbag
+
   rclcpp_action::GoalResponse handleGoal(
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const sobits_interfaces::action::VlaRecordState::Goal> goal);

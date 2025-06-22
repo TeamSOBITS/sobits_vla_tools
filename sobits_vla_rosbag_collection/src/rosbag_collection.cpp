@@ -4,8 +4,9 @@ namespace sobits_vla
 {
 
 RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
-: Node("rosbag_collection", options), bag_process_(nullptr), bag_pid_(-1)
+: Node("rosbag_collection", options)
 {
+  RCLCPP_INFO(this->get_logger(), "Initializing RosbagCollection Node...");
   // TODO: Configure QoS settings
   rclcpp::QoS qos_profile(rclcpp::KeepLast(10));
   // qos.reliability(rclcpp::ReliabilityPolicy::BestEffort);
@@ -85,19 +86,26 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   // Init values
   current_state_      = sobits_interfaces::action::VlaRecordState_Result::STOPPED; // PAUSED, RECORDING, STOPPED
   previous_state_     = current_state_;
-  current_task_name_  = "default_task";
-  previous_task_name_ = current_task_name_;
-  current_task_path_  = rosbag_info_.recording_dir + "/" + current_task_name_ ;
-  previous_task_path_ = current_task_path_;
-  current_bag_id_     = 0;
+
+  current_bag_id_     = -1;
   previous_bag_id_    = current_bag_id_;
   current_bag_name_   = "episode_" + std::to_string(current_bag_id_);
   previous_bag_name_  = current_bag_name_;
+  current_task_name_  = "default task";
+  previous_task_name_ = current_task_name_;
+  current_task_path_  = rosbag_info_.recording_dir + "/" + current_task_name_;
+  previous_task_path_ = current_task_path_;
   current_bag_path_   = current_task_path_ + "/" + current_bag_name_;
+  std::replace(current_bag_path_.begin(), current_bag_path_.end(), ' ', '_');
+  std::transform(current_bag_path_.begin(), current_bag_path_.end(), current_bag_path_.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
   previous_bag_path_  = current_bag_path_;
 
   rosbag_collection_dir_ = rosbag_info_.recording_dir;
   rosbag_options_ = "";
+
+  bag_process_ = nullptr;
+  bag_pid_ = -1;
   
   // Prepare the rosbag configuration
   if (rosbag_info_.recording_duration <= 0) {
@@ -148,8 +156,8 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     }
   }
 
-  // TODO: Create the rosbag YAML file
-  // createRosbagYaml();
+  // Create the rosbag YAML file
+  createRosbagYaml();
 
   RCLCPP_INFO(this->get_logger(), "RosbagCollection initialized");
 }
@@ -195,6 +203,9 @@ void RosbagCollection::createRosbag()
 
   previous_task_path_ = current_task_path_;
   current_task_path_ = rosbag_collection_dir_ + "/" + current_task_name_;
+  std::replace(current_task_path_.begin(), current_task_path_.end(), ' ', '_');
+  std::transform(current_task_path_.begin(), current_task_path_.end(), current_task_path_.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
 
   previous_bag_name_ = current_bag_name_;
   current_bag_name_ = "episode_" + std::to_string(current_bag_id_);
@@ -264,6 +275,13 @@ void RosbagCollection::removeRosbag()
     }
   }
 
+  previous_bag_id_ = current_bag_id_;
+  current_bag_id_ = -1;
+  previous_bag_name_ = current_bag_name_;
+  current_bag_name_ = "episode_" + std::to_string(current_bag_id_);
+  previous_bag_path_ = current_bag_path_;
+  current_bag_path_ = current_task_path_ + "/" + current_bag_name_;
+
   RCLCPP_INFO(this->get_logger(), "Rosbag removed successfully");
 }
 
@@ -310,13 +328,110 @@ void RosbagCollection::resumeRosbag()
 void RosbagCollection::createRosbagYaml()
 {
   RCLCPP_INFO(this->get_logger(), "Creating rosbag YAML file...");
+  // Create the YAML node structure
+  YAML::Node yaml_node;
+
+  // (1) Add robot info
+  yaml_node["robot_info"]["name"] = robot_info_.name;
+  yaml_node["robot_info"]["version"] = robot_info_.version;
+  yaml_node["robot_info"]["morphology"]["type"] = robot_info_.morphology;
+  yaml_node["robot_info"]["morphology"]["parts"] = YAML::Node(YAML::NodeType::Sequence);
+  for (const auto & part : robot_info_.parts) {
+    yaml_node["robot_info"]["morphology"]["parts"].push_back(part);
+    yaml_node["robot_info"]["morphology"][part]["joint_names"] = YAML::Node(YAML::NodeType::Sequence);
+    for (const auto & joint_name : robot_info_.joint_names[part]) {
+      yaml_node["robot_info"]["morphology"][part]["joint_names"].push_back(joint_name);
+    }
+  }
+  yaml_node["robot_info"]["sensors"]["types"] = YAML::Node(YAML::NodeType::Sequence);
+  for (const auto & sensor_type : robot_info_.sensor_types) {
+    yaml_node["robot_info"]["sensors"]["types"].push_back(sensor_type);
+    yaml_node["robot_info"]["sensors"][sensor_type]["names"] = YAML::Node(YAML::NodeType::Sequence);
+    yaml_node["robot_info"]["sensors"][sensor_type]["models"] = YAML::Node(YAML::NodeType::Sequence);
+    for (const auto & sensor_name : robot_info_.sensor_names[sensor_type]) {
+      yaml_node["robot_info"]["sensors"][sensor_type]["names"].push_back(sensor_name);
+    }
+    for (const auto & sensor_model : robot_info_.sensor_models[sensor_type]) {
+      yaml_node["robot_info"]["sensors"][sensor_type]["models"].push_back(sensor_model);
+    }
+  }
+
+  // (2) Add user info
+  yaml_node["user_info"]["name"] = user_info_.name;
+  yaml_node["user_info"]["email"] = user_info_.email;
+  yaml_node["user_info"]["location"] = user_info_.location;
+
+  // (3) Add gamepad info
+  yaml_node["gamepad_config"]["name"] = gamepad_name_;
+
+  // Save the YAML node to a file
+  std::string yaml_file_path = rosbag_collection_dir_ + "/recorded_bags_meta.yaml";
+  try {
+    std::ofstream yaml_file(yaml_file_path);
+    if (!yaml_file.is_open()) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to open YAML file for writing: %s", yaml_file_path.c_str());
+      throw std::runtime_error("Failed to open YAML file for writing");
+    }
+    yaml_file << yaml_node;
+    yaml_file.close();
+    RCLCPP_INFO(this->get_logger(), "Created rosbag YAML file: %s", yaml_file_path.c_str());
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to create rosbag YAML file: %s", e.what());
+    throw std::runtime_error("Failed to create rosbag YAML file");
+  }
+
 }
 
 bool RosbagCollection::updateRosbagYaml()
 {
-  RCLCPP_INFO(this->get_logger(), "Updating rosbag YAML file...");  
+  RCLCPP_INFO(this->get_logger(), "Updating rosbag YAML file...");
+
+  // Load the existing YAML file
+  std::string yaml_file_path = rosbag_collection_dir_ + "/recorded_bags_meta.yaml";
+  YAML::Node yaml_node;
+  try {
+    yaml_node = YAML::LoadFile(yaml_file_path);
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to load YAML file: %s", e.what());
+    return false;
+  }
+
+  // Update the task name in the YAML file
+  std::string current_task_label = current_task_name_;
+  std::replace(current_task_label.begin(), current_task_label.end(), ' ', '_');
+  std::transform(current_task_label.begin(), current_task_label.end(), current_task_label.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+
+  // If the tasks node is defined, append the current task
+  // If not, create the tasks node 
+  if (yaml_node["recorded_bags"]["tasks"].IsDefined()) {
+    yaml_node["recorded_bags"]["tasks"].push_back(current_task_label);
+  } else {
+    yaml_node["recorded_bags"]["tasks"] = YAML::Node(YAML::NodeType::Sequence);
+    yaml_node["recorded_bags"]["tasks"].push_back(current_task_label);
+  }
+  // Add the current task name to the YAML file
+  yaml_node["recorded_bags"][current_task_label]["label"] = current_task_label;
+  yaml_node["recorded_bags"][current_task_label]["bag_dir"] = current_task_path_;
+
+  // Save the updated YAML node to the file
+  try {
+    std::ofstream yaml_file(yaml_file_path);
+    if (!yaml_file.is_open()) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to open YAML file for writing: %s", yaml_file_path.c_str());
+      return false;
+    }
+    yaml_file << yaml_node;
+    yaml_file.close();
+    RCLCPP_DEBUG(this->get_logger(), "Updated rosbag YAML file: %s", yaml_file_path.c_str());
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to update rosbag YAML file: %s", e.what());
+    return false;
+  }
+
   return true;
 }
+
 
 
 // TODO: Implement the execute function to handle the recording state changes
