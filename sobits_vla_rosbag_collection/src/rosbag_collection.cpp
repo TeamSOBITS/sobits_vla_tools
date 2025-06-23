@@ -516,9 +516,15 @@ void RosbagCollection::taskUpdateCallback(
   if (request->label != current_task_name_) {
     previous_task_name_ = current_task_name_;
     current_task_name_ = request->label;
+    previous_task_path_ = current_task_path_;
+    current_task_path_ = rosbag_info_.recording_dir + "/" + current_task_name_;
+    std::replace(current_task_path_.begin(), current_task_path_.end(), ' ', '_');
+    std::transform(current_task_path_.begin(), current_task_path_.end(), current_task_path_.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
     RCLCPP_INFO(this->get_logger(), "Updated task name from '%s' to '%s'", previous_task_name_.c_str(), current_task_name_.c_str());
 
     // Update the rosbag YAML file
+    // Call when rosbag with the new task name is created
     bool is_updated = updateRosbagYaml();
     if (!is_updated) {
       RCLCPP_ERROR(this->get_logger(), "Failed to update rosbag YAML file");
