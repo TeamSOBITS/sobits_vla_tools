@@ -78,7 +78,7 @@
     # ROS bag recording configuration
     rosbag_config:
       # Path to the directory where the recorded bag files will be saved
-      record_directory: "/home/sobits"
+      record_directory: "/home/sobits/vla_rosbags"
       # List of topics to record (cameras, joint_states, tf, sensors, etc.)
       topics_to_record:
         - "/camera/image_raw"
