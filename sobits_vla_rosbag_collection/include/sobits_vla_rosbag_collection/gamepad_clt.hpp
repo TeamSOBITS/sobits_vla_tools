@@ -24,10 +24,12 @@ private:
     const std::shared_ptr<const sobits_interfaces::action::VlaRecordState::Feedback> feedback);
   void resultCallback(
     const rclcpp_action::ClientGoalHandle<sobits_interfaces::action::VlaRecordState>::WrappedResult & result);
+  void timerCallback();
 
+  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
   rclcpp_action::Client<sobits_interfaces::action::VlaRecordState>::SendGoalOptions goal_options_;
   rclcpp_action::Client<sobits_interfaces::action::VlaRecordState>::SharedPtr action_client_;
-  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
+  rclcpp::TimerBase::SharedPtr timer_;
 
   sensor_msgs::msg::Joy::SharedPtr last_joy_msg_;
 
