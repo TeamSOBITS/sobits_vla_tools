@@ -89,8 +89,6 @@
       # List of actions to record (if any)
       actions_to_record:
         - "/robot/move_base"
-      # Duration of each recording in seconds (set to 0 for continuous recording)
-      recording_duration: 0
       # Format for the recorded bag files (e.g., "mcap", "sqlite3")
       conversion_format: "mcap" 
       # Specify the compression mode ("none", "file", "message")
@@ -106,14 +104,10 @@
       dualshock4:
         button_mapping:
           record: 7 # Top
-          pause: 7 # Bottom
-          resume: 7 # Bottom 
           save: 6 # Left
           delete: 6 # Right
       keyboard:
         button_mapping:
           record: "r"
-          pause: "r"
-          resume: "r"
           save: "s"
           delete: "d"
