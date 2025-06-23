@@ -31,7 +31,6 @@
   <depend>sobits_interfaces</depend>
   <depend>ros2bag</depend>
   <depend>rosbag2</depend>
-  <depend>rosbag2</depend>
   <depend>rosbag2_compression</depend>
   <depend>rosbag2_cpp</depend>
   <depend>rosbag2_storage</depend>
