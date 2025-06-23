@@ -8,6 +8,7 @@
 
 #include <filesystem> 
 #include <fstream>
+#include <wait.h>
 #include <yaml-cpp/yaml.h>
 
 namespace sobits_vla
@@ -41,12 +42,13 @@ public:
   std::vector<std::string> topics_to_record;
   std::vector<std::string> services_to_record;
   std::vector<std::string> actions_to_record;
-  uint8_t recording_duration;
+  // uint8_t recording_duration;
   std::string conversion_format;
   bool compress_output;
   std::string compression_format;
   std::string compression_mode;
   std::string storage_config_file;
+  std::string rosbag_options;
 };
 
 class RosbagCollection : public rclcpp::Node
@@ -58,11 +60,9 @@ public:
   void createRosbag();
   void removeRosbag();
   void saveRosbag();
-  void pauseRosbag();
-  void resumeRosbag();
 
   void createRosbagYaml();
-  bool updateRosbagYaml();
+  void updateRosbagYaml();
 
 private:
   void taskUpdateCallback(
@@ -95,19 +95,20 @@ private:
   // State management
   uint8_t current_state_;
   uint8_t previous_state_;
+
   std::string current_task_name_;
   std::string previous_task_name_;
   std::string current_task_path_;
   std::string previous_task_path_;
+  uint8_t current_task_id_;
+  uint8_t previous_task_id_;
+
   std::string current_bag_name_;
   std::string previous_bag_name_;
   std::string current_bag_path_;
   std::string previous_bag_path_;
   uint8_t current_bag_id_;
   uint8_t previous_bag_id_;
-
-  std::string rosbag_collection_dir_;
-  std::string rosbag_options_;
 
 };
 
