@@ -6,6 +6,7 @@ namespace sobits_vla
 GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
 : Node("gamepad_client", options)
 {
+  RCLCPP_INFO(this->get_logger(), "Initializing GamepadClient Node...");
   // TODO: Configure QoS settings
   rclcpp::QoS qos_profile(rclcpp::KeepLast(10));
   // qos.reliability(rclcpp::ReliabilityPolicy::BestEffort);
@@ -35,8 +36,8 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
       &GamepadClient::resultCallback, this, std::placeholders::_1);
 
   // Set values from parameters
-  this->declare_parameter<std::string>("gamepad_config.gamepad_name", "dualshock4");
-  gamepad_name_ = this->get_parameter("gamepad_name").as_string();
+  this->declare_parameter<std::string>("gamepad_config.name", "dualshock4");
+  gamepad_name_ = this->get_parameter("gamepad_config.name").as_string();
   // Terminate if gamepad name value is "keyboard"
   if (gamepad_name_ == "keyboard") {
     RCLCPP_ERROR(this->get_logger(), "Gamepad name cannot be 'keyboard'. Please set a valid gamepad name.");
@@ -78,19 +79,19 @@ GamepadClient::~GamepadClient()
 void GamepadClient::joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg)
 {
   // Check button states
-  if (msg->buttons[abs(record_button_)] > 0
+  if (msg->axes[abs(record_button_)] > 0
     && current_state_ != sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::RECORD);
-  } else if (msg->buttons[abs(pause_button_)] < 0
+  } else if (msg->axes[abs(pause_button_)] < 0
     && current_state_ == sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::PAUSE);
-  } else if (msg->buttons[abs(resume_button_)] < 0
+  } else if (msg->axes[abs(resume_button_)] < 0
     && current_state_ == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::RESUME);
-  } else if (msg->buttons[abs(save_button_)] > 0
+  } else if (msg->axes[abs(save_button_)] > 0
     && current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::SAVE);
-  } else if (msg->buttons[abs(delete_button_)] < 0
+  } else if (msg->axes[abs(delete_button_)] < 0
     && current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::DELETE);
   }
