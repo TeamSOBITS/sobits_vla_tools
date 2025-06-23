@@ -39,8 +39,6 @@ private:
   std::string gamepad_name_;
 
   uint8_t record_button_;
-  uint8_t pause_button_;
-  uint8_t resume_button_;
   uint8_t save_button_;
   uint8_t delete_button_;
 

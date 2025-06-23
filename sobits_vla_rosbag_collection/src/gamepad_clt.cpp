@@ -40,18 +40,13 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
   // Terminate if gamepad name value is "keyboard"
   if (gamepad_name_ == "keyboard") {
     RCLCPP_ERROR(this->get_logger(), "Gamepad name cannot be 'keyboard'. Please set a valid gamepad name.");
-    rclcpp::shutdown();
     return;
   } 
 
   this->declare_parameter<uint8_t>("gamepad_config." + gamepad_name_ + ".button_mapping.record", 0);
-  this->declare_parameter<uint8_t>("gamepad_config." + gamepad_name_ + ".button_mapping.pause", 0);
-  this->declare_parameter<uint8_t>("gamepad_config." + gamepad_name_ + ".button_mapping.resume", 0);
   this->declare_parameter<uint8_t>("gamepad_config." + gamepad_name_ + ".button_mapping.save", 0);
   this->declare_parameter<uint8_t>("gamepad_config." + gamepad_name_ + ".button_mapping.delete", 0);
   record_button_ = this->get_parameter("gamepad_config." + gamepad_name_ + ".button_mapping.record").as_int();
-  pause_button_  = this->get_parameter("gamepad_config." + gamepad_name_ + ".button_mapping.pause").as_int();
-  resume_button_ = this->get_parameter("gamepad_config." + gamepad_name_ + ".button_mapping.resume").as_int();
   save_button_   = this->get_parameter("gamepad_config." + gamepad_name_ + ".button_mapping.save").as_int();
   delete_button_ = this->get_parameter("gamepad_config." + gamepad_name_ + ".button_mapping.delete").as_int();
 
@@ -92,7 +87,6 @@ void GamepadClient::timerCallback()
   // Terminate node if the current state is ERROR
   if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::ERROR) {
     RCLCPP_ERROR(this->get_logger(), "Current state is ERROR, cannot process commands");
-    rclcpp::shutdown();
     return;
   }
   
@@ -100,19 +94,12 @@ void GamepadClient::timerCallback()
   if (last_joy_msg_->axes[abs(record_button_)] > 0
     && current_state_ == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::RECORD);
-  } else if (last_joy_msg_->axes[abs(pause_button_)] < 0
-    && current_state_ == sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
-    sendGoal(sobits_interfaces::action::VlaRecordState_Goal::PAUSE);
-  } else if (last_joy_msg_->axes[abs(resume_button_)] < 0
-    && current_state_ == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
-    sendGoal(sobits_interfaces::action::VlaRecordState_Goal::RESUME);
   } else if (last_joy_msg_->axes[abs(save_button_)] > 0
     && current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::SAVE);
   } else if (last_joy_msg_->axes[abs(delete_button_)] < 0) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::DELETE);
   }
-
 }
 
 void GamepadClient::joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg)
@@ -150,7 +137,6 @@ void GamepadClient::resultCallback(
   // Process the result
   RCLCPP_INFO(this->get_logger(), "Action succeeded with result: %s", 
       result.result->status == sobits_interfaces::action::VlaRecordState_Result::RECORDING ? "RECORDING" :
-      result.result->status == sobits_interfaces::action::VlaRecordState_Result::PAUSED ? "PAUSED" :
       result.result->status == sobits_interfaces::action::VlaRecordState_Result::STOPPED ? "STOPPED" :
       result.result->status == sobits_interfaces::action::VlaRecordState_Result::ERROR ? "ERROR" :
       "UNKNOWN");
@@ -159,8 +145,6 @@ void GamepadClient::resultCallback(
   previous_state_ = current_state_;
   if (result.result->status == sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
-  } else if (result.result->status == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
-    current_state_ = sobits_interfaces::action::VlaRecordState_Result::PAUSED;
   } else if (result.result->status == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
   } else {
@@ -178,12 +162,9 @@ void GamepadClient::sendGoal(const uint8_t & command)
   // Send the goal to the action server
   RCLCPP_INFO(this->get_logger(), "Send goal: %s",
       command == sobits_interfaces::action::VlaRecordState_Goal::RECORD ? "RECORD" :
-      command == sobits_interfaces::action::VlaRecordState_Goal::PAUSE ? "PAUSE" :
-      command == sobits_interfaces::action::VlaRecordState_Goal::RESUME ? "RESUME" :
-      command == sobits_interfaces::action::VlaRecordState_Goal::SAVE ? "SAVE" :
+      command == sobits_interfaces::action::VlaRecordState_Goal::SAVE   ? "SAVE" :
       command == sobits_interfaces::action::VlaRecordState_Goal::DELETE ? "DELETE" : "UNKNOWN");
   this->action_client_->async_send_goal(goal_msg, goal_options_);
-
 }
 
 } // namespace sobits_vla
