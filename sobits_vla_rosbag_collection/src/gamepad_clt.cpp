@@ -21,12 +21,6 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
   // Create action client for VlaRecordState
   action_client_ = rclcpp_action::create_client<sobits_interfaces::action::VlaRecordState>(
       this, "vla_record_state");
-  // Wait for the action server to be available
-  if (!action_client_->wait_for_action_server(std::chrono::seconds(10))) {
-    RCLCPP_ERROR(this->get_logger(), "Action server not available after waiting");
-    rclcpp::shutdown();
-    return;
-  }
   // Set up goal options
   goal_options_.goal_response_callback = std::bind(
       &GamepadClient::goalResponseCallback, this, std::placeholders::_1);
@@ -34,6 +28,11 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
       &GamepadClient::feedbackCallback, this, std::placeholders::_1, std::placeholders::_2);
   goal_options_.result_callback = std::bind(
       &GamepadClient::resultCallback, this, std::placeholders::_1);
+
+  // Create wall timer to periodically check the joy messages
+  timer_ = this->create_wall_timer(
+      std::chrono::milliseconds(100),
+      std::bind(&GamepadClient::timerCallback, this));
 
   // Set values from parameters
   this->declare_parameter<std::string>("gamepad_config.name", "dualshock4");
@@ -76,25 +75,50 @@ GamepadClient::~GamepadClient()
   RCLCPP_INFO(this->get_logger(), "GamepadClient destructor called");
 }
 
-void GamepadClient::joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg)
+void GamepadClient::timerCallback()
 {
-  // Check button states
-  if (msg->axes[abs(record_button_)] > 0
-    && current_state_ != sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
+  // Check if we have received a Joy message
+  if (!last_joy_msg_) {
+    RCLCPP_WARN(this->get_logger(), "No Joy message received yet");
+    return;
+  }
+
+  // Check if the action server is available
+  if (!action_client_->wait_for_action_server(std::chrono::seconds(1))) {
+    RCLCPP_WARN(this->get_logger(), "Action server not available, cannot process commands");
+    return;
+  }
+
+  // Terminate node if the current state is ERROR
+  if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::ERROR) {
+    RCLCPP_ERROR(this->get_logger(), "Current state is ERROR, cannot process commands");
+    rclcpp::shutdown();
+    return;
+  }
+  
+  // Check the last joy message for button presses
+  if (last_joy_msg_->axes[abs(record_button_)] > 0
+    && current_state_ == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::RECORD);
-  } else if (msg->axes[abs(pause_button_)] < 0
+  } else if (last_joy_msg_->axes[abs(pause_button_)] < 0
     && current_state_ == sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::PAUSE);
-  } else if (msg->axes[abs(resume_button_)] < 0
+  } else if (last_joy_msg_->axes[abs(resume_button_)] < 0
     && current_state_ == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::RESUME);
-  } else if (msg->axes[abs(save_button_)] > 0
+  } else if (last_joy_msg_->axes[abs(save_button_)] > 0
     && current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::SAVE);
-  } else if (msg->axes[abs(delete_button_)] < 0
-    && current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
+  } else if (last_joy_msg_->axes[abs(delete_button_)] < 0) {
     sendGoal(sobits_interfaces::action::VlaRecordState_Goal::DELETE);
   }
+
+}
+
+void GamepadClient::joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg)
+{
+  // Store the last joy message
+  last_joy_msg_ = msg;
 }
 
 void GamepadClient::goalResponseCallback(
@@ -128,6 +152,7 @@ void GamepadClient::resultCallback(
       result.result->status == sobits_interfaces::action::VlaRecordState_Result::RECORDING ? "RECORDING" :
       result.result->status == sobits_interfaces::action::VlaRecordState_Result::PAUSED ? "PAUSED" :
       result.result->status == sobits_interfaces::action::VlaRecordState_Result::STOPPED ? "STOPPED" :
+      result.result->status == sobits_interfaces::action::VlaRecordState_Result::ERROR ? "ERROR" :
       "UNKNOWN");
 
   // Update current state based on the command
@@ -138,6 +163,9 @@ void GamepadClient::resultCallback(
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::PAUSED;
   } else if (result.result->status == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
+  } else {
+    RCLCPP_WARN(this->get_logger(), "Received unknown result status: %d", result.result->status);
+    current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
   }
 }
 
