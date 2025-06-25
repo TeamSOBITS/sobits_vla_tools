@@ -1,5 +1,18 @@
 #include "sobits_vla_rosbag_collection/rosbag_collection.hpp"
 
+#include <csignal>      // For kill
+#include <sys/wait.h>   // For waitpid
+#include <unistd.h>     // For fork, execl, _exit
+#include <iostream>     // For std::cerr
+#include <filesystem>   // For std::filesystem operations
+#include <algorithm>    // For std::replace, std::transform
+#include <fstream>      // For std::ofstream
+#include <string>       // For std::string
+#include <vector>       // For std::vector
+
+// Assuming sobits_interfaces is available and properly defined
+// and that YAML::Node and related are from the yaml-cpp library.
+
 namespace sobits_vla
 {
 
@@ -105,7 +118,6 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 
   rosbag_info_.rosbag_options = "";
 
-  bag_process_ = nullptr;
   bag_pid_ = -1;
   
   // Prepare the rosbag configuration
@@ -160,6 +172,19 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 RosbagCollection::~RosbagCollection()
 {
   RCLCPP_INFO(this->get_logger(), "RosbagCollection destructor called");
+  // Ensure the rosbag process is stopped if it's still running
+  if (bag_pid_ != -1) {
+      RCLCPP_WARN(this->get_logger(), "Rosbag process (PID: %d) still active in destructor. Attempting to save.", bag_pid_);
+      // Try to save the bag on destruction for robustness
+      // This will now use the non-blocking waitpid with timeout
+      // Note: Calling potentially throwing methods in destructors should be handled carefully.
+      // For simplicity here, we assume it's okay, but in production, you might want to catch exceptions.
+      try {
+          saveRosbag();
+      } catch (const std::exception& e) {
+          RCLCPP_ERROR(this->get_logger(), "Error during bag saving in destructor: %s", e.what());
+      }
+  }
 }
 
 void RosbagCollection::createRosbag()
@@ -187,25 +212,36 @@ void RosbagCollection::createRosbag()
       std::filesystem::create_directories(current_task_path_);
       RCLCPP_INFO(this->get_logger(), "Created bag directory: %s", current_bag_path_.c_str());
     } catch (const std::filesystem::filesystem_error & e) {
-      RCLCPP_DEBUG(this->get_logger(), "The directory %s already exists, skipping creation", current_task_path_.c_str());
+      RCLCPP_DEBUG(this->get_logger(), "The directory %s already exists, skipping creation: %s", current_task_path_.c_str(), e.what());
     }
   }
 
   // Call the rosbag record command
-  std::string command = "ros2 bag record --output " + current_bag_path_ + " " + rosbag_info_.rosbag_options;
+  std::string command = "exec ros2 bag record --output " + current_bag_path_ + " " + rosbag_info_.rosbag_options;
   RCLCPP_INFO(this->get_logger(), "Executing command: %s", command.c_str());
 
-  // Use fork/exec to launch the process and get the PID
   pid_t pid = fork();
   if (pid == -1) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to fork for rosbag record");
+    RCLCPP_ERROR(this->get_logger(), "Failed to fork for rosbag record: %s", strerror(errno));
     previous_state_ = current_state_;
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
     throw std::runtime_error("Failed to fork for rosbag record");
   } else if (pid == 0) {
     // Child process
+    // IMPORTANT: If you want to see the rosbag output, do NOT redirect stdout/stderr to /dev/null here.
+    // If you were previously redirecting, that would explain why you don't see the messages.
+    // If you want to suppress its output, you can do:
+    // int devNull = open("/dev/null", O_WRONLY);
+    // dup2(devNull, STDOUT_FILENO);
+    // dup2(devNull, STDERR_FILENO);
+    // close(devNull);
+    
+    // Execute the command string via /bin/sh -c
     execl("/bin/sh", "sh", "-c", command.c_str(), (char *)nullptr);
-    _exit(EXIT_FAILURE); // If exec fails
+    
+    // If execl fails, print an error and exit the child process
+    perror("execl failed"); // Prints error to stderr (might still be redirected if you added code above)
+    _exit(EXIT_FAILURE); 
   } else {
     // Parent process
     bag_pid_ = pid;
@@ -219,21 +255,57 @@ void RosbagCollection::createRosbag()
   RCLCPP_INFO(this->get_logger(), "Rosbag recording started successfully");
 }
 
-// TODO
+
 void RosbagCollection::removeRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Removing rosbag...");
 
   if (bag_pid_ != -1) {
-    if (kill(bag_pid_, SIGTERM) == -1) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to terminate rosbag process with PID %d", bag_pid_);
+    RCLCPP_INFO(this->get_logger(), "Sending SIGINT to rosbag process (PID: %d) for removal...", bag_pid_);
+    // Send SIGINT for graceful termination
+    if (kill(bag_pid_, SIGINT) == -1) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to send SIGINT to rosbag process with PID %d: %s", bag_pid_, strerror(errno));
       previous_state_ = current_state_;
       current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-      throw std::runtime_error("Failed to terminate rosbag process");
+      throw std::runtime_error("Failed to terminate rosbag process for removal");
     }
+
     int status = 0;
-    waitpid(bag_pid_, &status, 0);
-    bag_pid_ = -1;
+    pid_t result = 0;
+    // Increased timeout for rosbag to gracefully exit and flush its cache
+    int timeout_seconds = 20; // Changed from 5 to 20 seconds
+    int poll_interval_ms = 200; // Check every 200 ms
+
+    RCLCPP_INFO(this->get_logger(), "Waiting for rosbag process (PID: %d) to terminate for removal (timeout: %d seconds)...", bag_pid_, timeout_seconds);
+
+    for (int i = 0; i < (timeout_seconds * 1000) / poll_interval_ms; ++i) {
+        result = waitpid(bag_pid_, &status, WNOHANG); // Use WNOHANG
+        if (result == bag_pid_) { // Child has terminated
+            if (WIFEXITED(status)) {
+                RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) exited with status: %d", bag_pid_, WEXITSTATUS(status));
+            } else if (WIFSIGNALED(status)) {
+                RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) terminated by signal: %d", bag_pid_, WTERMSIG(status));
+            }
+            bag_pid_ = -1; // Reset PID since process is gone
+            break; // Exit loop
+        } else if (result == 0) { // Child is still running
+            std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+        } else { // Error from waitpid
+            RCLCPP_ERROR(this->get_logger(), "Error waiting for rosbag process (PID: %d) during removal: %s", bag_pid_, strerror(errno));
+            break; // Exit loop on error
+        }
+    }
+
+    if (bag_pid_ != -1) { // If it's still not -1, it means the process didn't terminate within the timeout
+        RCLCPP_WARN(this->get_logger(), "Rosbag process (PID: %d) did not terminate gracefully within timeout (%d seconds) during removal. Sending SIGKILL.", bag_pid_, timeout_seconds);
+        if (kill(bag_pid_, SIGKILL) == -1) { // Force terminate
+            RCLCPP_ERROR(this->get_logger(), "Failed to send SIGKILL to rosbag process with PID %d: %s", bag_pid_, strerror(errno));
+        }
+        // Even after SIGKILL, wait for it to be reaped to avoid zombie processes
+        waitpid(bag_pid_, &status, 0); // Blocking wait for SIGKILL to ensure cleanup
+        RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) forcibly terminated during removal.", bag_pid_);
+        bag_pid_ = -1;
+    }
   }
 
   // Remove the current bag directory
@@ -242,7 +314,7 @@ void RosbagCollection::removeRosbag()
       std::filesystem::remove_all(current_bag_path_);
       RCLCPP_INFO(this->get_logger(), "Removed bag directory: %s", current_bag_path_.c_str());
     } catch (const std::filesystem::filesystem_error & e) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to remove bag directory: %s", e.what());
+      RCLCPP_ERROR(this->get_logger(), "Failed to remove bag directory '%s': %s", current_bag_path_.c_str(), e.what());
       previous_state_ = current_state_;
       current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
       throw std::runtime_error("Failed to remove bag directory");
@@ -250,9 +322,13 @@ void RosbagCollection::removeRosbag()
   }
 
   previous_bag_id_ = current_bag_id_;
-  current_bag_id_ = current_bag_id_ - 1 < 0 ? 0 : current_bag_id_- 1;
+  if (current_bag_id_ > 0) {
+    current_bag_id_ = current_bag_id_ - 1;
+  } else {
+    current_bag_id_ = 0;
+  }
   previous_bag_name_ = current_bag_name_;
-  current_bag_name_ = "episode_" + std::to_string(current_bag_id_);
+  current_bag_name_ = "episode_" + std::to_string(current_bag_id_); // Adjust as needed based on new ID logic
   previous_bag_path_ = current_bag_path_;
   current_bag_path_ = current_task_path_ + "/" + current_bag_name_;
 
@@ -266,15 +342,58 @@ void RosbagCollection::saveRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Saving rosbag...");
 
-  if (kill(bag_pid_, SIGTERM) == -1) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to terminate rosbag process with PID %d", bag_pid_);
+  if (bag_pid_ == -1) {
+    RCLCPP_WARN(this->get_logger(), "No rosbag process to terminate (bag_pid_ == -1)");
+    previous_state_ = current_state_;
+    current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
+    return;
+  }
+
+  RCLCPP_INFO(this->get_logger(), "Sending SIGINT to rosbag process (PID: %d) for saving...", bag_pid_);
+  // Send SIGINT for graceful termination
+  if (kill(bag_pid_, SIGINT) == -1) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to send SIGINT to rosbag process with PID %d: %s", bag_pid_, strerror(errno));
     previous_state_ = current_state_;
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-    throw std::runtime_error("Failed to terminate rosbag process");
+    throw std::runtime_error("Failed to terminate rosbag process for saving");
   }
+
   int status = 0;
-  waitpid(bag_pid_, &status, 0);
-  bag_pid_ = -1;
+  pid_t result = 0;
+  // Increased timeout for rosbag to gracefully exit and flush its cache
+  int timeout_seconds = 20; // Changed from 5 to 20 seconds
+  int poll_interval_ms = 200; // Check every 200 ms
+
+  RCLCPP_INFO(this->get_logger(), "Waiting for rosbag process (PID: %d) to terminate for saving (timeout: %d seconds)...", bag_pid_, timeout_seconds);
+
+  for (int i = 0; i < (timeout_seconds * 1000) / poll_interval_ms; ++i) {
+      result = waitpid(bag_pid_, &status, WNOHANG); // Use WNOHANG
+      if (result == bag_pid_) { // Child has terminated
+          if (WIFEXITED(status)) {
+              RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) exited with status: %d", bag_pid_, WEXITSTATUS(status));
+          } else if (WIFSIGNALED(status)) {
+              RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) terminated by signal: %d", bag_pid_, WTERMSIG(status));
+          }
+          bag_pid_ = -1; // Reset PID since process is gone
+          break; // Exit loop
+      } else if (result == 0) { // Child is still running
+          std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+      } else { // Error from waitpid
+          RCLCPP_ERROR(this->get_logger(), "Error waiting for rosbag process (PID: %d) during saving: %s", bag_pid_, strerror(errno));
+          break; // Exit loop on error
+      }
+  }
+
+  if (bag_pid_ != -1) { // If it's still not -1, it means the process didn't terminate within the timeout
+      RCLCPP_WARN(this->get_logger(), "Rosbag process (PID: %d) did not terminate gracefully within timeout (%d seconds) during saving. Sending SIGKILL.", bag_pid_, timeout_seconds);
+      if (kill(bag_pid_, SIGKILL) == -1) { // Force terminate
+          RCLCPP_ERROR(this->get_logger(), "Failed to send SIGKILL to rosbag process with PID %d: %s", bag_pid_, strerror(errno));
+      }
+      // Even after SIGKILL, wait for it to be reaped to avoid zombie processes
+      waitpid(bag_pid_, &status, 0); // Blocking wait for SIGKILL to ensure cleanup
+      RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) forcibly terminated during saving.", bag_pid_);
+      bag_pid_ = -1;
+  }
 
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
@@ -417,6 +536,8 @@ void RosbagCollection::execute(
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<sobits_interfaces::action::VlaRecordState::Result>();
 
+  // This check seems problematic. If current_task_name_ is never different from previous_task_name_ initially,
+  // this will always warn. Perhaps it should be checking if a task has been set at all.
   if (current_task_name_ == previous_task_name_){
     RCLCPP_WARN(this->get_logger(), "Please update the task name before starting a new recording");
     result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
@@ -495,7 +616,7 @@ void RosbagCollection::taskUpdateCallback(
     std::replace(current_bag_name_.begin(), current_bag_name_.end(), ' ', '_');
     std::transform(current_bag_name_.begin(), current_bag_name_.end(), current_bag_name_.begin(),
                    [](unsigned char c) { return std::tolower(c); });
-    previous_bag_name_ = current_bag_name_;
+    previous_bag_name_ = current_bag_name_; // This line seems to re-assign current_bag_name_ to previous_bag_name_ after modification. Maybe intentional?
 
     previous_bag_path_ = current_bag_path_;
     current_bag_path_ = current_task_path_ + "/" + current_bag_name_;
