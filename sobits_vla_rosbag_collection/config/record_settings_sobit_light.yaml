@@ -17,23 +17,24 @@
           - mobile_base
         head:
           joint_names:
-            - "head_pan"
-            - "head_tilt"
+            - "head_yaw_joint"
+            - "head_pitch_joint"
         manipulator:
           joint_names:
-            - "arm_joint_1"
-            - "arm_joint_2"
-            - "arm_joint_3"
-            - "arm_joint_4"
-            - "arm_joint_5"
-            - "arm_joint_6"
+            - "arm_shoulder_roll_joint"
+            - "arm_shoulder_pitch_joint"
+            - "arm_shoulder_pitch_sub_joint"
+            - "arm_elbow_pitch_joint"
+            - "arm_forearm_roll_joint"
+            - "arm_wrist_pitch_joint"
+            - "arm_wrist_roll_joint"
         end_effector:
           joint_names:
-            - "gripper"
+            - "hand_joint"
         mobile_base:
           joint_names:
-            - "base_wheel_left"
-            - "base_wheel_right"
+            - "base_l_drive_wheel_joint"
+            - "base_r_drive_wheel_jointt"
       # List of sensors on the robot
       sensors:
         types:
@@ -73,16 +74,54 @@
         - /sobit_light/front_camera/image_raw
         - /sobit_light/front_camera/image_raw/camera_info
         - /sobit_light/front_camera/image_raw/compressed
-        - /sobit_light/lidar/scan
-        - /sobit_light/manual_control/cmd_vel
-        - /sobit_light/odometry/odometry
+        - /sobit_light/hand_camera/color/camera_info
+        - /sobit_light/hand_camera/color/image_rect_raw
+        - /sobit_light/hand_camera/color/image_rect_raw/compressed
+        - /sobit_light/hand_camera/color/image_rect_raw/compressedDepth
+        - /sobit_light/hand_camera/color/image_rect_raw/theora
+        - /sobit_light/hand_camera/color/metadata
+        - /sobit_light/hand_camera/depth/camera_info
+        - /sobit_light/hand_camera/depth/image_rect_raw
+        - /sobit_light/hand_camera/depth/image_rect_raw/compressed
+        - /sobit_light/hand_camera/depth/image_rect_raw/compressedDepth
+        - /sobit_light/hand_camera/depth/image_rect_raw/theora
+        - /sobit_light/hand_camera/depth/metadata
+        - /sobit_light/hand_camera/extrinsics/depth_to_color
+        - /sobit_light/hand_camera/extrinsics/depth_to_depth
+        - /sobit_light/head_camera/color/camera_info
+        - /sobit_light/head_camera/color/image_raw
+        - /sobit_light/head_camera/color/image_raw/compressed
+        - /sobit_light/head_camera/color/image_raw/compressedDepth
+        - /sobit_light/head_camera/color/image_raw/theora
+        - /sobit_light/head_camera/color/metadata
+        - /sobit_light/head_camera/depth/camera_info
+        - /sobit_light/head_camera/depth/image_rect_raw
+        - /sobit_light/head_camera/depth/image_rect_raw/compressed
+        - /sobit_light/head_camera/depth/image_rect_raw/compressedDepth
+        - /sobit_light/head_camera/depth/image_rect_raw/theora
+        - /sobit_light/head_camera/depth/metadata
+        - /sobit_light/head_camera/extrinsics/depth_to_color
+        - /sobit_light/imu/imu
         - /sobit_light/tof_camera/camera_info
         - /sobit_light/tof_camera/image_raw
         - /sobit_light/tof_camera/image_raw/camera_info
         - /sobit_light/tof_camera/image_raw/compressedDepth
+        - /sobit_light/velocity_controller/commands
+        - /sobit_light/velocity_controller/transition_event
         - /sobit_light/wheel_odometry/wheel_odometry
+        - /sobit_light/lidar/scan
+        - /sobit_light/manual_control/cmd_vel
+        - /sobit_light/odometry/odometry
+        - /sobit_light/joy
+        - /sobit_light/joint_state_broadcaster/transition_event
         - /sobit_light/joint_states
-        - /sobit_light/arm_controller/arm_joint_states
+        - /sobit_light/joint_trajectory_controller/controller_state
+        - /sobit_light/joint_trajectory_controller/joint_trajectory
+        - /sobit_light/joint_trajectory_controller/state
+        - /sobit_light/joint_trajectory_controller/transition_event
+        - /sobit_light/diff_controller/cmd_vel_unstamped
+        - /sobit_light/diff_controller/odom
+        - /sobit_light/dynamic_joint_states
         - /tf
         - /tf_static
       # List of services to record (TODO: not available until ROS 2 Jazzy)
