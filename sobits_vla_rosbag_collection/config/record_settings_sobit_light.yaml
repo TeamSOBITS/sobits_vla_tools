@@ -31,6 +31,7 @@
         end_effector:
           joint_names:
             - "hand_joint"
+            - "hand_sub_joint"
         mobile_base:
           joint_names:
             - "base_l_drive_wheel_joint"
