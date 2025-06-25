@@ -1,0 +1,3 @@
+rosbags/
+*.mcap
+*.sql
