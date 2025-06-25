@@ -15,7 +15,6 @@
           - manipulator
           - end_effector
           - mobile_base
-          # - legs
         head:
           joint_names:
             - "head_pan"
@@ -35,17 +34,11 @@
           joint_names:
             - "base_wheel_left"
             - "base_wheel_right"
-        # legs:
-        #   joint_names:
-        #     - ""
       # List of sensors on the robot
       sensors:
         types:
           - rgbd # color and depth camera
           - lidar # light detection and ranging sensor
-          # - imu # inertial measurement unit
-          # - camera # regular camera
-          # - depth_camera # depth camera without color
           - fish_eye # fisheye camera
         rgbd:
           names: ["head_camera", "hand_camera"]
@@ -53,15 +46,6 @@
         lidar:
           names: ["lidar_front"]
           models: ["unk"]
-        # imu:
-        #   names: [""]
-        #   models: [""]
-        # camera:
-        #   names: [""]
-        #   models: [""]
-        # depth_camera:
-        #   names: [""]
-        #   models: [""]
         fish_eye:
           names: ["camera_front", "camera_rear"]
           models: ["unk", "unk"]
@@ -78,19 +62,37 @@
     # ROS bag recording configuration
     rosbag_config:
       # Path to the directory where the recorded bag files will be saved
-      record_directory: "/home/sobits/vla_rosbags"
+      record_directory: "~/vla_ros_bags"
       # List of topics to record (cameras, joint_states, tf, sensors, etc.)
       topics_to_record:
-        - "/camera/image_raw"
-        - "/camera/camera_info"
-      # List of services to record (if any)
+        - /sobit_light/back_camera/camera_info
+        - /sobit_light/back_camera/image_raw
+        - /sobit_light/back_camera/image_raw/camera_info
+        - /sobit_light/back_camera/image_raw/compressed
+        - /sobit_light/front_camera/camera_info
+        - /sobit_light/front_camera/image_raw
+        - /sobit_light/front_camera/image_raw/camera_info
+        - /sobit_light/front_camera/image_raw/compressed
+        - /sobit_light/lidar/scan
+        - /sobit_light/manual_control/cmd_vel
+        - /sobit_light/odometry/odometry
+        - /sobit_light/tof_camera/camera_info
+        - /sobit_light/tof_camera/image_raw
+        - /sobit_light/tof_camera/image_raw/camera_info
+        - /sobit_light/tof_camera/image_raw/compressedDepth
+        - /sobit_light/wheel_odometry/wheel_odometry
+        - /sobit_light/joint_states
+        - /sobit_light/arm_controller/arm_joint_states
+        - /tf
+        - /tf_static
+      # List of services to record (TODO: not available until ROS 2 Jazzy)
       services_to_record:
-        - "/camera/get_image"
-      # List of actions to record (if any)
+        - ""
+      # List of actions to record (TODO: not available until ROS 2 Kilted)
       actions_to_record:
-        - "/robot/move_base"
+        - ""
       # Format for the recorded bag files (e.g., "mcap", "sqlite3")
-      conversion_format: "mcap" 
+      conversion_format: "mcap"
       # Specify the compression mode ("none", "file", "message")
       compression_mode: "none"
       # If compression is enabled, specify the compression format ("zstd" is the only supported compression format)
@@ -104,7 +106,7 @@
       dualshock4:
         button_mapping:
           record: 7 # Top
-          save: 6 # Left
+          save:   6 # Left
           delete: 6 # Right
       keyboard:
         button_mapping:
