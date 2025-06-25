@@ -64,7 +64,7 @@
     # ROS bag recording configuration
     rosbag_config:
       # Path to the directory where the recorded bag files will be saved
-      record_directory: "~/vla_ros_bags"
+      record_directory: "/home/sobits/colcon_ws/src/sobits_vla_tools/sobits_vla_rosbag_collection/rosbags"
       # List of topics to record (cameras, joint_states, tf, sensors, etc.)
       topics_to_record:
         - /sobit_light/back_camera/camera_info
@@ -78,28 +78,20 @@
         - /sobit_light/hand_camera/color/camera_info
         - /sobit_light/hand_camera/color/image_rect_raw
         - /sobit_light/hand_camera/color/image_rect_raw/compressed
-        - /sobit_light/hand_camera/color/image_rect_raw/compressedDepth
-        - /sobit_light/hand_camera/color/image_rect_raw/theora
         - /sobit_light/hand_camera/color/metadata
         - /sobit_light/hand_camera/depth/camera_info
         - /sobit_light/hand_camera/depth/image_rect_raw
-        - /sobit_light/hand_camera/depth/image_rect_raw/compressed
         - /sobit_light/hand_camera/depth/image_rect_raw/compressedDepth
-        - /sobit_light/hand_camera/depth/image_rect_raw/theora
         - /sobit_light/hand_camera/depth/metadata
         - /sobit_light/hand_camera/extrinsics/depth_to_color
         - /sobit_light/hand_camera/extrinsics/depth_to_depth
         - /sobit_light/head_camera/color/camera_info
         - /sobit_light/head_camera/color/image_raw
         - /sobit_light/head_camera/color/image_raw/compressed
-        - /sobit_light/head_camera/color/image_raw/compressedDepth
-        - /sobit_light/head_camera/color/image_raw/theora
         - /sobit_light/head_camera/color/metadata
         - /sobit_light/head_camera/depth/camera_info
         - /sobit_light/head_camera/depth/image_rect_raw
-        - /sobit_light/head_camera/depth/image_rect_raw/compressed
         - /sobit_light/head_camera/depth/image_rect_raw/compressedDepth
-        - /sobit_light/head_camera/depth/image_rect_raw/theora
         - /sobit_light/head_camera/depth/metadata
         - /sobit_light/head_camera/extrinsics/depth_to_color
         - /sobit_light/imu/imu
@@ -118,7 +110,6 @@
         - /sobit_light/joint_states
         - /sobit_light/joint_trajectory_controller/controller_state
         - /sobit_light/joint_trajectory_controller/joint_trajectory
-        - /sobit_light/joint_trajectory_controller/state
         - /sobit_light/joint_trajectory_controller/transition_event
         - /sobit_light/diff_controller/cmd_vel_unstamped
         - /sobit_light/diff_controller/odom
