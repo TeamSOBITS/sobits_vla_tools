@@ -31,7 +31,7 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
 
   // Create wall timer to periodically check the joy messages
   timer_ = this->create_wall_timer(
-      std::chrono::milliseconds(1000),
+      std::chrono::milliseconds(250),
       std::bind(&GamepadClient::timerCallback, this));
 
   // Set values from parameters
