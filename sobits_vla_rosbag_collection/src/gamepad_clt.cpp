@@ -15,7 +15,7 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
 
   // Create subscriber for Joy messages
   joy_subscriber_ = this->create_subscription<sensor_msgs::msg::Joy>(
-      "/joy", qos_profile,
+      "joy", qos_profile,
       std::bind(&GamepadClient::joyCallback, this, std::placeholders::_1));
 
   // Create action client for VlaRecordState
@@ -31,7 +31,7 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
 
   // Create wall timer to periodically check the joy messages
   timer_ = this->create_wall_timer(
-      std::chrono::milliseconds(100),
+      std::chrono::milliseconds(1000),
       std::bind(&GamepadClient::timerCallback, this));
 
   // Set values from parameters
