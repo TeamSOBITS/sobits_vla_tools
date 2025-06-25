@@ -11,6 +11,18 @@
 #include <wait.h>
 #include <yaml-cpp/yaml.h>
 
+// #include <csignal>      // For kill
+// #include <sys/wait.h>   // For waitpid, WIFEXITED, WIFSIGNALED
+// #include <unistd.h>     // For fork, execl, _exit
+// #include <iostream>     // For std::cerr
+// #include <filesystem>   // For std::filesystem operations
+// #include <algorithm>    // For std::replace, std::transform
+// #include <fstream>      // For std::ofstream
+// #include <string>       // For std::string
+// #include <vector>       // For std::vector
+// #include <thread>       // For std::this_thread::sleep_for
+// #include <chrono>       // For std::chrono::seconds
+
 namespace sobits_vla
 {
 
@@ -83,7 +95,6 @@ private:
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr task_update_service_;
 
 
-  FILE* bag_process_;
   pid_t bag_pid_;
 
   // Parameters
