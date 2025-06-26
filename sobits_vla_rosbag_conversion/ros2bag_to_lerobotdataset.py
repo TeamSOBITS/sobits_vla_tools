@@ -269,10 +269,11 @@ def write_tasks_jsonl(meta_yaml_path, out_jsonl_path):
     with open(meta_yaml_path, "r") as f:
         meta = yaml.safe_load(f)
     tasks = []
-    for idx, (task_name, task_info) in enumerate(meta["recorded_bags"].items()):
+    task_list = meta["recorded_bags"]["tasks"]
+    for idx, task_name in enumerate(task_list):
         task_dict = {
             "task_index": idx,
-            "task": task_info["instructions"]
+            "task": meta["recorded_bags"][task_name]["label"]
         }
         tasks.append(task_dict)
     # Write as JSONL
