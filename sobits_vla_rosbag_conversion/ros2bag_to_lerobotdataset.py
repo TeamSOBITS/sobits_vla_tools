@@ -14,7 +14,7 @@ import subprocess
 import json
 
 # TODO: Create a settings YAML file to configure paths, FPS, etc.
-RECORDED_BAGS_ROOT = "recorded_bags"
+RECORDED_BAGS_ROOT = "rosbags"
 DATASET_ROOT = "MyDataset"
 SETTINGS_YAML = "config/convert_settings.yaml"
 RECORDED_BAGS_META = os.path.join(RECORDED_BAGS_ROOT, "recorded_bags_meta.yaml")
@@ -118,7 +118,7 @@ def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_lig
                 continue
             msg = reader.deserialize(rawdata, connection.msgtype)
             # Map joint names to positions
-            joint_pos = dict(zip(msg.joint_names, msg.reference.position))
+            joint_pos = dict(zip(msg.joint_names, msg.reference.positions))
             # timestamp in seconds: sec + nanosec * 1e-9
             t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
@@ -291,12 +291,13 @@ def write_episodes_jsonl(
     # Gather all task instructions
     with open(meta_yaml_path, "r") as f:
         meta = yaml.safe_load(f)
-    task_list = list(meta["recorded_bags"].items())
+    # task_list = list(meta["recorded_bags"].items())
+    task_list = meta["recorded_bags"]["tasks"]
 
     lines = []
     episode_global_idx = 0
-    for chunk_idx, (task_name, task_info) in enumerate(task_list):
-        instruction = task_info["instructions"]
+    for chunk_idx, task_name in enumerate(task_list):
+        instruction = meta["recorded_bags"][task_name]["label"]
         n_episodes = chunks_size[chunk_idx]
         for episode_index in range(n_episodes):
             length = episode_lengths.get((chunk_idx, episode_index), 0)
@@ -367,12 +368,13 @@ def main():
     # Load task/chunk mapping from recorded_bags_meta.yaml
     with open(RECORDED_BAGS_META, "r") as f:
         meta = yaml.safe_load(f)
-    task_list = list(meta["recorded_bags"].items())
+    # task_list = list(meta["recorded_bags"].items())
+    task_list = meta["recorded_bags"]["tasks"]
     total_tasks = len(task_list)
     total_chunks = len(task_list)
     # Assign chunks in order
-    for chunk_idx, (task_name, task_info) in enumerate(task_list):
-        bag_group = task_info["bag_path"]
+    for chunk_idx, task_name in enumerate(task_list):
+        bag_group = meta["recorded_bags"][task_name]["bag_dir"]
         chunk_name = f"chunk-{chunk_idx:03d}"
         group_dir = os.path.join(RECORDED_BAGS_ROOT, bag_group)
         if not os.path.isdir(group_dir):
@@ -383,12 +385,12 @@ def main():
             ep_path = os.path.join(group_dir, ep)
             if not os.path.isdir(ep_path):
                 continue
-            # Find bag file (*.db3) inside episode folder
-            db3_files = [f for f in os.listdir(ep_path) if f.endswith(".db3")]
-            if not db3_files:
-                print(f"[WARN] No .db3 found in {ep_path}")
+            # Find bag file (*.mcap) inside episode folder
+            mcap_files = [f for f in os.listdir(ep_path) if f.endswith(".mcap")]
+            if not mcap_files:
+                print(f"[WARN] No .mcap found in {ep_path}")
                 continue
-            bagfile = os.path.join(ep_path, db3_files[0])
+            bagfile = os.path.join(ep_path, mcap_files[0])
             # Name episode file as e.g. episode_000000.mp4 (index from 0 in all chunks)
             ep_idx = int(ep.split('_')[-1]) - 1  # e.g. episode_1 -> 0-based index
             episode_name = f"episode_{ep_idx:06d}.mp4"
