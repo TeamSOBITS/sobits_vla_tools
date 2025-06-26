@@ -2,4 +2,4 @@ camera_info:
   observation.images.front : "/sobit_light/front_camera/image_raw"
   observation.images.back : "/sobit_light/back_camera/image_raw"
   observation.images.head : "/camera/camera/color/image_rect_raw"
-  observation.images.wrist.top : "/camera_hand/camera_hand/color/image_raw"
+  observation.images.wrist.top : "/sobit_light/hand_camera/color/image_rect_raw"
