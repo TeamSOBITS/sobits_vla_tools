@@ -481,7 +481,7 @@ def main():
 
     # Get the robot_type from the first task (assume all same in recorded_bags_meta.yaml)
     if task_list:
-        robot_type = task_list[0][1]["robot_type"]
+        robot_type = meta["robot_info"]["name"]
     else:
         robot_type = "default_robot"
         print(f"[ERROR] Could not recognize robot type from tasks. Using '{robot_type}'.")
