@@ -41,14 +41,14 @@ def load_camera_topics(yaml_file):
 def safe_makedirs(path):
     os.makedirs(path, exist_ok=True)
 
-def sync_actions_to_video_frame(video_frame_timestamps, action_timestamps, actions):
-    # For each video frame timestamp, find the closest action timestamp
-    synced_actions = []
-    action_ts_np = np.array(action_timestamps)
+def sync_data_to_video_frame(video_frame_timestamps, data_timestamps, data):
+    # For each video frame timestamp, find the closest data timestamp
+    synced_obs = []
+    obs_ts_np = np.array(data_timestamps)
     for t in video_frame_timestamps:
-        idx = np.argmin(np.abs(action_ts_np - t))
-        synced_actions.append(actions[idx])
-    return synced_actions
+        idx = np.argmin(np.abs(obs_ts_np - t))
+        synced_obs.append(data[idx])
+    return synced_obs
 
 def convert_images_to_video(bag_folder, topic, out_mp4, fps):
     writer = None
@@ -100,10 +100,61 @@ def convert_mp4_to_av1(mp4_path):
     print(f"[DONE] AV1 written and original removed: {av1_path}")
     return av1_path
 
-def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_light/joint_states", cmd_vel_topic="/sobit_light/manual_control/cmd_vel"):
+def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_light/joint_trajectory_controller/controller_state", cmd_vel_topic="/sobit_light/manual_control/cmd_vel"):
     frame_indices = []
     timestamps = []
     actions = []
+
+    # Extract mobile base velocities from cmd_vel topic
+    vel_timestamps, xvels, thetavels = extract_velocities_from_cmd_vel(bag_folder, cmd_vel_topic)
+
+    with AnyReader([Path(bag_folder)]) as reader:
+        joint_states_topics = [conn.topic for conn in reader.connections]
+        if joint_states_topic not in joint_states_topics:
+            print(f"[WARN] Topic {joint_states_topic} not in bag.")
+            return [], [], []
+        for idx, (connection, timestamp, rawdata) in enumerate(reader.messages()):
+            if connection.topic != joint_states_topic:
+                continue
+            msg = reader.deserialize(rawdata, connection.msgtype)
+            # Map joint names to positions
+            joint_pos = dict(zip(msg.joint_names, msg.reference.position))
+            # timestamp in seconds: sec + nanosec * 1e-9
+            t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+
+            # Sync velocities using timestamp from joint_states
+            if vel_timestamps:
+                idx_vel = np.argmin(np.abs(np.array(vel_timestamps) - t_sec))
+                x_vel = xvels[idx_vel]
+                theta_vel = thetavels[idx_vel]
+            else:
+                x_vel = 0.0
+                theta_vel = 0.0
+
+            # Create the observation vector in the required order
+            obs_vec = [
+                joint_pos.get("arm_shoulder_roll_joint", 0.0),
+                joint_pos.get("arm_shoulder_pitch_joint", 0.0),
+                joint_pos.get("arm_shoulder_pitch_sub_joint", 0.0),
+                joint_pos.get("arm_elbow_pitch_joint", 0.0),
+                joint_pos.get("arm_forearm_roll_joint", 0.0),
+                joint_pos.get("arm_wrist_pitch_joint", 0.0),
+                joint_pos.get("arm_wrist_roll_joint", 0.0),
+                joint_pos.get("hand_joint", 0.0),
+                joint_pos.get("head_yaw_joint", 0.0),
+                joint_pos.get("head_pitch_joint", 0.0),
+                x_vel,
+                theta_vel,
+            ]
+            actions.append(obs_vec)
+            timestamps.append(t_sec)
+            frame_indices.append(idx)
+    return frame_indices, timestamps, actions
+
+def extract_observations_from_joint_states(bag_folder, joint_states_topic="/sobit_light/joint_states", cmd_vel_topic="/sobit_light/manual_control/cmd_vel"):
+    frame_indices = []
+    timestamps = []
+    observations = []
 
     # Extract mobile base velocities from cmd_vel topic
     vel_timestamps, xvels, thetavels = extract_velocities_from_cmd_vel(bag_folder, cmd_vel_topic)
@@ -131,8 +182,8 @@ def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_lig
                 x_vel = 0.0
                 theta_vel = 0.0
 
-            # Create the action vector in the required order
-            action_vec = [
+            # Create the observation vector in the required order
+            obs_vec = [
                 joint_pos.get("arm_shoulder_roll_joint", 0.0),
                 joint_pos.get("arm_shoulder_pitch_joint", 0.0),
                 joint_pos.get("arm_shoulder_pitch_sub_joint", 0.0),
@@ -146,10 +197,10 @@ def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_lig
                 x_vel,
                 theta_vel,
             ]
-            actions.append(action_vec)
+            observations.append(obs_vec)
             timestamps.append(t_sec)
             frame_indices.append(idx)
-    return frame_indices, timestamps, actions
+    return frame_indices, timestamps, observations
 
 def extract_velocities_from_cmd_vel(bag_folder, topic):
     timestamps = []
@@ -174,14 +225,15 @@ def write_parquet_for_episode(
     frame_indices,
     timestamps,
     actions,
+    observations,
     episode_index,
     task_index
 ):
-    observation_states = [[0.0]*13 for _ in frame_indices]
-    actions_np = np.array(actions, dtype=np.float32)
+    action_states = np.array(actions, dtype=np.float32)
+    observation_states = np.array(observations, dtype=np.float32)
     df = pd.DataFrame({
-        "action": actions_np.tolist(),
-        "observation.state": observation_states,
+        "action": action_states.tolist(),
+        "observation.state": observation_states.tolist(),
         "timestamp": timestamps,
         "frame_index": frame_indices,
         "episode_index": [episode_index] * len(frame_indices),
@@ -267,10 +319,10 @@ def write_episodes_jsonl(
 def compute_stats(array):
     array = np.array(array)
     return {
-        "min": np.min(array, axis=0).tolist(),
-        "max": np.max(array, axis=0).tolist(),
-        "mean": np.mean(array, axis=0).tolist(),
-        "std": np.std(array, axis=0).tolist(),
+        "min"  : np.min(array, axis=0).tolist(),
+        "max"  : np.max(array, axis=0).tolist(),
+        "mean" : np.mean(array, axis=0).tolist(),
+        "std"  : np.std(array, axis=0).tolist(),
     }
 
 def write_episodes_stats_jsonl(dataset_root, chunks_size):
@@ -310,7 +362,7 @@ def main():
     episode_lengths = {}
     
     camera_info = load_camera_topics(SETTINGS_YAML)
-    primary_camera = "observation.images.front" if "observation.images.front" in camera_info else list(camera_info.keys())[0]
+    primary_camera = "observation.images.hand" if "observation.images.hand" in camera_info else list(camera_info.keys())[0]
 
     # Load task/chunk mapping from recorded_bags_meta.yaml
     with open(RECORDED_BAGS_META, "r") as f:
@@ -368,31 +420,36 @@ def main():
 
             # Pick primary camera for action sync
             video_frame_timestamps = video_frame_timestamps_dict.get(primary_camera)
-            
+
             # Write parquet for this episode
             data_out_dir = os.path.join(DATASET_ROOT, "data", chunk_name)
             safe_makedirs(data_out_dir)
             parquet_path = os.path.join(data_out_dir, f"episode_{ep_idx:06d}.parquet")
             
-            _, action_timestamps, actions = extract_actions_from_joint_states(os.path.dirname(bagfile))
-            if video_frame_timestamps and action_timestamps:
+            _, obs_timestamps, observations = extract_observations_from_joint_states(os.path.dirname(bagfile))
+            _, act_timestamps, actions = extract_actions_from_joint_states(os.path.dirname(bagfile))
+            if video_frame_timestamps and obs_timestamps and act_timestamps:
                 # Normalize both to start at zero
                 t0 = video_frame_timestamps[0]
                 video_frame_timestamps = [t - t0 for t in video_frame_timestamps]
-                action_timestamps = [t - t0 for t in action_timestamps]
+                obs_timestamps = [t - t0 for t in obs_timestamps]
+                act_timestamps = [t - t0 for t in act_timestamps]
                 frame_indices = list(range(len(video_frame_timestamps)))
-                # Synchronize actions to video frames
-                synced_actions = sync_actions_to_video_frame(video_frame_timestamps, action_timestamps, actions)
+                # Synchronize data to video frames
+                synced_actions = sync_data_to_video_frame(video_frame_timestamps, act_timestamps, actions)
+                synced_observations = sync_data_to_video_frame(video_frame_timestamps, obs_timestamps, observations)
             else:
                 frame_indices = []
                 video_frame_timestamps = []
                 synced_actions = []
+                synced_observations = []
 
             write_parquet_for_episode(
                 parquet_path,
                 frame_indices,
                 video_frame_timestamps,
                 synced_actions,
+                synced_observations,
                 ep_idx,
                 chunk_idx
             )
