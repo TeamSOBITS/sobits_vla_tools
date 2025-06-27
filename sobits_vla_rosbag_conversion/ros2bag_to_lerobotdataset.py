@@ -344,6 +344,7 @@ def compute_stats(array):
         "max"  : np.max(array, axis=0).tolist(),
         "mean" : np.mean(array, axis=0).tolist(),
         "std"  : np.std(array, axis=0).tolist(),
+        "count": np.array([len(array)]),
     }
 
 def write_episodes_stats_jsonl(dataset_root, chunks_size):
@@ -359,7 +360,7 @@ def write_episodes_stats_jsonl(dataset_root, chunks_size):
             df = pd.read_parquet(parquet_path)
             stats = {}
             # For "action" and "observation.state"
-            for key in ["action", "observation.state"]:
+            for key in ["action", "observation.state", "timestamp", "frame_index", "episode_index", "index", "task_index"]:
                 arr = np.array(df[key].tolist())
                 stats[key] = compute_stats(arr)
             stats_lines.append({
