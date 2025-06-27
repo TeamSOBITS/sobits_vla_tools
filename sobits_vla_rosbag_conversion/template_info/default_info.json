@@ -103,8 +103,8 @@
        "observation.images.head": {
            "dtype": "video",
            "shape": [
-               640,
-               480,
+               720,
+               1280,
                3
            ],
            "names": [
@@ -113,8 +113,8 @@
                "channels"
            ],
            "info": {
-               "video.height": 640,
-               "video.width": 480,
+               "video.height": 720,
+               "video.width": 1280,
                "video.codec": "av01",
                "video.pix_fmt": "yuv420p",
                "video.is_depth_map": false,
