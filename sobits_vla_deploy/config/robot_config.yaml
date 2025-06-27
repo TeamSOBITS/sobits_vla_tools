@@ -1,0 +1,77 @@
+/**:
+  ros__parameters:
+    robot:
+      # Name of the robot
+      name: "sobit_light"
+      # Description of the robot
+      parts:
+        - body
+        - mobile_base
+      body:
+        joints:
+          - arm_shoulder_roll.pos
+          - arm_shoulder_pitch.pos
+          - arm_shoulder_pitch_sub.pos
+          - arm_elbow_pitch.pos
+          - arm_forearm_roll.pos
+          - arm_wrist_pitch.pos
+          - arm_wrist_roll.pos
+          - hand.pos
+          - head_yaw.pos
+          - head_pitch.pos
+        joints_ros:
+          - arm_shoulder_roll_joint
+          - arm_shoulder_pitch_joint
+          - arm_shoulder_pitch_sub_joint
+          - arm_elbow_pitch_joint
+          - arm_forearm_roll_joint
+          - arm_wrist_pitch_joint
+          - arm_wrist_roll_joint
+          - hand_joint
+          - head_yaw_joint
+          - head_pitch_joint
+        obs_topic: "/sobit_light/joint_states"
+        act_topic: "/sobit_light/joint_trajectory_controller/joint_trajectory"
+      mobile_base:
+        joints:
+          - x.vel
+          - theta.vel
+        joints_ros:
+          - base_l_drive_wheel_joint
+          - base_r_drive_wheel_joint
+        obs_topic: "/sobit_light/odometry/odometry"
+        act_topic: "/sobit_light/manual_control/cmd_vel"
+      cameras:
+        types:
+          - front
+          - back
+          - head
+          - wrist.top
+        front:
+          width: 1280
+          height: 720
+          fps: 10
+          color_mode: rgb # bgr
+          topic: "/sobit_light/front_camera/image_raw"
+        back:
+          width: 1280
+          height: 720
+          fps: 10
+          color_mode: rgb # bgr
+          topic: "/sobit_light/back_camera/image_raw"
+        head:
+          width: 1280
+          height: 720
+          fps: 10
+          color_mode: rgb # bgr
+          topic: "/sobit_light/head_camera/color/image_raw"
+        wrist.top:
+          width: 848
+          height: 480
+          fps: 10
+          color_mode: rgb # bgr
+          topic: "/sobit_light/hand_camera/color/image_rect_raw"
+
+    gamepad:
+      topic: "/sobit_light/joy"
+      play_button: 0
