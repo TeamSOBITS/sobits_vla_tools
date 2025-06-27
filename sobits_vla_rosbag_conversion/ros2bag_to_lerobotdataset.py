@@ -151,13 +151,13 @@ def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_lig
             frame_indices.append(idx)
     return frame_indices, timestamps, actions
 
-def extract_observations_from_joint_states(bag_folder, joint_states_topic="/sobit_light/joint_states", cmd_vel_topic="/sobit_light/manual_control/cmd_vel"):
+def extract_observations_from_joint_states(bag_folder, joint_states_topic="/sobit_light/joint_states", odom_topic="/sobit_light/odometry/odometry"):
     frame_indices = []
     timestamps = []
     observations = []
 
     # Extract mobile base velocities from cmd_vel topic
-    vel_timestamps, xvels, thetavels = extract_velocities_from_cmd_vel(bag_folder, cmd_vel_topic)
+    vel_timestamps, xvels, thetavels = extract_velocities_from_odom(bag_folder, odom_topic)
 
     with AnyReader([Path(bag_folder)]) as reader:
         joint_states_topics = [conn.topic for conn in reader.connections]
@@ -219,6 +219,25 @@ def extract_velocities_from_cmd_vel(bag_folder, topic):
             thetavels.append(msg.angular.z)
             timestamps.append(t_sec)
     return timestamps, xvels, thetavels
+
+def extract_velocities_from_odom(bag_folder, topic):
+    timestamps = []
+    xvels = []
+    thetavels = []
+    with AnyReader([Path(bag_folder)]) as reader:
+        topics = [conn.topic for conn in reader.connections]
+        if topic not in topics:
+            return [], [], []
+        for connection, timestamp, rawdata in reader.messages():
+            if connection.topic != topic:
+                continue
+            msg = reader.deserialize(rawdata, connection.msgtype)
+            t_sec = timestamp * 1e-9
+            xvels.append(msg.twist.twist.linear.x)
+            thetavels.append(msg.twist.twist.angular.z)
+            timestamps.append(t_sec)
+    return timestamps, xvels, thetavels
+
 
 def write_parquet_for_episode(
     out_path,
