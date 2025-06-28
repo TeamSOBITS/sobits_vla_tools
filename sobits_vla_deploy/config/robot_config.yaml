@@ -1,5 +1,12 @@
 /**:
   ros__parameters:
+    model:
+      # Model repository ID
+      repo_id: "team-sobits/sobit_light_smolvla"
+      # Device to run the model on
+      device: "cuda"
+      # Use automatic mixed precision
+      use_amp: true
     robot:
       # Name of the robot
       name: "sobit_light"
