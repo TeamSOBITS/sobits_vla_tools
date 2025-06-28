@@ -12,10 +12,11 @@ from rosbags.highlevel import AnyReader
 from rosbags.image import message_to_cvimage
 import subprocess
 import json
+from lerobot.common.datasets.compute_stats import compute_episode_stats
 
 # TODO: Create a settings YAML file to configure paths, FPS, etc.
-RECORDED_BAGS_ROOT = "rosbags"
-DATASET_ROOT = "MyDataset"
+RECORDED_BAGS_ROOT = "test_rosbags"
+DATASET_ROOT = "MyTestDataset"
 SETTINGS_YAML = "config/convert_settings.yaml"
 RECORDED_BAGS_META = os.path.join(RECORDED_BAGS_ROOT, "recorded_bags_meta.yaml")
 FPS = 10
@@ -54,6 +55,9 @@ def convert_images_to_video(bag_folder, topic, out_mp4, fps):
     writer = None
     nframes = 0
     frame_timestamps = []
+    # Create a directory to save frames
+    frames_dir = os.path.splitext(out_mp4)[0] + "_frames"
+    safe_makedirs(frames_dir)
     with AnyReader([Path(bag_folder)]) as reader:
         topics = [conn.topic for conn in reader.connections]
         if topic not in topics:
@@ -65,6 +69,9 @@ def convert_images_to_video(bag_folder, topic, out_mp4, fps):
             msg = reader.deserialize(rawdata, connection.msgtype)
             img = message_to_cvimage(msg)
             cv_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            # Save frame as image
+            frame_path = os.path.join(frames_dir, f"frame_{nframes:06d}.jpg")
+            cv2.imwrite(frame_path, cv_img)
             if writer is None:
                 h, w, _ = cv_img.shape
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -76,6 +83,7 @@ def convert_images_to_video(bag_folder, topic, out_mp4, fps):
     if writer:
         writer.release()
         print(f"Video written: {out_mp4} ({nframes} frames)")
+        print(f"Frames saved to: {frames_dir}")
         return True, frame_timestamps
     else:
         print("[FAIL] No frames written.")
@@ -347,22 +355,91 @@ def compute_stats(array):
         "count": np.array([len(array)]),
     }
 
-def write_episodes_stats_jsonl(dataset_root, chunks_size):
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+def write_episodes_stats_jsonl(dataset_root, chunks_size, camera_info):
     stats_lines = []
     episode_global_idx = 0
+    camera_keys = list(camera_info.keys())
     for chunk_idx, n_episodes in enumerate(chunks_size):
         chunk_name = f"chunk-{chunk_idx:03d}"
         data_dir = os.path.join(dataset_root, "data", chunk_name)
+        frame_dir = os.path.join(dataset_root, "videos", chunk_name)
         for ep_idx in range(n_episodes):
             parquet_path = os.path.join(data_dir, f"episode_{ep_idx:06d}.parquet")
             if not os.path.exists(parquet_path):
                 continue
             df = pd.read_parquet(parquet_path)
-            stats = {}
-            # For "action" and "observation.state"
-            for key in ["action", "observation.state", "timestamp", "frame_index", "episode_index", "index", "task_index"]:
-                arr = np.array(df[key].tolist())
-                stats[key] = compute_stats(arr)
+            episode_data = {
+                "action": np.array(df["action"].tolist()),
+                "observation.state": np.array(df["observation.state"].tolist()),
+                "timestamp": np.array(df["timestamp"].tolist()),
+                "frame_index": np.array(df["frame_index"].tolist()),
+                "episode_index": np.array(df["episode_index"].tolist()),
+                "index": np.array(df["index"].tolist()),
+                "task_index": np.array(df["task_index"].tolist()),
+            }
+            features = {
+                "action": {"dtype": "float"},
+                "observation.state": {"dtype": "float"},
+                "timestamp": {"dtype": "float"},
+                "frame_index": {"dtype": "int"},
+                "episode_index": {"dtype": "int"},
+                "index": {"dtype": "int"},
+                "task_index": {"dtype": "int"},
+            }
+            # --------- IMAGE STATS ---------
+            for cam_key in camera_keys:
+                frames_dir = os.path.join(frame_dir, cam_key.replace("=", "").strip(), f"episode_{ep_idx:06d}_frames")
+                if os.path.isdir(frames_dir):
+                    frame_paths = sorted([
+                        os.path.join(frames_dir, fname)
+                        for fname in os.listdir(frames_dir)
+                        if fname.lower().endswith(('.jpg', '.jpeg', '.png'))
+                    ])
+                else:
+                    frame_paths = []
+                # If no frames found, skip this camera
+                if not frame_paths:
+                    print(f"[WARN] No frames found for {cam_key} in episode {ep_idx}.")
+                    continue
+
+                if len(frame_paths) > 0:
+                    frame_paths = [p for p in frame_paths if isinstance(p, str)]
+                    if len(frame_paths) == 0:
+                        print(f"[WARN] No valid image paths for {cam_key}, skipping.")
+                    else:
+                        try:
+                            episode_data[cam_key] = frame_paths
+                            features[cam_key] = {"dtype": "image"}
+                        except Exception as e:
+                            print(f"[ERROR] sample_images failed for {cam_key}: {e}")
+                # Clean up frames
+                import shutil
+                shutil.rmtree(frames_dir, ignore_errors=True)
+            # --------- END IMAGE STATS ---------
+            stats = compute_episode_stats(episode_data, features)
+
+            # Reorder keys for consistent output
+            ordered_keys = [
+                "action",
+                "observation.state",
+                "observation.images.front",
+                "observation.images.back",
+                "observation.images.head",
+                "observation.images.wrist.top",
+                "timestamp",
+                "frame_index",
+                "episode_index",
+                "index",
+                "task_index",
+            ]
+            ordered_stats = {k: stats[k] for k in ordered_keys if k in stats}
+            stats = ordered_stats
             stats_lines.append({
                 "episode_index": episode_global_idx,
                 "stats": stats
@@ -373,7 +450,7 @@ def write_episodes_stats_jsonl(dataset_root, chunks_size):
     safe_makedirs(os.path.dirname(out_jsonl_path))
     with open(out_jsonl_path, "w") as f:
         for entry in stats_lines:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            f.write(json.dumps(entry, ensure_ascii=False, cls=NumpyEncoder) + "\n")
     print(f"[DONE] meta/episodes_stats.jsonl written: {out_jsonl_path}")
 
 def main():
@@ -531,7 +608,7 @@ def main():
         print(f"[SKIP] {episodes_jsonl_path} already exists.")
 
     if not os.path.exists(episodes_stats_jsonl_path):
-        write_episodes_stats_jsonl(DATASET_ROOT, chunks_size)
+        write_episodes_stats_jsonl(DATASET_ROOT, chunks_size, camera_info)
     else:
         print(f"[SKIP] {episodes_stats_jsonl_path} already exists.")
 
