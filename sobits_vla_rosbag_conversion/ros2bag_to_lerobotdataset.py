@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-camera ros2bag to AV1 MP4 conversion for LeRobot dataset structure.
+Convert ROS2 bags to a structured dataset for the LeRobot platform.
 """
 import os
 import cv2
@@ -15,11 +15,11 @@ import json
 from lerobot.common.datasets.compute_stats import compute_episode_stats
 
 # TODO: Create a settings YAML file to configure paths, FPS, etc.
-RECORDED_BAGS_ROOT = "test_rosbags"
-DATASET_ROOT = "MyTestDataset"
+RECORDED_BAGS_ROOT = "rosbags"
+DATASET_ROOT = "MyDataset"
 SETTINGS_YAML = "config/convert_settings.yaml"
 RECORDED_BAGS_META = os.path.join(RECORDED_BAGS_ROOT, "recorded_bags_meta.yaml")
-FPS = 10
+DEFAULT_FPS = 10
 
 ACTION_FEATURES = [
     "arm_shoulder_roll_joint",
@@ -35,15 +35,40 @@ ACTION_FEATURES = [
 ]
 
 def load_camera_topics(yaml_file):
+    """
+    Load camera topic information from a YAML configuration file.
+
+    Args:
+        yaml_file (str): Path to the YAML file containing camera topics.
+
+    Returns:
+        Dict[str, str]: Mapping from camera names to ROS topic strings.
+    """
     with open(yaml_file, "r") as f:
         data = yaml.safe_load(f)
     return data["camera_info"]
 
 def safe_makedirs(path):
+    """
+    Create a directory path if it does not already exist.
+
+    Args:
+        path (str): Directory path to create.
+    """
     os.makedirs(path, exist_ok=True)
 
 def sync_data_to_video_frame(video_frame_timestamps, data_timestamps, data):
-    # For each video frame timestamp, find the closest data timestamp
+    """
+    Synchronize recorded data to video frame timestamps by nearest timestamp matching.
+
+    Args:
+        video_frame_timestamps (List[float]): List of timestamps for video frames.
+        data_timestamps (List[float]): List of timestamps for the data to synchronize.
+        data (List[Any]): List of data entries corresponding to data_timestamps.
+
+    Returns:
+        List[Any]: List of data entries synchronized to each video frame.
+    """
     synced_obs = []
     obs_ts_np = np.array(data_timestamps)
     for t in video_frame_timestamps:
@@ -52,6 +77,20 @@ def sync_data_to_video_frame(video_frame_timestamps, data_timestamps, data):
     return synced_obs
 
 def convert_images_to_video(bag_folder, topic, out_mp4, fps):
+    """
+    Convert image messages from a ROS bag topic to an MP4 video file.
+
+    Args:
+        bag_folder (str): Path to the directory containing the ROS bag.
+        topic (str): ROS topic containing image messages.
+        out_mp4 (str): Path to save the output MP4 video.
+        fps (float): Frames per second for the output video.
+
+    Returns:
+        Tuple[bool, List[float]]:
+            - Success flag indicating whether video was written.
+            - List of timestamps corresponding to each frame in the video.
+    """
     writer = None
     nframes = 0
     frame_timestamps = []
@@ -90,6 +129,15 @@ def convert_images_to_video(bag_folder, topic, out_mp4, fps):
         return False, []
 
 def convert_mp4_to_av1(mp4_path):
+    """
+    Convert an MP4 video file to AV1 codec using ffmpeg.
+
+    Args:
+        mp4_path (str): Path to the MP4 file to convert.
+
+    Returns:
+        str: Path to the converted AV1 MP4 file.
+    """
     av1_path = mp4_path
     temp_av1 = mp4_path + ".av1tmp.mp4"
     cmd = [
@@ -109,6 +157,20 @@ def convert_mp4_to_av1(mp4_path):
     return av1_path
 
 def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_light/joint_trajectory_controller/controller_state", cmd_vel_topic="/sobit_light/manual_control/cmd_vel"):
+    """
+    Extract action vectors from joint states and command velocities in a ROS bag.
+
+    Args:
+        bag_folder (str): Path to the directory containing the ROS bag.
+        joint_states_topic (str): ROS topic for joint trajectory controller state.
+        cmd_vel_topic (str): ROS topic for command velocity.
+
+    Returns:
+        Tuple[List[int], List[float], List[List[float]]]:
+            - Frame indices.
+            - Timestamps of the actions.
+            - List of action vectors per frame.
+    """   
     frame_indices = []
     timestamps = []
     actions = []
@@ -160,6 +222,20 @@ def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_lig
     return frame_indices, timestamps, actions
 
 def extract_observations_from_joint_states(bag_folder, joint_states_topic="/sobit_light/joint_states", odom_topic="/sobit_light/odometry/odometry"):
+    """
+    Extract observation vectors from joint states and odometry in a ROS bag.
+
+    Args:
+        bag_folder (str): Path to the directory containing the ROS bag.
+        joint_states_topic (str): ROS topic for joint states.
+        odom_topic (str): ROS topic for odometry.
+
+    Returns:
+        Tuple[List[int], List[float], List[List[float]]]:
+            - Frame indices.
+            - Timestamps of the observations.
+            - List of observation vectors per frame.
+    """
     frame_indices = []
     timestamps = []
     observations = []
@@ -211,6 +287,19 @@ def extract_observations_from_joint_states(bag_folder, joint_states_topic="/sobi
     return frame_indices, timestamps, observations
 
 def extract_velocities_from_cmd_vel(bag_folder, topic):
+    """
+    Extract linear and angular velocities from a cmd_vel ROS topic.
+
+    Args:
+        bag_folder (str): Path to the directory containing the ROS bag.
+        topic (str): ROS topic for command velocity.
+
+    Returns:
+        Tuple[List[float], List[float], List[float]]:
+            - Timestamps of the messages.
+            - List of linear x velocities.
+            - List of angular z velocities.
+    """
     timestamps = []
     xvels = []
     thetavels = []
@@ -229,6 +318,19 @@ def extract_velocities_from_cmd_vel(bag_folder, topic):
     return timestamps, xvels, thetavels
 
 def extract_velocities_from_odom(bag_folder, topic):
+    """
+    Extract linear and angular velocities from an odometry ROS topic.
+
+    Args:
+        bag_folder (str): Path to the directory containing the ROS bag.
+        topic (str): ROS topic for odometry.
+
+    Returns:
+        Tuple[List[float], List[float], List[float]]:
+            - Timestamps of the messages.
+            - List of linear x velocities.
+            - List of angular z velocities.
+    """
     timestamps = []
     xvels = []
     thetavels = []
@@ -256,6 +358,18 @@ def write_parquet_for_episode(
     episode_index,
     task_index
 ):
+    """
+    Write synchronized action and observation data to a Parquet file.
+
+    Args:
+        out_path (str): Path to the output Parquet file.
+        frame_indices (List[int]): Frame indices.
+        timestamps (List[float]): Frame timestamps.
+        actions (List[List[float]]): List of action vectors.
+        observations (List[List[float]]): List of observation vectors.
+        episode_index (int): Episode index.
+        task_index (int): Task index.
+    """
     action_states = np.array(actions, dtype=np.float32)
     observation_states = np.array(observations, dtype=np.float32)
     df = pd.DataFrame({
@@ -271,19 +385,32 @@ def write_parquet_for_episode(
     print(f"[DONE] Parquet written: {out_path}")
 
 def write_info_json_from_template(template_path, out_path, updates):
+    """
+    Generate info.json metadata file by updating a template with dataset information.
+
+    Args:
+        template_path (str): Path to the template info.json file.
+        out_path (str): Path to save the updated info.json.
+        updates (Dict): Dictionary of updates to apply (e.g., total_episodes, fps).
+    """
     with open(template_path, "r") as f:
         info = json.load(f)
 
     for k, v in updates.items():
         info[k] = v
 
+    # Load camera keys dynamically from SETTINGS_YAML
+    with open(SETTINGS_YAML, "r") as f:
+        config = yaml.safe_load(f)
+    camera_keys = list(config["camera_info"].keys())
+
     if "fps" in updates:
         fps = updates["fps"]
-        for key in ["observation.images.front", "observation.images.back", "observation.images.head", "observation.images.wrist.top"]:
+        for key in camera_keys:
             try:
                 info["features"][key]["info"]["video.fps"] = fps
             except Exception:
-                pass
+                print(f"[WARN] Could not set FPS for {key} in info.json.")
 
     # Write the updated info.json
     safe_makedirs(os.path.dirname(out_path))
@@ -292,6 +419,13 @@ def write_info_json_from_template(template_path, out_path, updates):
     print(f"[DONE] meta/info.json written: {out_path}")
 
 def write_tasks_jsonl(meta_yaml_path, out_jsonl_path):
+    """
+    Write the tasks metadata to a JSON Lines (JSONL) file.
+
+    Args:
+        meta_yaml_path (str): Path to the recorded_bags_meta.yaml file.
+        out_jsonl_path (str): Path to save the JSONL file.
+    """
     # Load the meta YAML
     with open(meta_yaml_path, "r") as f:
         meta = yaml.safe_load(f)
@@ -316,6 +450,15 @@ def write_episodes_jsonl(
     chunks_size,
     episode_lengths
 ):
+    """
+    Write episode metadata to a JSON Lines (JSONL) file.
+
+    Args:
+        meta_yaml_path (str): Path to the recorded_bags_meta.yaml file.
+        dataset_root (str): Root directory of the dataset.
+        chunks_size (List[int]): List of episode counts per chunk.
+        episode_lengths (Dict[Tuple[int, int], int]): Mapping of (chunk_idx, episode_idx) to episode length.
+    """
     # Gather all task instructions
     with open(meta_yaml_path, "r") as f:
         meta = yaml.safe_load(f)
@@ -346,6 +489,15 @@ def write_episodes_jsonl(
 
 
 def compute_stats(array):
+    """
+    Compute statistics (min, max, mean, std, count) over a numpy array.
+
+    Args:
+        array (Union[List, np.ndarray]): Input array to compute statistics.
+
+    Returns:
+        Dict[str, Any]: Dictionary containing computed statistics.
+    """
     array = np.array(array)
     return {
         "min"  : np.min(array, axis=0).tolist(),
@@ -356,12 +508,23 @@ def compute_stats(array):
     }
 
 class NumpyEncoder(json.JSONEncoder):
+    """
+    Custom JSON encoder that converts numpy arrays to lists.
+    """
     def default(self, obj):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
         return super().default(obj)
 
 def write_episodes_stats_jsonl(dataset_root, chunks_size, camera_info):
+    """
+    Compute and write episode statistics to a JSON Lines (JSONL) file.
+
+    Args:
+        dataset_root (str): Root directory of the dataset.
+        chunks_size (List[int]): List of episode counts per chunk.
+        camera_info (Dict[str, str]): Mapping of camera names to ROS topics.
+    """
     stats_lines = []
     episode_global_idx = 0
     camera_keys = list(camera_info.keys())
@@ -393,6 +556,7 @@ def write_episodes_stats_jsonl(dataset_root, chunks_size, camera_info):
                 "task_index": {"dtype": "int"},
             }
             # --------- IMAGE STATS ---------
+            frame_dirs_to_delete = []
             for cam_key in camera_keys:
                 frames_dir = os.path.join(frame_dir, cam_key.replace("=", "").strip(), f"episode_{ep_idx:06d}_frames")
                 if os.path.isdir(frames_dir):
@@ -416,35 +580,36 @@ def write_episodes_stats_jsonl(dataset_root, chunks_size, camera_info):
                         try:
                             episode_data[cam_key] = frame_paths
                             features[cam_key] = {"dtype": "image"}
+                            frame_dirs_to_delete.append(frames_dir)
                         except Exception as e:
                             print(f"[ERROR] sample_images failed for {cam_key}: {e}")
-                # Clean up frames
-                import shutil
-                shutil.rmtree(frames_dir, ignore_errors=True)
+
             # --------- END IMAGE STATS ---------
+            # Load meta/info.json to get feature keys
+            meta_info_path = os.path.join(dataset_root, "meta", "info.json")
+            with open(meta_info_path, "r") as f:
+                info_meta = json.load(f)
+
+            feature_keys = list(info_meta["features"].keys())
+
+            # Compute stats
             stats = compute_episode_stats(episode_data, features)
 
-            # Reorder keys for consistent output
-            ordered_keys = [
-                "action",
-                "observation.state",
-                "observation.images.front",
-                "observation.images.back",
-                "observation.images.head",
-                "observation.images.wrist.top",
-                "timestamp",
-                "frame_index",
-                "episode_index",
-                "index",
-                "task_index",
-            ]
-            ordered_stats = {k: stats[k] for k in ordered_keys if k in stats}
-            stats = ordered_stats
+            # Build stats dict
+            ordered_stats = {k: stats[k] for k in feature_keys if k in stats}
+
+            # Append to stats_lines
             stats_lines.append({
                 "episode_index": episode_global_idx,
-                "stats": stats
+                "stats": ordered_stats
             })
+
             episode_global_idx += 1
+
+            # Clean up frames
+            import shutil
+            for frames_dir in frame_dirs_to_delete:
+                shutil.rmtree(frames_dir, ignore_errors=True)
 
     out_jsonl_path = os.path.join(dataset_root, "meta", "episodes_stats.jsonl")
     safe_makedirs(os.path.dirname(out_jsonl_path))
@@ -453,7 +618,38 @@ def write_episodes_stats_jsonl(dataset_root, chunks_size, camera_info):
             f.write(json.dumps(entry, ensure_ascii=False, cls=NumpyEncoder) + "\n")
     print(f"[DONE] meta/episodes_stats.jsonl written: {out_jsonl_path}")
 
+def compute_fps_for_videos(video_frame_timestamps_dict):
+    """
+    Compute FPS per camera from frame timestamps.
+
+    Args:
+        video_frame_timestamps_dict: Dict[str, List[float]]
+            A dictionary where keys are camera names and values are lists of timestamps for each frame.
+
+    Returns:
+        Dict[str, float]: mapping of camera name -> computed FPS
+    """
+    fps_per_camera = {}
+
+    for cam_name, timestamps in video_frame_timestamps_dict.items():
+        if not timestamps or len(timestamps) < 2:
+            fps_per_camera[cam_name] = 0.0
+            continue
+        duration = timestamps[-1] - timestamps[0]
+        nframes = len(timestamps)
+        fps = nframes / duration if duration > 0 else 0.0
+        fps_per_camera[cam_name] = fps
+
+    return fps_per_camera
+
+
 def main():
+    """
+    Main function that converts ROS2 bags into the LeRobot dataset format.
+
+    It processes video conversion, action and observation extraction, parquet writing,
+    metadata generation, and statistics computation.
+    """
     total_episodes = 0
     total_frames = 0
     total_videos = 0
@@ -511,12 +707,21 @@ def main():
                         print(f"[ERROR] Frame timestamps file missing for {out_mp4}, cannot sync.")
                         video_frame_timestamps = None
                 else:
-                    is_success, video_frame_timestamps = convert_images_to_video(os.path.dirname(bagfile), topic, out_mp4, FPS)
+                    is_success, video_frame_timestamps = convert_images_to_video(os.path.dirname(bagfile), topic, out_mp4, DEFAULT_FPS)  # FIXME: Use lowest fps of all cameras
                     if is_success:
                         convert_mp4_to_av1(out_mp4)
                         np.save(out_mp4.replace('.mp4', '_frame_times.npy'), np.array(video_frame_timestamps))
 
                 video_frame_timestamps_dict[cam_name] = video_frame_timestamps
+
+            fps_per_camera = compute_fps_for_videos(video_frame_timestamps_dict)
+            print("Computed FPS per camera:")
+            for cam, fps in fps_per_camera.items():
+                print(f"  {cam}: {fps:.2f}")
+            # lowest FPS from all cameras
+            lowest_fps = min(fps_per_camera.values())
+            # FPS = int(lowest_fps) if lowest_fps > 0 else int(DEFAULT_FPS) 
+            FPS = DEFAULT_FPS  # Use default FPS for now FIXME: Use lowest FPS of all cameras
 
             # Pick primary camera for action sync
             video_frame_timestamps = video_frame_timestamps_dict.get(primary_camera)
