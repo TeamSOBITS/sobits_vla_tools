@@ -15,8 +15,8 @@ import json
 from lerobot.common.datasets.compute_stats import compute_episode_stats
 
 # TODO: Create a settings YAML file to configure paths, FPS, etc.
-RECORDED_BAGS_ROOT = "rosbags"
-DATASET_ROOT = "MyDataset"
+RECORDED_BAGS_ROOT = "ssd_02/k_sato"
+DATASET_ROOT = "k_sato_dataset"
 SETTINGS_YAML = "config/convert_settings.yaml"
 RECORDED_BAGS_META = os.path.join(RECORDED_BAGS_ROOT, "recorded_bags_meta.yaml")
 DEFAULT_FPS = 10
@@ -775,7 +775,7 @@ def main():
         "total_tasks": total_tasks,
         "total_videos": total_videos,
         "total_chunks": total_chunks,
-        "chunks_size": chunks_size,
+        "chunks_size": max(chunks_size) if chunks_size else 0,
         "fps": FPS,
         "splits": {
             "train": f"0:{total_episodes}"
