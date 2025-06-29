@@ -15,8 +15,8 @@ import json
 from lerobot.common.datasets.compute_stats import compute_episode_stats
 
 # TODO: Create a settings YAML file to configure paths, FPS, etc.
-RECORDED_BAGS_ROOT = "ssd_02/k_sato"
-DATASET_ROOT = "k_sato_dataset"
+RECORDED_BAGS_ROOT = "recorded_bags"
+DATASET_ROOT = "MyDataset"
 SETTINGS_YAML = "config/convert_settings.yaml"
 RECORDED_BAGS_META = os.path.join(RECORDED_BAGS_ROOT, "recorded_bags_meta.yaml")
 DEFAULT_FPS = 10
@@ -75,6 +75,70 @@ def sync_data_to_video_frame(video_frame_timestamps, data_timestamps, data):
         idx = np.argmin(np.abs(obs_ts_np - t))
         synced_obs.append(data[idx])
     return synced_obs
+
+def sample_frames_to_reference_timestamps(bag_folder, topic, ref_timestamps, out_mp4, fps):
+    """
+    Save frames from a ROS bag topic at timestamps matching the reference timeline.
+
+    Args:
+        bag_folder (str): Folder with .mcap
+        topic (str): ROS topic for images
+        ref_timestamps (List[float]): Timestamps to sample at
+        out_mp4 (str): Output video path
+        fps (float): Output FPS
+    """
+    writer = None
+    nframes = 0
+
+    # Collect all frames and timestamps
+    all_frames = []
+    all_timestamps = []
+
+    with AnyReader([Path(bag_folder)]) as reader:
+        for connection, timestamp, rawdata in reader.messages():
+            if connection.topic != topic:
+                continue
+            msg = reader.deserialize(rawdata, connection.msgtype)
+            t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            img = message_to_cvimage(msg)
+            cv_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            all_frames.append(cv_img)
+            all_timestamps.append(t_sec)
+
+    if not all_frames:
+        print(f"[WARN] No frames found for {topic}")
+        return False
+
+    ts_np = np.array(all_timestamps)
+
+    # Create frames dir
+    frames_dir = os.path.splitext(out_mp4)[0] + "_frames"
+    safe_makedirs(frames_dir)
+
+    for i, t_ref in enumerate(ref_timestamps):
+        idx = np.argmin(np.abs(ts_np - t_ref))
+        frame = all_frames[idx]
+
+        if writer is None:
+            h, w, _ = frame.shape
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            writer = cv2.VideoWriter(out_mp4, fourcc, fps, (w, h))
+
+        writer.write(frame)
+
+        # Save frame as image
+        frame_path = os.path.join(frames_dir, f"frame_{i:06d}.jpg")
+        cv2.imwrite(frame_path, frame)
+
+        nframes += 1
+
+    if writer:
+        writer.release()
+        print(f"[SYNC] Video sampled: {out_mp4} ({nframes} frames)")
+        print(f"Frames saved to: {frames_dir}")
+        return True
+    else:
+        return False
 
 def convert_images_to_video(bag_folder, topic, out_mp4, fps):
     """
@@ -657,7 +721,7 @@ def main():
     episode_lengths = {}
     
     camera_info = load_camera_topics(SETTINGS_YAML)
-    primary_camera = "observation.images.hand" if "observation.images.hand" in camera_info else list(camera_info.keys())[0]
+    primary_camera = "observation.images.wrist.top" if "observation.images.wrist.top" in camera_info else list(camera_info.keys())[0]
 
     # Load task/chunk mapping from recorded_bags_meta.yaml
     with open(RECORDED_BAGS_META, "r") as f:
@@ -690,28 +754,63 @@ def main():
             episode_name = f"episode_{ep_idx:06d}.mp4"
 
             video_frame_timestamps_dict = {}
+            # First, process the primary camera normally
+            primary_topic = camera_info[primary_camera]
+            primary_out_dir = os.path.join(
+                DATASET_ROOT, "videos", chunk_name, primary_camera.replace("=", "").strip()
+            )
+            safe_makedirs(primary_out_dir)
+            primary_out_mp4 = os.path.join(primary_out_dir, episode_name)
+
+            if os.path.exists(primary_out_mp4):
+                print(f"[SKIP] {primary_out_mp4} already exists. Skipping video encoding.")
+                ts_path = primary_out_mp4.replace('.mp4', '_frame_times.npy')
+                if os.path.exists(ts_path):
+                    video_frame_timestamps = np.load(ts_path).tolist()
+                else:
+                    print(f"[ERROR] Frame timestamps file missing for {primary_out_mp4}, cannot sync.")
+                    video_frame_timestamps = None
+            else:
+                is_success, video_frame_timestamps = convert_images_to_video(
+                    os.path.dirname(bagfile),
+                    primary_topic,
+                    primary_out_mp4,
+                    DEFAULT_FPS
+                )
+                if is_success:
+                    convert_mp4_to_av1(primary_out_mp4)
+                    np.save(primary_out_mp4.replace('.mp4', '_frame_times.npy'), np.array(video_frame_timestamps))
+
+            video_frame_timestamps_dict[primary_camera] = video_frame_timestamps
+
+            # Now process all *other* cameras by sampling to primary timeline
             for cam_name, topic in camera_info.items():
+                if cam_name == primary_camera:
+                    continue  # already done
+
                 out_dir = os.path.join(
                     DATASET_ROOT, "videos", chunk_name, cam_name.replace("=", "").strip()
                 )
                 safe_makedirs(out_dir)
                 out_mp4 = os.path.join(out_dir, episode_name)
-                print(f"[{chunk_name}][{cam_name}] {topic} → {out_mp4}")
 
                 if os.path.exists(out_mp4):
                     print(f"[SKIP] {out_mp4} already exists. Skipping video encoding.")
-                    ts_path = out_mp4.replace('.mp4', '_frame_times.npy')
-                    if os.path.exists(ts_path):
-                        video_frame_timestamps = np.load(ts_path).tolist()
-                    else:
-                        print(f"[ERROR] Frame timestamps file missing for {out_mp4}, cannot sync.")
-                        video_frame_timestamps = None
                 else:
-                    is_success, video_frame_timestamps = convert_images_to_video(os.path.dirname(bagfile), topic, out_mp4, DEFAULT_FPS)  # FIXME: Use lowest fps of all cameras
-                    if is_success:
-                        convert_mp4_to_av1(out_mp4)
-                        np.save(out_mp4.replace('.mp4', '_frame_times.npy'), np.array(video_frame_timestamps))
+                    if video_frame_timestamps:
+                        success = sample_frames_to_reference_timestamps(
+                            os.path.dirname(bagfile),
+                            topic,
+                            video_frame_timestamps,
+                            out_mp4,
+                            DEFAULT_FPS
+                        )
+                        if success:
+                            convert_mp4_to_av1(out_mp4)
+                    else:
+                        print(f"[ERROR] Cannot sample {cam_name}: primary timestamps not available.")
 
+                # All cameras now share the same timestamps
                 video_frame_timestamps_dict[cam_name] = video_frame_timestamps
 
             fps_per_camera = compute_fps_for_videos(video_frame_timestamps_dict)
