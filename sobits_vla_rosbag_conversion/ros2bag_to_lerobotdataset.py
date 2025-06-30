@@ -16,7 +16,7 @@ import json
 from lerobot.common.datasets.compute_stats import compute_episode_stats
 
 # TODO: Create a settings YAML file to configure paths, FPS, etc.
-RECORDED_BAGS_ROOT = "recorded_bags"
+RECORDED_BAGS_ROOT = "rosbags"
 DATASET_ROOT = "MyDataset"
 SETTINGS_YAML = "config/convert_settings.yaml"
 RECORDED_BAGS_META = os.path.join(RECORDED_BAGS_ROOT, "recorded_bags_meta.yaml")
@@ -100,7 +100,7 @@ def sample_frames_to_reference_timestamps(bag_folder, topic, ref_timestamps, out
             if connection.topic != topic:
                 continue
             msg = reader.deserialize(rawdata, connection.msgtype)
-            t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            t_sec = timestamp * 1e-9  # Convert nanoseconds to seconds
             img = message_to_cvimage(msg)
             cv_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
             all_frames.append(cv_img)
@@ -181,7 +181,7 @@ def convert_images_to_video(bag_folder, topic, out_mp4, fps):
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                 writer = cv2.VideoWriter(out_mp4, fourcc, fps, (w, h))
             writer.write(cv_img)
-            t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            t_sec = timestamp * 1e-9  # Convert nanoseconds to seconds
             frame_timestamps.append(t_sec)
             nframes += 1
     if writer:
@@ -246,25 +246,27 @@ def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_lig
     with AnyReader([Path(bag_folder)]) as reader:
         joint_states_topics = [conn.topic for conn in reader.connections]
         if joint_states_topic not in joint_states_topics:
-            print(f"[WARN] Topic {joint_states_topic} not in bag.")
-            return [], [], []
+            print(f"[ERROR] Topic {joint_states_topic} not in bag.")
+            exit()
+        skipped_times = 0
         for idx, (connection, timestamp, rawdata) in enumerate(reader.messages()):
             if connection.topic != joint_states_topic:
+                skipped_times += 1
                 continue
             msg = reader.deserialize(rawdata, connection.msgtype)
             # Map joint names to positions
             joint_pos = dict(zip(msg.joint_names, msg.reference.positions))
             # timestamp in seconds: sec + nanosec * 1e-9
-            t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            t_sec = timestamp * 1e-9  # Convert nanoseconds to seconds
 
             # Sync velocities using timestamp from joint_states
             if vel_timestamps:
-                idx_vel = np.argmin(np.abs(np.array(vel_timestamps) - t_sec))
+                idx_vel = np.argmin(np.abs(np.array(vel_timestamps) - t_sec)) # TODO: Check if this is correct
                 x_vel = xvels[idx_vel]
                 theta_vel = thetavels[idx_vel]
             else:
-                x_vel = 0.0
-                theta_vel = 0.0
+                print(f"[WARN] No cmd_vel data found for timestamp {t_sec}.")
+                exit()
 
             # Create the observation vector in the required order
             obs_vec = [
@@ -283,7 +285,7 @@ def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_lig
             ]
             actions.append(obs_vec)
             timestamps.append(t_sec)
-            frame_indices.append(idx)
+            frame_indices.append(idx - skipped_times)
     return frame_indices, timestamps, actions
 
 def extract_observations_from_joint_states(bag_folder, joint_states_topic="/sobit_light/joint_states", odom_topic="/sobit_light/odometry/odometry"):
@@ -311,25 +313,27 @@ def extract_observations_from_joint_states(bag_folder, joint_states_topic="/sobi
     with AnyReader([Path(bag_folder)]) as reader:
         joint_states_topics = [conn.topic for conn in reader.connections]
         if joint_states_topic not in joint_states_topics:
-            print(f"[WARN] Topic {joint_states_topic} not in bag.")
-            return [], [], []
+            print(f"[ERROR] Topic {joint_states_topic} not in bag.")
+            exit()
+        skipped_times = 0
         for idx, (connection, timestamp, rawdata) in enumerate(reader.messages()):
             if connection.topic != joint_states_topic:
+                skipped_times += 1
                 continue
             msg = reader.deserialize(rawdata, connection.msgtype)
             # Map joint names to positions
             joint_pos = dict(zip(msg.name, msg.position))
             # timestamp in seconds: sec + nanosec * 1e-9
-            t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            t_sec = timestamp * 1e-9  # Convert nanoseconds to seconds
 
             # Sync velocities using timestamp from joint_states
             if vel_timestamps:
-                idx_vel = np.argmin(np.abs(np.array(vel_timestamps) - t_sec))
+                idx_vel = np.argmin(np.abs(np.array(vel_timestamps) - t_sec)) # TODO: Check if this is correct
                 x_vel = xvels[idx_vel]
                 theta_vel = thetavels[idx_vel]
             else:
-                x_vel = 0.0
-                theta_vel = 0.0
+                print(f"[WARN] No odometry data found for timestamp {t_sec}.")
+                exit()
 
             # Create the observation vector in the required order
             obs_vec = [
@@ -348,7 +352,7 @@ def extract_observations_from_joint_states(bag_folder, joint_states_topic="/sobi
             ]
             observations.append(obs_vec)
             timestamps.append(t_sec)
-            frame_indices.append(idx)
+            frame_indices.append(idx - skipped_times)
     return frame_indices, timestamps, observations
 
 def extract_velocities_from_cmd_vel(bag_folder, topic):
@@ -376,7 +380,7 @@ def extract_velocities_from_cmd_vel(bag_folder, topic):
             if connection.topic != topic:
                 continue
             msg = reader.deserialize(rawdata, connection.msgtype)
-            t_sec = timestamp * 1e-9
+            t_sec = timestamp * 1e-9 # Convert nanoseconds to seconds
             xvels.append(msg.linear.x)
             thetavels.append(msg.angular.z)
             timestamps.append(t_sec)
@@ -608,7 +612,7 @@ def write_episodes_stats_jsonl(dataset_root, chunks_size, camera_info):
     data_root = os.path.join(dataset_root, "data")
     if not os.path.isdir(data_root):
         print(f"[ERROR] Data directory not found: {data_root}")
-        return
+        exit()
 
     chunk_dirs = sorted([d for d in os.listdir(data_root) if d.startswith("chunk-") and os.path.isdir(os.path.join(data_root, d))])
     for chunk_dir in chunk_dirs:
@@ -903,7 +907,7 @@ def main():
                 total_frames += len(frame_indices)
 
     total_chunks = total_episodes // 1000 + 1
-    chunks_size = total_episodes if total_chunks < 1 else 1000
+    chunks_size = total_episodes if total_chunks <= 1 else 1000
 
     updates = {
         "total_episodes": total_episodes,
