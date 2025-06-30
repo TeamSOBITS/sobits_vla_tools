@@ -3,6 +3,7 @@
 Convert ROS2 bags to a structured dataset for the LeRobot platform.
 """
 import os
+import shutil
 import cv2
 import yaml
 import pandas as pd
@@ -214,7 +215,7 @@ def convert_mp4_to_av1(mp4_path):
         "-pix_fmt", "yuv420p",
         temp_av1
     ]
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True) # TODO: Handle errors
     os.remove(mp4_path)
     os.replace(temp_av1, av1_path)
     print(f"[DONE] AV1 written and original removed: {av1_path}")
@@ -511,7 +512,6 @@ def write_tasks_jsonl(meta_yaml_path, out_jsonl_path):
 def write_episodes_jsonl(
     meta_yaml_path,
     dataset_root,
-    chunks_size,
     episode_lengths
 ):
     """
@@ -520,56 +520,66 @@ def write_episodes_jsonl(
     Args:
         meta_yaml_path (str): Path to the recorded_bags_meta.yaml file.
         dataset_root (str): Root directory of the dataset.
-        chunks_size (List[int]): List of episode counts per chunk.
-        episode_lengths (Dict[Tuple[int, int], int]): Mapping of (chunk_idx, episode_idx) to episode length.
+        episode_lengths (Dict[int, int]): Mapping of (episode_idx) to episode length.
     """
-    # Gather all task instructions
+    # Load meta and task instructions
     with open(meta_yaml_path, "r") as f:
         meta = yaml.safe_load(f)
-    # task_list = list(meta["recorded_bags"].items())
     task_list = meta["recorded_bags"]["tasks"]
 
+    # Build a mapping from episode global index to task label
+    episode_to_task = []
+    episode_idx = 0
+    for task_idx, task_name in enumerate(task_list):
+        bag_group = meta["recorded_bags"][task_name]["bag_dir"]
+        group_dir = os.path.join(RECORDED_BAGS_ROOT, bag_group)
+        print(f"[INFO] Processing task {task_name} in group {group_dir}...")
+        print(f"[INFO] Group directory: {group_dir}")
+        if not os.path.isdir(group_dir):
+            continue
+        for ep in sorted(os.listdir(group_dir)):
+            ep_path = os.path.join(group_dir, ep)
+            if not os.path.isdir(ep_path):
+                continue
+            episode_to_task.append(meta["recorded_bags"][task_name]["label"])
+
     lines = []
-    episode_global_idx = 0
-    for chunk_idx, task_name in enumerate(task_list):
-        instruction = meta["recorded_bags"][task_name]["label"]
-        n_episodes = chunks_size[chunk_idx]
-        for episode_index in range(n_episodes):
-            length = episode_lengths.get((chunk_idx, episode_index), 0)
-            entry = {
-                "episode_index": episode_global_idx,
-                "tasks": [instruction],
-                "length": length
-            }
-            lines.append(entry)
-            episode_global_idx += 1
+    total_episodes = len(episode_to_task)
+    for episode_idx in range(total_episodes):
+        length = episode_lengths.get(episode_idx, 0)
+        entry = {
+            "episode_index": episode_idx,
+            "tasks": [episode_to_task[episode_idx]],
+            "length": length
+        }
+        lines.append(entry)
 
     out_jsonl_path = os.path.join(dataset_root, "meta", "episodes.jsonl")
     safe_makedirs(os.path.dirname(out_jsonl_path))
     with open(out_jsonl_path, "w") as f:
         for entry in lines:
+            print(f"[ENTRY] {entry}")
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     print(f"[DONE] meta/episodes.jsonl written: {out_jsonl_path}")
 
+# def compute_stats(array):
+#     """
+#     Compute statistics (min, max, mean, std, count) over a numpy array.
 
-def compute_stats(array):
-    """
-    Compute statistics (min, max, mean, std, count) over a numpy array.
+#     Args:
+#         array (Union[List, np.ndarray]): Input array to compute statistics.
 
-    Args:
-        array (Union[List, np.ndarray]): Input array to compute statistics.
-
-    Returns:
-        Dict[str, Any]: Dictionary containing computed statistics.
-    """
-    array = np.array(array)
-    return {
-        "min"  : np.min(array, axis=0).tolist(),
-        "max"  : np.max(array, axis=0).tolist(),
-        "mean" : np.mean(array, axis=0).tolist(),
-        "std"  : np.std(array, axis=0).tolist(),
-        "count": np.array([len(array)]),
-    }
+#     Returns:
+#         Dict[str, Any]: Dictionary containing computed statistics.
+#     """
+#     array = np.array(array)
+#     return {
+#         "min"  : np.min(array, axis=0).tolist(),
+#         "max"  : np.max(array, axis=0).tolist(),
+#         "mean" : np.mean(array, axis=0).tolist(),
+#         "std"  : np.std(array, axis=0).tolist(),
+#         "count": np.array([len(array)]),
+#     }
 
 class NumpyEncoder(json.JSONEncoder):
     """
@@ -586,18 +596,37 @@ def write_episodes_stats_jsonl(dataset_root, chunks_size, camera_info):
 
     Args:
         dataset_root (str): Root directory of the dataset.
-        chunks_size (List[int]): List of episode counts per chunk.
+        chunks_size (int): Maximum number of episodes per chunk.
         camera_info (Dict[str, str]): Mapping of camera names to ROS topics.
     """
     stats_lines = []
     episode_global_idx = 0
     camera_keys = list(camera_info.keys())
-    for chunk_idx, n_episodes in enumerate(chunks_size):
-        chunk_name = f"chunk-{chunk_idx:03d}"
-        data_dir = os.path.join(dataset_root, "data", chunk_name)
+    chunk_idx = 0
+
+    # Iterate over chunk directories in data/
+    data_root = os.path.join(dataset_root, "data")
+    if not os.path.isdir(data_root):
+        print(f"[ERROR] Data directory not found: {data_root}")
+        return
+
+    chunk_dirs = sorted([d for d in os.listdir(data_root) if d.startswith("chunk-") and os.path.isdir(os.path.join(data_root, d))])
+    for chunk_dir in chunk_dirs:
+        chunk_name = chunk_dir
+        data_dir = os.path.join(data_root, chunk_name)
         frame_dir = os.path.join(dataset_root, "videos", chunk_name)
-        for ep_idx in range(n_episodes):
-            parquet_path = os.path.join(data_dir, f"episode_{ep_idx:06d}.parquet")
+
+        # Find all episode parquet files in this chunk
+        parquet_files = sorted([f for f in os.listdir(data_dir) if f.endswith(".parquet")])
+        for parquet_file in parquet_files:
+            # Extract episode index from filename
+            try:
+                ep_idx = int(parquet_file.split("_")[1].split(".")[0])
+            except Exception:
+                print(f"[WARN] Could not parse episode index from {parquet_file}, skipping.")
+                continue
+
+            parquet_path = os.path.join(data_dir, parquet_file)
             if not os.path.exists(parquet_path):
                 continue
             df = pd.read_parquet(parquet_path)
@@ -671,9 +700,10 @@ def write_episodes_stats_jsonl(dataset_root, chunks_size, camera_info):
             episode_global_idx += 1
 
             # Clean up frames
-            import shutil
             for frames_dir in frame_dirs_to_delete:
                 shutil.rmtree(frames_dir, ignore_errors=True)
+
+        chunk_idx += 1
 
     out_jsonl_path = os.path.join(dataset_root, "meta", "episodes_stats.jsonl")
     safe_makedirs(os.path.dirname(out_jsonl_path))
@@ -698,10 +728,10 @@ def compute_fps_for_videos(video_frame_timestamps_dict):
     for cam_name, timestamps in video_frame_timestamps_dict.items():
         if not timestamps or len(timestamps) < 2:
             fps_per_camera[cam_name] = 0.0
-            continue
+            return -1
         duration = timestamps[-1] - timestamps[0]
         nframes = len(timestamps)
-        fps = nframes / duration if duration > 0 else 0.0
+        fps = nframes / duration
         fps_per_camera[cam_name] = fps
 
     return fps_per_camera
@@ -719,19 +749,19 @@ def main():
     total_videos = 0
     chunks_size = []
     episode_lengths = {}
-    
+    chunk_idx = 0
+
     camera_info = load_camera_topics(SETTINGS_YAML)
     primary_camera = "observation.images.wrist.top" if "observation.images.wrist.top" in camera_info else list(camera_info.keys())[0]
 
     # Load task/chunk mapping from recorded_bags_meta.yaml
     with open(RECORDED_BAGS_META, "r") as f:
         meta = yaml.safe_load(f)
-    # task_list = list(meta["recorded_bags"].items())
     task_list = meta["recorded_bags"]["tasks"]
     total_tasks = len(task_list)
-    total_chunks = len(task_list)
+
     # Assign chunks in order
-    for chunk_idx, task_name in enumerate(task_list):
+    for task_name in task_list:
         bag_group = meta["recorded_bags"][task_name]["bag_dir"]
         chunk_name = f"chunk-{chunk_idx:03d}"
         group_dir = os.path.join(RECORDED_BAGS_ROOT, bag_group)
@@ -741,6 +771,7 @@ def main():
         # Each episode is a folder inside the group
         for ep in sorted(os.listdir(group_dir)):
             ep_path = os.path.join(group_dir, ep)
+            print(f"[INFO] Processing episode {ep_path} in {chunk_name}...")
             if not os.path.isdir(ep_path):
                 continue
             # Find bag file (*.mcap) inside episode folder
@@ -749,16 +780,15 @@ def main():
                 print(f"[WARN] No .mcap found in {ep_path}")
                 continue
             bagfile = os.path.join(ep_path, mcap_files[0])
-            # Name episode file as e.g. episode_000000.mp4 (index from 0 in all chunks)
-            ep_idx = int(ep.split('_')[-1]) - 1  # e.g. episode_1 -> 0-based index
-            episode_name = f"episode_{ep_idx:06d}.mp4"
+
+            # Calculate the global episode index for this chunk
+            episode_name = f"episode_{total_episodes:06d}.mp4"
 
             video_frame_timestamps_dict = {}
             # First, process the primary camera normally
             primary_topic = camera_info[primary_camera]
-            primary_out_dir = os.path.join(
-                DATASET_ROOT, "videos", chunk_name, primary_camera.replace("=", "").strip()
-            )
+            primary_out_dir = os.path.join(DATASET_ROOT, "videos", chunk_name, primary_camera)
+
             safe_makedirs(primary_out_dir)
             primary_out_mp4 = os.path.join(primary_out_dir, episode_name)
 
@@ -770,6 +800,7 @@ def main():
                 else:
                     print(f"[ERROR] Frame timestamps file missing for {primary_out_mp4}, cannot sync.")
                     video_frame_timestamps = None
+                    return
             else:
                 is_success, video_frame_timestamps = convert_images_to_video(
                     os.path.dirname(bagfile),
@@ -780,6 +811,9 @@ def main():
                 if is_success:
                     convert_mp4_to_av1(primary_out_mp4)
                     np.save(primary_out_mp4.replace('.mp4', '_frame_times.npy'), np.array(video_frame_timestamps))
+                else:
+                    print(f"[ERROR] Failed to convert {primary_topic} to video.")
+                    return
 
             video_frame_timestamps_dict[primary_camera] = video_frame_timestamps
 
@@ -788,51 +822,53 @@ def main():
                 if cam_name == primary_camera:
                     continue  # already done
 
-                out_dir = os.path.join(
-                    DATASET_ROOT, "videos", chunk_name, cam_name.replace("=", "").strip()
-                )
+                out_dir = os.path.join(DATASET_ROOT, "videos", chunk_name, cam_name)
                 safe_makedirs(out_dir)
                 out_mp4 = os.path.join(out_dir, episode_name)
 
                 if os.path.exists(out_mp4):
                     print(f"[SKIP] {out_mp4} already exists. Skipping video encoding.")
                 else:
-                    if video_frame_timestamps:
-                        success = sample_frames_to_reference_timestamps(
-                            os.path.dirname(bagfile),
-                            topic,
-                            video_frame_timestamps,
-                            out_mp4,
-                            DEFAULT_FPS
-                        )
-                        if success:
-                            convert_mp4_to_av1(out_mp4)
+                    success = sample_frames_to_reference_timestamps(
+                        os.path.dirname(bagfile),
+                        topic,
+                        video_frame_timestamps,
+                        out_mp4,
+                        DEFAULT_FPS
+                    )
+                    if success:
+                        convert_mp4_to_av1(out_mp4)
                     else:
-                        print(f"[ERROR] Cannot sample {cam_name}: primary timestamps not available.")
-
+                        print(f"[ERROR] Failed to sample frames for {topic} to video.")
+                        return
                 # All cameras now share the same timestamps
                 video_frame_timestamps_dict[cam_name] = video_frame_timestamps
 
+            # Compute FPS for all cameras
             fps_per_camera = compute_fps_for_videos(video_frame_timestamps_dict)
+            if fps_per_camera == -1:
+                print(f"[ERROR] Could not compute FPS for cameras in {bagfile}.")
+                return
             print("Computed FPS per camera:")
             for cam, fps in fps_per_camera.items():
                 print(f"  {cam}: {fps:.2f}")
             # lowest FPS from all cameras
-            lowest_fps = min(fps_per_camera.values())
+            lowest_fps = min(fps_per_camera.values()) # FIXME: Use lowest FPS of all cameras
             # FPS = int(lowest_fps) if lowest_fps > 0 else int(DEFAULT_FPS) 
-            FPS = DEFAULT_FPS  # Use default FPS for now FIXME: Use lowest FPS of all cameras
-
-            # Pick primary camera for action sync
-            video_frame_timestamps = video_frame_timestamps_dict.get(primary_camera)
 
             # Write parquet for this episode
             data_out_dir = os.path.join(DATASET_ROOT, "data", chunk_name)
             safe_makedirs(data_out_dir)
-            parquet_path = os.path.join(data_out_dir, f"episode_{ep_idx:06d}.parquet")
-            
+
+            # Calculate the global episode index for this chunk
+            parquet_path = os.path.join(data_out_dir, f"episode_{total_episodes:06d}.parquet")
+
+            # Pick primary camera for action sync
+            video_frame_timestamps = video_frame_timestamps_dict.get(primary_camera)
+
             _, obs_timestamps, observations = extract_observations_from_joint_states(os.path.dirname(bagfile))
             _, act_timestamps, actions = extract_actions_from_joint_states(os.path.dirname(bagfile))
-            if video_frame_timestamps and obs_timestamps and act_timestamps:
+            if video_frame_timestamps and obs_timestamps and act_timestamps: #TODO: Check here
                 # Normalize both to start at zero
                 t0 = video_frame_timestamps[0]
                 video_frame_timestamps = [t - t0 for t in video_frame_timestamps]
@@ -843,10 +879,12 @@ def main():
                 synced_actions = sync_data_to_video_frame(video_frame_timestamps, act_timestamps, actions)
                 synced_observations = sync_data_to_video_frame(video_frame_timestamps, obs_timestamps, observations)
             else:
-                frame_indices = []
-                video_frame_timestamps = []
-                synced_actions = []
-                synced_observations = []
+                print(f"[ERROR] Could not extract actions or observations for {bagfile}.")
+                return
+
+            episode_lengths[total_episodes] = len(frame_indices)
+
+            chunk_idx = total_episodes // 1000
 
             write_parquet_for_episode(
                 parquet_path,
@@ -854,10 +892,9 @@ def main():
                 video_frame_timestamps,
                 synced_actions,
                 synced_observations,
-                ep_idx,
+                total_episodes,
                 chunk_idx
             )
-            episode_lengths[(chunk_idx, ep_idx)] = len(frame_indices)
 
             # collect statistics for the info.json
             total_episodes += 1
@@ -865,8 +902,8 @@ def main():
             if len(frame_indices) > 0:
                 total_frames += len(frame_indices)
 
-        chunk_episode_count = len([ep for ep in os.listdir(group_dir) if os.path.isdir(os.path.join(group_dir, ep))])
-        chunks_size.append(chunk_episode_count)
+    total_chunks = total_episodes // 1000 + 1
+    chunks_size = total_episodes if total_chunks < 1 else 1000
 
     updates = {
         "total_episodes": total_episodes,
@@ -874,8 +911,8 @@ def main():
         "total_tasks": total_tasks,
         "total_videos": total_videos,
         "total_chunks": total_chunks,
-        "chunks_size": max(chunks_size) if chunks_size else 0,
-        "fps": FPS,
+        "chunks_size": chunks_size,
+        "fps": DEFAULT_FPS,
         "splits": {
             "train": f"0:{total_episodes}"
         }
@@ -886,7 +923,7 @@ def main():
         robot_type = meta["robot_info"]["name"]
     else:
         robot_type = "default_robot"
-        print(f"[ERROR] Could not recognize robot type from tasks. Using '{robot_type}'.")
+        print(f"[WARN] Could not recognize robot type from tasks. Using '{robot_type}'.")
     
     meta_dir = os.path.join(DATASET_ROOT, "meta")
     safe_makedirs(meta_dir)
@@ -907,7 +944,7 @@ def main():
         print(f"[SKIP] {tasks_jsonl_path} already exists.")
 
     if not os.path.exists(episodes_jsonl_path):
-        write_episodes_jsonl(RECORDED_BAGS_META, DATASET_ROOT, chunks_size, episode_lengths)
+        write_episodes_jsonl(RECORDED_BAGS_META, DATASET_ROOT, episode_lengths)
     else:
         print(f"[SKIP] {episodes_jsonl_path} already exists.")
 
