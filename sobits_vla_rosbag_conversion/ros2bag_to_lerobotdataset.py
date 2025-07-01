@@ -110,6 +110,13 @@ def sample_frames_to_reference_timestamps(bag_folder, topic, ref_timestamps, out
         print(f"[WARN] No frames found for {topic}")
         return False
 
+    # Delete the first and last frame to avoid artifacts 
+    if len(all_frames) > 0:
+        all_frames = all_frames[1:-1]
+        all_timestamps = all_timestamps[1:-1]
+        # all_timestamps = np.array(all_timestamps) - all_timestamps[0]  # Normalize timestamps
+        # all_timestamps = all_timestamps.tolist()
+
     ts_np = np.array(all_timestamps)
 
     # Create frames dir
@@ -186,6 +193,14 @@ def convert_images_to_video(bag_folder, topic, out_mp4, fps):
             nframes += 1
     if writer:
         writer.release()
+
+        # Remove the first and last frame to avoid artifacts
+        if nframes > 2:
+            frame_timestamps = frame_timestamps[1:-1]
+            # frame_timestamps = np.array(frame_timestamps) - frame_timestamps[0]  # Normalize timestamps
+            # frame_timestamps = frame_timestamps.tolist()
+            nframes -= 2  # Adjust frame count
+
         print(f"Video written: {out_mp4} ({nframes} frames)")
         print(f"Frames saved to: {frames_dir}")
         return True, frame_timestamps
@@ -286,6 +301,15 @@ def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_lig
             actions.append(obs_vec)
             timestamps.append(t_sec)
             frame_indices.append(idx - skipped_times)
+
+    # Remove the first and last frame to avoid artifacts
+    if len(frame_indices) > 2:
+        frame_indices = frame_indices[1:-1]
+        timestamps = timestamps[1:-1]
+        # timestamps = np.array(timestamps) - timestamps[0]  # Normalize timestamps
+        # timestamps = timestamps.tolist()
+        actions = actions[1:-1]
+
     return frame_indices, timestamps, actions
 
 def extract_observations_from_joint_states(bag_folder, joint_states_topic="/sobit_light/joint_states", odom_topic="/sobit_light/odometry/odometry"):
@@ -353,6 +377,16 @@ def extract_observations_from_joint_states(bag_folder, joint_states_topic="/sobi
             observations.append(obs_vec)
             timestamps.append(t_sec)
             frame_indices.append(idx - skipped_times)
+    
+    # Remove the first and last frame to avoid artifacts
+    if len(frame_indices) > 2:
+        frame_indices = frame_indices[1:-1]
+        timestamps = timestamps[1:-1]
+        # timestamps = np.array(timestamps) - timestamps[0]  # Normalize timestamps
+        # timestamps = timestamps.tolist()
+        observations = observations[1:-1]
+    
+
     return frame_indices, timestamps, observations
 
 def extract_velocities_from_cmd_vel(bag_folder, topic):
@@ -384,6 +418,7 @@ def extract_velocities_from_cmd_vel(bag_folder, topic):
             xvels.append(msg.linear.x)
             thetavels.append(msg.angular.z)
             timestamps.append(t_sec)
+
     return timestamps, xvels, thetavels
 
 def extract_velocities_from_odom(bag_folder, topic):
@@ -415,6 +450,7 @@ def extract_velocities_from_odom(bag_folder, topic):
             xvels.append(msg.twist.twist.linear.x)
             thetavels.append(msg.twist.twist.angular.z)
             timestamps.append(t_sec)
+
     return timestamps, xvels, thetavels
 
 
@@ -753,6 +789,7 @@ def main():
     total_videos = 0
     chunks_size = []
     episode_lengths = {}
+    task_index = 0
     chunk_idx = 0
 
     camera_info = load_camera_topics(SETTINGS_YAML)
@@ -803,7 +840,6 @@ def main():
                     video_frame_timestamps = np.load(ts_path).tolist()
                 else:
                     print(f"[ERROR] Frame timestamps file missing for {primary_out_mp4}, cannot sync.")
-                    video_frame_timestamps = None
                     return
             else:
                 is_success, video_frame_timestamps = convert_images_to_video(
@@ -897,7 +933,7 @@ def main():
                 synced_actions,
                 synced_observations,
                 total_episodes,
-                chunk_idx
+                task_index
             )
 
             # collect statistics for the info.json
@@ -905,6 +941,7 @@ def main():
             total_videos += len(camera_info)
             if len(frame_indices) > 0:
                 total_frames += len(frame_indices)
+        task_index += 1
 
     total_chunks = total_episodes // 1000 + 1
     chunks_size = total_episodes if total_chunks <= 1 else 1000
