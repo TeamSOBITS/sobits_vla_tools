@@ -69,7 +69,7 @@
            "info": {
                "video.height": 720,
                "video.width": 1280,
-               "video.codec": "av01",
+               "video.codec": "av1",
                "video.pix_fmt": "yuv420p",
                "video.is_depth_map": false,
                "video.fps": 10,
@@ -92,7 +92,7 @@
            "info": {
                "video.height": 480,
                "video.width": 848,
-               "video.codec": "av01",
+               "video.codec": "av1",
                "video.pix_fmt": "yuv420p",
                "video.is_depth_map": false,
                "video.fps": 10,
