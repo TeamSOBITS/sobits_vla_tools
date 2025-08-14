@@ -17,7 +17,7 @@ from lerobot.common.datasets.compute_stats import compute_episode_stats
 
 # TODO: Create a settings YAML file to configure paths, FPS, etc.
 RECORDED_BAGS_ROOT = "rosbags"
-DATASET_ROOT = "MyDataset"
+DATASET_ROOT = "MyTestDataset3"
 SETTINGS_YAML = "config/convert_settings.yaml"
 RECORDED_BAGS_META = os.path.join(RECORDED_BAGS_ROOT, "recorded_bags_meta.yaml")
 DEFAULT_FPS = 10
@@ -174,9 +174,25 @@ def convert_images_to_video(bag_folder, topic, out_mp4, fps):
         if topic not in topics:
             print(f"[WARN] Topic {topic} not in bag {bag_folder}.")
             return False, []
+        prev_timestamp = None
+        skip_first = True
         for connection, timestamp, rawdata in reader.messages():
+            print(f"[INFO] Timestamp {timestamp}")
             if connection.topic != topic:
                 continue
+            if skip_first:
+                print(f"[INFO] Skipping first frame for topic {topic} to avoid artifacts.")
+                skip_first = False
+                prev_timestamp = timestamp
+                continue
+            if prev_timestamp is not None and timestamp != prev_timestamp:
+                timestamp_diff = timestamp - prev_timestamp
+                print(f"[WARN] Timestamp difference: {timestamp_diff} ns")
+                if timestamp_diff > 2000000000: # (ns) 2 second gap
+                    print(f"[ERROR] Large timestamp gap detected: {timestamp_diff} ns. This may cause issues.")
+                    return False, []
+            prev_timestamp = timestamp
+            
             msg = reader.deserialize(rawdata, connection.msgtype)
             img = message_to_cvimage(msg)
             cv_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
@@ -194,12 +210,12 @@ def convert_images_to_video(bag_folder, topic, out_mp4, fps):
     if writer:
         writer.release()
 
-        # Remove the first and last frame to avoid artifacts
-        if nframes > 2:
-            frame_timestamps = frame_timestamps[1:-1]
-            # frame_timestamps = np.array(frame_timestamps) - frame_timestamps[0]  # Normalize timestamps
-            # frame_timestamps = frame_timestamps.tolist()
-            nframes -= 2  # Adjust frame count
+        # # Remove the first and last frame to avoid artifacts
+        # if nframes > 2:
+        #     frame_timestamps = frame_timestamps[1:-1]
+        #     # frame_timestamps = np.array(frame_timestamps) - frame_timestamps[0]  # Normalize timestamps
+        #     # frame_timestamps = frame_timestamps.tolist()
+        #     nframes -= 2  # Adjust frame count
 
         print(f"Video written: {out_mp4} ({nframes} frames)")
         print(f"Frames saved to: {frames_dir}")
@@ -280,8 +296,11 @@ def extract_actions_from_joint_states(bag_folder, joint_states_topic="/sobit_lig
                 x_vel = xvels[idx_vel]
                 theta_vel = thetavels[idx_vel]
             else:
-                print(f"[WARN] No cmd_vel data found for timestamp {t_sec}.")
-                exit()
+                # No velocities available, assume stopped
+                x_vel = 0.0
+                theta_vel = 0.0
+                if len(timestamps) == 0:
+                    print(f"[WARN] No cmd_vel data at all. Using zero velocities.")
 
             # Create the observation vector in the required order
             obs_vec = [
@@ -351,13 +370,15 @@ def extract_observations_from_joint_states(bag_folder, joint_states_topic="/sobi
             t_sec = timestamp * 1e-9  # Convert nanoseconds to seconds
 
             # Sync velocities using timestamp from joint_states
-            if vel_timestamps:
-                idx_vel = np.argmin(np.abs(np.array(vel_timestamps) - t_sec)) # TODO: Check if this is correct
+            if vel_timestamps and len(vel_timestamps) > 0:
+                idx_vel = np.argmin(np.abs(np.array(vel_timestamps) - t_sec))
                 x_vel = xvels[idx_vel]
                 theta_vel = thetavels[idx_vel]
             else:
-                print(f"[WARN] No odometry data found for timestamp {t_sec}.")
-                exit()
+                x_vel = 0.0
+                theta_vel = 0.0
+                if len(timestamps) == 0:
+                    print(f"[WARN] No odometry data at all. Using zero velocities.")
 
             # Create the observation vector in the required order
             obs_vec = [
@@ -911,6 +932,29 @@ def main():
             if video_frame_timestamps and obs_timestamps and act_timestamps: #TODO: Check here
                 # Normalize both to start at zero
                 t0 = video_frame_timestamps[0]
+                print(f"[INFO] Normalizing timestamps to start at {t0:.3f} seconds.")
+
+                # Filter observations
+                obs_filtered = [
+                    (t, o) for t, o in zip(obs_timestamps, observations)
+                    if t >= t0
+                ]
+                if obs_filtered:
+                    obs_timestamps, observations = zip(*obs_filtered)
+                else:
+                    obs_timestamps, observations = [], []
+
+                # Filter actions
+                act_filtered = [
+                    (t, a) for t, a in zip(act_timestamps, actions)
+                    if t >= t0
+                ]
+                if act_filtered:
+                    act_timestamps, actions = zip(*act_filtered)
+                else:
+                    act_timestamps, actions = [], []
+
+                # Normalize all timestamps to start at zero
                 video_frame_timestamps = [t - t0 for t in video_frame_timestamps]
                 obs_timestamps = [t - t0 for t in obs_timestamps]
                 act_timestamps = [t - t0 for t in act_timestamps]
