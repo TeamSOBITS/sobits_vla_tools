@@ -10,9 +10,6 @@
 #include <string>       // For std::string
 #include <vector>       // For std::vector
 
-// Assuming sobits_interfaces is available and properly defined
-// and that YAML::Node and related are from the yaml-cpp library.
-
 namespace sobits_vla
 {
 
@@ -176,9 +173,6 @@ RosbagCollection::~RosbagCollection()
   if (bag_pid_ != -1) {
       RCLCPP_WARN(this->get_logger(), "Rosbag process (PID: %d) still active in destructor. Attempting to save.", bag_pid_);
       // Try to save the bag on destruction for robustness
-      // This will now use the non-blocking waitpid with timeout
-      // Note: Calling potentially throwing methods in destructors should be handled carefully.
-      // For simplicity here, we assume it's okay, but in production, you might want to catch exceptions.
       try {
           saveRosbag();
       } catch (const std::exception& e) {
@@ -227,20 +221,11 @@ void RosbagCollection::createRosbag()
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
     throw std::runtime_error("Failed to fork for rosbag record");
   } else if (pid == 0) {
-    // Child process
-    // IMPORTANT: If you want to see the rosbag output, do NOT redirect stdout/stderr to /dev/null here.
-    // If you were previously redirecting, that would explain why you don't see the messages.
-    // If you want to suppress its output, you can do:
-    // int devNull = open("/dev/null", O_WRONLY);
-    // dup2(devNull, STDOUT_FILENO);
-    // dup2(devNull, STDERR_FILENO);
-    // close(devNull);
-    
     // Execute the command string via /bin/sh -c
     execl("/bin/sh", "sh", "-c", command.c_str(), (char *)nullptr);
     
     // If execl fails, print an error and exit the child process
-    perror("execl failed"); // Prints error to stderr (might still be redirected if you added code above)
+    perror("execl failed");
     _exit(EXIT_FAILURE); 
   } else {
     // Parent process
@@ -536,8 +521,6 @@ void RosbagCollection::execute(
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<sobits_interfaces::action::VlaRecordState::Result>();
 
-  // This check seems problematic. If current_task_name_ is never different from previous_task_name_ initially,
-  // this will always warn. Perhaps it should be checking if a task has been set at all.
   if (current_task_name_ == previous_task_name_){
     RCLCPP_WARN(this->get_logger(), "Please update the task name before starting a new recording");
     result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
@@ -616,7 +599,7 @@ void RosbagCollection::taskUpdateCallback(
     std::replace(current_bag_name_.begin(), current_bag_name_.end(), ' ', '_');
     std::transform(current_bag_name_.begin(), current_bag_name_.end(), current_bag_name_.begin(),
                    [](unsigned char c) { return std::tolower(c); });
-    previous_bag_name_ = current_bag_name_; // This line seems to re-assign current_bag_name_ to previous_bag_name_ after modification. Maybe intentional?
+    previous_bag_name_ = current_bag_name_;
 
     previous_bag_path_ = current_bag_path_;
     current_bag_path_ = current_task_path_ + "/" + current_bag_name_;
