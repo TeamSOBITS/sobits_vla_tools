@@ -218,7 +218,7 @@ gamepad_config:
             delete: "d"
 ```
 
->![WARNING]
+> [!WARNING]
 > 現時点ではデータ収集に対応しているコントローラは `dualshock4` のみです．今後，他のコントローラにも対応予定です．
 
 <p align="right">(<a href="#readme-top">上に戻る</a>)</p>

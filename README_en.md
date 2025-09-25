@@ -219,7 +219,7 @@ gamepad_config:
             delete: "d"
 ```
 
->![WARNING]
+> [!WARNING]
 > Right now `dualshock4` is the only controller supported for data collection. More controllers will be available in the future.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
