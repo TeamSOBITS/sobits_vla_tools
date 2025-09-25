@@ -54,6 +54,52 @@
                "theta.vel"
            ]
        },
+       "observation.images.front": {
+           "dtype": "video",
+           "shape": [
+               720,
+               1280,
+               3
+           ],
+           "names": [
+               "height",
+               "width",
+               "channels"
+           ],
+           "info": {
+               "video.height": 720,
+               "video.width": 1280,
+               "video.codec": "av1",
+               "video.pix_fmt": "yuv420p",
+               "video.is_depth_map": false,
+               "video.fps": 10,
+               "video.channels": 3,
+               "has_audio": false
+           }
+       },
+       "observation.images.back": {
+           "dtype": "video",
+           "shape": [
+               720,
+               1280,
+               3
+           ],
+           "names": [
+               "height",
+               "width",
+               "channels"
+           ],
+           "info": {
+               "video.height": 720,
+               "video.width": 1280,
+               "video.codec": "av1",
+               "video.pix_fmt": "yuv420p",
+               "video.is_depth_map": false,
+               "video.fps": 10,
+               "video.channels": 3,
+               "has_audio": false
+           }
+       },
        "observation.images.head": {
            "dtype": "video",
            "shape": [
