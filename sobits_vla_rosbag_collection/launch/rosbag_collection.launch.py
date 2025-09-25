@@ -32,8 +32,17 @@ def generate_launch_description():
         output="screen",
     )
 
+    gamepad_node = Node(
+        package="joy_linux",
+        executable="joy_linux_node",
+        name="joy_linux_node",
+        namespace=robot_name,
+        output="screen",
+    )
+
 
     return LaunchDescription([
         rosbag_collection_node,
         gamepad_clt_node,
+        gamepad_node,
     ])
