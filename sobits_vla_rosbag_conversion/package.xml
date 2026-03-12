@@ -5,9 +5,7 @@
 <package format="3">
   <name>sobits_vla_rosbag_conversion</name>
   <version>0.1.0</version>
-  <description>
-    ROS packages for SOBITS VLA Rosbag Conversion.
-  </description>
+  <description> ROS packages for SOBITS VLA Rosbag Conversion. </description>
 
   <maintainer email="kvalentincardenas@gmail.com">VALENTIN Keith</maintainer>
 
@@ -21,11 +19,15 @@
   <author email="kvalentincardenas@gmail.com">VALENTIN Keith</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+
   <!-- <depend>TODO</depend> -->
 
-  <test_depend>ament_lint_auto</test_depend>
-  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
