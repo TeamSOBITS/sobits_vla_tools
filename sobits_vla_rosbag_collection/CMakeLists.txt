@@ -23,6 +23,7 @@ find_package(sobits_interfaces REQUIRED)
 
 find_package(yaml_cpp_vendor REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(rosbag2_transport REQUIRED)
 
 
 # Find libraries
@@ -52,6 +53,7 @@ ament_target_dependencies(${PROJECT_NAME}
   "rcl_interfaces"
   "sobits_interfaces"
   "yaml_cpp_vendor"
+  "rosbag2_transport"
 )
 
 install(TARGETS ${PROJECT_NAME}
