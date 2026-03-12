@@ -1,14 +1,13 @@
 #include "sobits_vla_rosbag_collection/rosbag_collection.hpp"
 
-#include <csignal>      // For kill
-#include <sys/wait.h>   // For waitpid
-#include <unistd.h>     // For fork, execl, _exit
 #include <iostream>     // For std::cerr
 #include <filesystem>   // For std::filesystem operations
 #include <algorithm>    // For std::replace, std::transform
 #include <fstream>      // For std::ofstream
 #include <string>       // For std::string
 #include <vector>       // For std::vector
+
+#include "rosbag2_cpp/writer.hpp"
 
 // Assuming sobits_interfaces is available and properly defined
 // and that YAML::Node and related are from the yaml-cpp library.
@@ -34,25 +33,42 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     std::bind(&RosbagCollection::handleCancel, this, std::placeholders::_1),
     std::bind(&RosbagCollection::handleAccepted, this, std::placeholders::_1));
 
-  // Initialize Service Server
+  // Initialize Service Server for Tasks
   task_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
     "vla_task_update",
     std::bind(&RosbagCollection::taskUpdateCallback, this, std::placeholders::_1, std::placeholders::_2));
+
+  // Initialize Service Server for Subtasks (long-horizon)
+  subtask_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
+    "vla_subtask_update",
+    std::bind(&RosbagCollection::subtaskUpdateCallback, this, std::placeholders::_1, std::placeholders::_2));
 
   // Declare and get parameters (TODO: make it into a new function)
   // (1) Robot info parameters
   this->declare_parameter<std::string>("robot_info.name", "sobit_robot");
   this->declare_parameter<std::string>("robot_info.version", "1.0.0");
   this->declare_parameter<std::string>("robot_info.morphology.type", "mobile_manipulator");
+  this->declare_parameter<bool>("robot_info.morphology.has_mobile_base", true);
+  this->declare_parameter<bool>("robot_info.morphology.has_cmd_vel_y", false);
+  this->declare_parameter<std::string>("robot_info.morphology.joint_states_topic", "/joint_states");
+  this->declare_parameter<std::string>("robot_info.morphology.cmd_vel_topic", "/cmd_vel");
   this->declare_parameter<std::vector<std::string>>("robot_info.morphology.parts", std::vector<std::string>{"base", "arm", "gripper"});
+  
   robot_info_.name = this->get_parameter("robot_info.name").as_string();
   robot_info_.version = this->get_parameter("robot_info.version").as_string();
   robot_info_.morphology = this->get_parameter("robot_info.morphology.type").as_string();
+  robot_info_.has_mobile_base = this->get_parameter("robot_info.morphology.has_mobile_base").as_bool();
+  robot_info_.has_cmd_vel_y = this->get_parameter("robot_info.morphology.has_cmd_vel_y").as_bool();
+  robot_info_.joint_states_topic = this->get_parameter("robot_info.morphology.joint_states_topic").as_string();
+  robot_info_.cmd_vel_topic = this->get_parameter("robot_info.morphology.cmd_vel_topic").as_string();
+  
   robot_info_.parts = this->get_parameter("robot_info.morphology.parts").as_string_array();
   robot_info_.joint_names.clear();
   for (const auto & part : robot_info_.parts) {
     RCLCPP_INFO(this->get_logger(), "Robot part: %s", part.c_str());
+    this->declare_parameter<bool>("robot_info.morphology." + part + ".is_actionable", false);
     this->declare_parameter<std::vector<std::string>>("robot_info.morphology." + part + ".joint_names", std::vector<std::string>{});
+    robot_info_.is_actionable[part] = this->get_parameter("robot_info.morphology." + part + ".is_actionable").as_bool();
     robot_info_.joint_names[part] = this->get_parameter("robot_info.morphology." + part + ".joint_names").as_string_array();
   }
   this->declare_parameter<std::vector<std::string>>("robot_info.sensors.types", std::vector<std::string>{"camera", "lidar", "imu"});
@@ -76,7 +92,9 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   user_info_.location = this->get_parameter("user_info.location").as_string();
 
   // (3) Rosbag parameters
-  this->declare_parameter<std::string>("rosbag_config.record_directory", "/path/to/recorded_bags");
+  this->declare_parameter<std::string>("rosbag_config.record_directory", "");
+  this->declare_parameter<int>("rosbag_config.fps", 10);
+  this->declare_parameter<double>("rosbag_config.sync_threshold", 0.1);
   this->declare_parameter<std::vector<std::string>>("rosbag_config.topics_to_record", std::vector<std::string>{"/topic1", "/topic2"});
   this->declare_parameter<std::vector<std::string>>("rosbag_config.services_to_record", std::vector<std::string>{"/topic1", "/topic2"});
   this->declare_parameter<std::vector<std::string>>("rosbag_config.actions_to_record", std::vector<std::string>{"/topic1", "/topic2"});
@@ -84,6 +102,8 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("rosbag_config.compression_format", "zstd");
   this->declare_parameter<std::string>("rosbag_config.compression_mode", "none");
   rosbag_info_.recording_dir      = this->get_parameter("rosbag_config.record_directory").as_string();
+  rosbag_info_.fps                = this->get_parameter("rosbag_config.fps").as_int();
+  rosbag_info_.sync_threshold     = this->get_parameter("rosbag_config.sync_threshold").as_double();
   rosbag_info_.topics_to_record   = this->get_parameter("rosbag_config.topics_to_record").as_string_array();
   rosbag_info_.services_to_record = this->get_parameter("rosbag_config.services_to_record").as_string_array();
   rosbag_info_.actions_to_record  = this->get_parameter("rosbag_config.actions_to_record").as_string_array();
@@ -94,6 +114,20 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   // (4) Gamepad parameters
   this->declare_parameter<std::string>("gamepad_config.name", "default_gamepad");
   gamepad_name_ = this->get_parameter("gamepad_config.name").as_string();
+
+  // Sniff Camera Info if provided
+  for (const std::string& topic : rosbag_info_.topics_to_record) {
+    if (topic.find("camera_info") != std::string::npos) {
+      RCLCPP_INFO(this->get_logger(), "Subscribing to sniff dimensions: %s", topic.c_str());
+      camera_info_subs_[topic] = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+          topic,
+          rclcpp::QoS(1).best_effort(),
+          [this, topic](const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+              this->cameraInfoCallback(msg, topic);
+          }
+      );
+    }
+  }
 
   // Init values
   current_state_      = sobits_interfaces::action::VlaRecordState_Result::STOPPED; // PAUSED, RECORDING, STOPPED, ERROR
@@ -116,33 +150,30 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   current_bag_path_   = current_task_path_ + "/" + current_bag_name_;
   previous_bag_path_  = current_bag_path_;
 
-  rosbag_info_.rosbag_options = "";
-
-  bag_pid_ = -1;
+  // (5) Internal State
+  current_subtask_name_ = "";
   
-  // Prepare the rosbag configuration
+  rosbag_info_.rosbag_options = "";
+  
+  // Prepare the rosbag configuration (for record options)
   if (rosbag_info_.conversion_format.empty()) {
     RCLCPP_WARN(this->get_logger(), "No conversion format specified, using default 'sqlite3'");
+    rosbag_info_.conversion_format = "sqlite3";
   } else {
     RCLCPP_INFO(this->get_logger(), "Using conversion format: %s", rosbag_info_.conversion_format.c_str());
-    rosbag_info_.rosbag_options += " --storage " + rosbag_info_.conversion_format;
   }
-  if (rosbag_info_.compression_mode == "none") {
+  if (rosbag_info_.compression_mode == "none" || rosbag_info_.compression_mode.empty()) {
     RCLCPP_INFO(this->get_logger(), "Output compression is disabled");
+    rosbag_info_.compression_mode = "";
   } else {
-      RCLCPP_INFO(this->get_logger(), "Output compression is enabled with mode: %s", rosbag_info_.compression_mode.c_str());
-      rosbag_info_.rosbag_options += " --compression-mode " + rosbag_info_.compression_mode;
-      RCLCPP_INFO(this->get_logger(), "Using compression format: %s", rosbag_info_.compression_format.c_str());
-      rosbag_info_.rosbag_options += " --compression-format " + rosbag_info_.compression_format;
-    }
+    RCLCPP_INFO(this->get_logger(), "Output compression is enabled with mode: %s", rosbag_info_.compression_mode.c_str());
+    RCLCPP_INFO(this->get_logger(), "Using compression format: %s", rosbag_info_.compression_format.c_str());
+  }
+  
   if (rosbag_info_.topics_to_record.empty()) {
     RCLCPP_WARN(this->get_logger(), "No topics to record specified in the rosbag configuration. Using all topics.");
-    rosbag_info_.rosbag_options = " --all"; // Record all topics
   } else {
-    for (const auto & topic : rosbag_info_.topics_to_record) {
-      rosbag_info_.rosbag_options += " " + topic;
-    }
-    RCLCPP_DEBUG(this->get_logger(), "Topics to record: %s", rosbag_info_.rosbag_options.c_str());
+    RCLCPP_DEBUG(this->get_logger(), "Specific topics to record provided.");
   }
   if (rosbag_info_.services_to_record.empty()) {
     RCLCPP_WARN(this->get_logger(), "No services to record specified in the rosbag configuration");
@@ -172,24 +203,25 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 RosbagCollection::~RosbagCollection()
 {
   RCLCPP_INFO(this->get_logger(), "RosbagCollection destructor called");
-  // Ensure the rosbag process is stopped if it's still running
-  if (bag_pid_ != -1) {
-      RCLCPP_WARN(this->get_logger(), "Rosbag process (PID: %d) still active in destructor. Attempting to save.", bag_pid_);
-      // Try to save the bag on destruction for robustness
-      // This will now use the non-blocking waitpid with timeout
-      // Note: Calling potentially throwing methods in destructors should be handled carefully.
-      // For simplicity here, we assume it's okay, but in production, you might want to catch exceptions.
-      try {
-          saveRosbag();
-      } catch (const std::exception& e) {
-          RCLCPP_ERROR(this->get_logger(), "Error during bag saving in destructor: %s", e.what());
-      }
+  if (is_recording_) {
+    try {
+      saveRosbag();
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(this->get_logger(), "Error stopping recording in destructor: %s", e.what());
+    }
   }
 }
 
 void RosbagCollection::createRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Starting recording...");
+
+  std::lock_guard<std::mutex> lock(recorder_mutex_);
+
+  if (is_recording_) {
+    RCLCPP_WARN(this->get_logger(), "Already recording!");
+    return;
+  }
 
   previous_bag_id_ = current_bag_id_;
   current_bag_id_++;
@@ -216,41 +248,52 @@ void RosbagCollection::createRosbag()
     }
   }
 
-  // Call the rosbag record command
-  std::string command = "exec ros2 bag record --output " + current_bag_path_ + " " + rosbag_info_.rosbag_options;
-  RCLCPP_INFO(this->get_logger(), "Executing command: %s", command.c_str());
-
-  pid_t pid = fork();
-  if (pid == -1) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to fork for rosbag record: %s", strerror(errno));
-    previous_state_ = current_state_;
-    current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-    throw std::runtime_error("Failed to fork for rosbag record");
-  } else if (pid == 0) {
-    // Child process
-    // IMPORTANT: If you want to see the rosbag output, do NOT redirect stdout/stderr to /dev/null here.
-    // If you were previously redirecting, that would explain why you don't see the messages.
-    // If you want to suppress its output, you can do:
-    // int devNull = open("/dev/null", O_WRONLY);
-    // dup2(devNull, STDOUT_FILENO);
-    // dup2(devNull, STDERR_FILENO);
-    // close(devNull);
-    
-    // Execute the command string via /bin/sh -c
-    execl("/bin/sh", "sh", "-c", command.c_str(), (char *)nullptr);
-    
-    // If execl fails, print an error and exit the child process
-    perror("execl failed"); // Prints error to stderr (might still be redirected if you added code above)
-    _exit(EXIT_FAILURE); 
-  } else {
-    // Parent process
-    bag_pid_ = pid;
-    RCLCPP_INFO(this->get_logger(), "Started recording with PID %d", bag_pid_);
-  }
+  // Clear subtasks
+  current_subtask_name_ = "";
 
   // Set the current state to RECORDING
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+
+  // Configure rosbag2 transport options
+  rosbag2_storage::StorageOptions storage_options;
+  storage_options.uri = current_bag_path_;
+  storage_options.storage_id = rosbag_info_.conversion_format;
+  
+  rosbag2_transport::RecordOptions record_options;
+  if (rosbag_info_.topics_to_record.empty()) {
+    record_options.all_topics = true;
+  } else {
+    record_options.topics = rosbag_info_.topics_to_record;
+  }
+  record_options.use_sim_time = this->get_parameter("use_sim_time").as_bool();
+  
+  if (!rosbag_info_.compression_mode.empty()) {
+    record_options.compression_mode = rosbag_info_.compression_mode;
+    record_options.compression_format = rosbag_info_.compression_format;
+  }
+
+  // Create a writer instance
+  auto writer = std::make_shared<rosbag2_cpp::Writer>();
+
+  // Create the recorder node and run it in a separate thread
+  recorder_node_ = std::make_shared<rosbag2_transport::Recorder>(
+    writer,
+    storage_options,
+    record_options,
+    "rosbag2_recorder_node",
+    rclcpp::NodeOptions()
+  );
+
+  is_recording_ = true;
+  recorder_thread_ = std::thread([this]() {
+    try {
+      recorder_node_->record();
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(this->get_logger(), "Error during bag recording: %s", e.what());
+      current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+    }
+  });
 
   RCLCPP_INFO(this->get_logger(), "Rosbag recording started successfully");
 }
@@ -260,51 +303,18 @@ void RosbagCollection::removeRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Removing rosbag...");
 
-  if (bag_pid_ != -1) {
-    RCLCPP_INFO(this->get_logger(), "Sending SIGINT to rosbag process (PID: %d) for removal...", bag_pid_);
-    // Send SIGINT for graceful termination
-    if (kill(bag_pid_, SIGINT) == -1) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to send SIGINT to rosbag process with PID %d: %s", bag_pid_, strerror(errno));
-      previous_state_ = current_state_;
-      current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-      throw std::runtime_error("Failed to terminate rosbag process for removal");
-    }
+  std::lock_guard<std::mutex> lock(recorder_mutex_);
 
-    int status = 0;
-    pid_t result = 0;
-    // Increased timeout for rosbag to gracefully exit and flush its cache
-    int timeout_seconds = 20; // Changed from 5 to 20 seconds
-    int poll_interval_ms = 200; // Check every 200 ms
+  if (is_recording_) {
+    RCLCPP_INFO(this->get_logger(), "Stopping recorder to remove bag...");
+    is_recording_ = false;
+    current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
 
-    RCLCPP_INFO(this->get_logger(), "Waiting for rosbag process (PID: %d) to terminate for removal (timeout: %d seconds)...", bag_pid_, timeout_seconds);
-
-    for (int i = 0; i < (timeout_seconds * 1000) / poll_interval_ms; ++i) {
-        result = waitpid(bag_pid_, &status, WNOHANG); // Use WNOHANG
-        if (result == bag_pid_) { // Child has terminated
-            if (WIFEXITED(status)) {
-                RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) exited with status: %d", bag_pid_, WEXITSTATUS(status));
-            } else if (WIFSIGNALED(status)) {
-                RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) terminated by signal: %d", bag_pid_, WTERMSIG(status));
-            }
-            bag_pid_ = -1; // Reset PID since process is gone
-            break; // Exit loop
-        } else if (result == 0) { // Child is still running
-            std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
-        } else { // Error from waitpid
-            RCLCPP_ERROR(this->get_logger(), "Error waiting for rosbag process (PID: %d) during removal: %s", bag_pid_, strerror(errno));
-            break; // Exit loop on error
-        }
-    }
-
-    if (bag_pid_ != -1) { // If it's still not -1, it means the process didn't terminate within the timeout
-        RCLCPP_WARN(this->get_logger(), "Rosbag process (PID: %d) did not terminate gracefully within timeout (%d seconds) during removal. Sending SIGKILL.", bag_pid_, timeout_seconds);
-        if (kill(bag_pid_, SIGKILL) == -1) { // Force terminate
-            RCLCPP_ERROR(this->get_logger(), "Failed to send SIGKILL to rosbag process with PID %d: %s", bag_pid_, strerror(errno));
-        }
-        // Even after SIGKILL, wait for it to be reaped to avoid zombie processes
-        waitpid(bag_pid_, &status, 0); // Blocking wait for SIGKILL to ensure cleanup
-        RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) forcibly terminated during removal.", bag_pid_);
-        bag_pid_ = -1;
+    if (recorder_thread_.joinable()) {
+       recorder_node_.reset(); 
+       if(recorder_thread_.joinable()) {
+           recorder_thread_.join();
+       }
     }
   }
 
@@ -342,57 +352,23 @@ void RosbagCollection::saveRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Saving rosbag...");
 
-  if (bag_pid_ == -1) {
-    RCLCPP_WARN(this->get_logger(), "No rosbag process to terminate (bag_pid_ == -1)");
+  std::lock_guard<std::mutex> lock(recorder_mutex_);
+
+  if (!is_recording_) {
+    RCLCPP_WARN(this->get_logger(), "No rosbag process to terminate");
     previous_state_ = current_state_;
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
     return;
   }
 
-  RCLCPP_INFO(this->get_logger(), "Sending SIGINT to rosbag process (PID: %d) for saving...", bag_pid_);
-  // Send SIGINT for graceful termination
-  if (kill(bag_pid_, SIGINT) == -1) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to send SIGINT to rosbag process with PID %d: %s", bag_pid_, strerror(errno));
-    previous_state_ = current_state_;
-    current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-    throw std::runtime_error("Failed to terminate rosbag process for saving");
-  }
+  RCLCPP_INFO(this->get_logger(), "Stopping recorder for saving...");
+  is_recording_ = false;
 
-  int status = 0;
-  pid_t result = 0;
-  // Increased timeout for rosbag to gracefully exit and flush its cache
-  int timeout_seconds = 20; // Changed from 5 to 20 seconds
-  int poll_interval_ms = 200; // Check every 200 ms
+  // The safest way is to destroy the recorder object, which guarantees the cache is flushed and bag is closed.
+  recorder_node_.reset(); 
 
-  RCLCPP_INFO(this->get_logger(), "Waiting for rosbag process (PID: %d) to terminate for saving (timeout: %d seconds)...", bag_pid_, timeout_seconds);
-
-  for (int i = 0; i < (timeout_seconds * 1000) / poll_interval_ms; ++i) {
-      result = waitpid(bag_pid_, &status, WNOHANG); // Use WNOHANG
-      if (result == bag_pid_) { // Child has terminated
-          if (WIFEXITED(status)) {
-              RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) exited with status: %d", bag_pid_, WEXITSTATUS(status));
-          } else if (WIFSIGNALED(status)) {
-              RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) terminated by signal: %d", bag_pid_, WTERMSIG(status));
-          }
-          bag_pid_ = -1; // Reset PID since process is gone
-          break; // Exit loop
-      } else if (result == 0) { // Child is still running
-          std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
-      } else { // Error from waitpid
-          RCLCPP_ERROR(this->get_logger(), "Error waiting for rosbag process (PID: %d) during saving: %s", bag_pid_, strerror(errno));
-          break; // Exit loop on error
-      }
-  }
-
-  if (bag_pid_ != -1) { // If it's still not -1, it means the process didn't terminate within the timeout
-      RCLCPP_WARN(this->get_logger(), "Rosbag process (PID: %d) did not terminate gracefully within timeout (%d seconds) during saving. Sending SIGKILL.", bag_pid_, timeout_seconds);
-      if (kill(bag_pid_, SIGKILL) == -1) { // Force terminate
-          RCLCPP_ERROR(this->get_logger(), "Failed to send SIGKILL to rosbag process with PID %d: %s", bag_pid_, strerror(errno));
-      }
-      // Even after SIGKILL, wait for it to be reaped to avoid zombie processes
-      waitpid(bag_pid_, &status, 0); // Blocking wait for SIGKILL to ensure cleanup
-      RCLCPP_INFO(this->get_logger(), "Rosbag process (PID: %d) forcibly terminated during saving.", bag_pid_);
-      bag_pid_ = -1;
+  if (recorder_thread_.joinable()) {
+       recorder_thread_.join();
   }
 
   previous_state_ = current_state_;
@@ -410,9 +386,14 @@ void RosbagCollection::createRosbagYaml()
   yaml_node["robot_info"]["name"] = robot_info_.name;
   yaml_node["robot_info"]["version"] = robot_info_.version;
   yaml_node["robot_info"]["morphology"]["type"] = robot_info_.morphology;
+  yaml_node["robot_info"]["morphology"]["has_mobile_base"] = robot_info_.has_mobile_base;
+  yaml_node["robot_info"]["morphology"]["has_cmd_vel_y"] = robot_info_.has_cmd_vel_y;
+  yaml_node["robot_info"]["morphology"]["joint_states_topic"] = robot_info_.joint_states_topic;
+  yaml_node["robot_info"]["morphology"]["cmd_vel_topic"] = robot_info_.cmd_vel_topic;
   yaml_node["robot_info"]["morphology"]["parts"] = YAML::Node(YAML::NodeType::Sequence);
   for (const auto & part : robot_info_.parts) {
     yaml_node["robot_info"]["morphology"]["parts"].push_back(part);
+    yaml_node["robot_info"]["morphology"][part]["is_actionable"] = robot_info_.is_actionable[part];
     yaml_node["robot_info"]["morphology"][part]["joint_names"] = YAML::Node(YAML::NodeType::Sequence);
     for (const auto & joint_name : robot_info_.joint_names[part]) {
       yaml_node["robot_info"]["morphology"][part]["joint_names"].push_back(joint_name);
@@ -425,11 +406,25 @@ void RosbagCollection::createRosbagYaml()
     yaml_node["robot_info"]["sensors"][sensor_type]["models"] = YAML::Node(YAML::NodeType::Sequence);
     for (const auto & sensor_name : robot_info_.sensor_names[sensor_type]) {
       yaml_node["robot_info"]["sensors"][sensor_type]["names"].push_back(sensor_name);
+      
+      // Inject inferred dimensions from the sniffed camera_info topics if present
+      // Try to find the matching camera_info topic name. e.g "head_camera" -> "/head_camera/.../camera_info"
+      for (const auto& pair : camera_dimensions_) {
+        if (pair.first.find(sensor_name) != std::string::npos) {
+          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["width"] = pair.second.first;
+          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["height"] = pair.second.second;
+          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["topic"] = pair.first;
+          break; // Use the first match
+        }
+      }
     }
     for (const auto & sensor_model : robot_info_.sensor_models[sensor_type]) {
       yaml_node["robot_info"]["sensors"][sensor_type]["models"].push_back(sensor_model);
     }
   }
+
+  yaml_node["convert_info"]["fps"] = rosbag_info_.fps;
+  yaml_node["convert_info"]["sync_threshold"] = rosbag_info_.sync_threshold;
 
   // (2) Add user info
   yaml_node["user_info"]["name"] = user_info_.name;
@@ -505,6 +500,64 @@ void RosbagCollection::updateRosbagYaml()
   return;
 }
 
+void RosbagCollection::updateSubtaskYaml(const std::string& subtask_name)
+{
+  RCLCPP_INFO(this->get_logger(), "Updating subtask in rosbag YAML file: %s", subtask_name.c_str());
+
+  if (!is_recording_) {
+    RCLCPP_WARN(this->get_logger(), "Cannot add subtask annotation while not recording.");
+    return;
+  }
+
+  // Load the existing YAML file
+  std::string yaml_file_path = rosbag_info_.recording_dir + "/recorded_bags_meta.yaml";
+  YAML::Node yaml_node;
+  try {
+    if (std::filesystem::exists(yaml_file_path)) {
+      yaml_node = YAML::LoadFile(yaml_file_path);
+    } else {
+      RCLCPP_WARN(this->get_logger(), "YAML file not found, creating a new node");
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to load YAML file: %s", e.what());
+    return;
+  }
+
+  std::string current_task_label = current_task_name_;
+  std::replace(current_task_label.begin(), current_task_label.end(), ' ', '_');
+  std::transform(current_task_label.begin(), current_task_label.end(), current_task_label.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+                 
+  // Extract time from ROS time
+  double current_time_sec = this->now().seconds();
+
+  if (yaml_node["recorded_bags"][current_task_label].IsDefined()) {
+    if (!yaml_node["recorded_bags"][current_task_label]["episodes"].IsDefined()) {
+       yaml_node["recorded_bags"][current_task_label]["episodes"] = YAML::Node(YAML::NodeType::Map);
+    }
+    
+    // Check if the current bag entry exists
+    if (!yaml_node["recorded_bags"][current_task_label]["episodes"][current_bag_name_].IsDefined()) {
+       yaml_node["recorded_bags"][current_task_label]["episodes"][current_bag_name_] = YAML::Node(YAML::NodeType::Map);
+       yaml_node["recorded_bags"][current_task_label]["episodes"][current_bag_name_]["subtasks"] = YAML::Node(YAML::NodeType::Sequence);
+    }
+    
+    YAML::Node subtask_node;
+    subtask_node["name"] = subtask_name;
+    subtask_node["timestamp"] = current_time_sec;
+    yaml_node["recorded_bags"][current_task_label]["episodes"][current_bag_name_]["subtasks"].push_back(subtask_node);
+  }
+
+  // Save the updated YAML node to the file
+  try {
+    std::ofstream yaml_file(yaml_file_path);
+    yaml_file << yaml_node;
+    yaml_file.close();
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to update subtask YAML file: %s", e.what());
+  }
+}
+
 rclcpp_action::GoalResponse RosbagCollection::handleGoal(
   const rclcpp_action::GoalUUID & uuid,
   std::shared_ptr<const sobits_interfaces::action::VlaRecordState::Goal> goal)
@@ -546,16 +599,57 @@ void RosbagCollection::execute(
   }
 
   if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::RECORD) {
-    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
-      RCLCPP_WARN(this->get_logger(), "Cannot start recording while already in state: %d", current_state_);
+    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED && current_state_ != sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
+      RCLCPP_WARN(this->get_logger(), "Cannot start/resume recording while already in state: %d", current_state_);
       result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
       goal_handle->abort(result);
       return;
     }
-    createRosbag();
-    result->status = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
-    goal_handle->succeed(result);
-    RCLCPP_INFO(this->get_logger(), "Recording started successfully");
+    
+    if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
+      createRosbag();
+      result->status = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+      goal_handle->succeed(result);
+      RCLCPP_INFO(this->get_logger(), "Recording started successfully");
+    } else if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
+      if (recorder_node_) {
+        recorder_node_->resume();
+        current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+        result->status = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+        goal_handle->succeed(result);
+        RCLCPP_INFO(this->get_logger(), "Recording resumed successfully");
+      }
+    }
+  } else if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::PAUSE) {
+    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
+      RCLCPP_WARN(this->get_logger(), "Cannot pause while not recording");
+      result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+      goal_handle->abort(result);
+      return;
+    }
+    
+    if (recorder_node_) {
+      recorder_node_->pause();
+      current_state_ = sobits_interfaces::action::VlaRecordState_Result::PAUSED;
+      result->status = sobits_interfaces::action::VlaRecordState_Result::PAUSED;
+      goal_handle->succeed(result);
+      RCLCPP_INFO(this->get_logger(), "Recording paused successfully");
+    }
+  } else if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::RESUME) {
+    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
+      RCLCPP_WARN(this->get_logger(), "Cannot resume while not paused");
+      result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+      goal_handle->abort(result);
+      return;
+    }
+    
+    if (recorder_node_) {
+      recorder_node_->resume();
+      current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+      result->status = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+      goal_handle->succeed(result);
+      RCLCPP_INFO(this->get_logger(), "Recording resumed successfully");
+    }
   } else if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::SAVE) {
     if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
       RCLCPP_WARN(this->get_logger(), "Cannot save recording while not in RECORDING or PAUSED state");
@@ -634,6 +728,37 @@ void RosbagCollection::taskUpdateCallback(
   RCLCPP_INFO(this->get_logger(), "Task name updated successfully to '%s'", current_task_name_.c_str());
   response->success = true;
   response->message = "Task name updated successfully and rosbag YAML file updated";
+}
+
+void RosbagCollection::subtaskUpdateCallback(
+  const std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Request> request,
+  std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Response> response)
+{
+  RCLCPP_INFO(this->get_logger(), "Received subtask update request: %s", request->label.c_str());
+  
+  if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
+    RCLCPP_WARN(this->get_logger(), "Cannot update subtask while not recording.");
+    response->success = false;
+    response->message = "Cannot update subtask while not recording.";
+    return;
+  }
+
+  current_subtask_name_ = request->label;
+  updateSubtaskYaml(current_subtask_name_);
+
+  RCLCPP_INFO(this->get_logger(), "Subtask name updated successfully to '%s'", current_subtask_name_.c_str());
+  response->success = true;
+  response->message = "Subtask name updated successfully and recorded in subtask YAML file";
+}
+
+void RosbagCollection::cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg, const std::string topic_name)
+{
+  if (camera_dimensions_.find(topic_name) == camera_dimensions_.end()) {
+    camera_dimensions_[topic_name] = {msg->width, msg->height};
+    RCLCPP_INFO(this->get_logger(), "Captured dimensions for %s: %dx%d", topic_name.c_str(), msg->width, msg->height);
+    // Unsubscribe after getting the info once
+    camera_info_subs_.erase(topic_name);
+  }
 }
 
 } // namespace sobits_vla

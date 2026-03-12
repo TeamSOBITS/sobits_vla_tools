@@ -8,10 +8,17 @@
 
 #include <filesystem> 
 #include <fstream>
-#include <wait.h>
 #include <yaml-cpp/yaml.h>
 
-// #include <csignal>      // For kill
+#include "rosbag2_transport/recorder.hpp"
+#include "rosbag2_storage/storage_options.hpp"
+#include "rosbag2_transport/record_options.hpp"
+
+#include <sensor_msgs/msg/camera_info.hpp>
+
+#include <thread>
+#include <mutex>
+#include <atomic>
 // #include <sys/wait.h>   // For waitpid, WIFEXITED, WIFSIGNALED
 // #include <unistd.h>     // For fork, execl, _exit
 // #include <iostream>     // For std::cerr
@@ -33,10 +40,19 @@ public:
   std::string version;
   std::string morphology;
   std::vector<std::string> parts;
+  std::map<std::string, bool> is_actionable;
   std::map<std::string, std::vector<std::string>> joint_names;
   std::vector<std::string> sensor_types;
   std::map<std::string, std::vector<std::string>> sensor_names;
   std::map<std::string, std::vector<std::string>> sensor_models;
+  
+  // Locomotion specific variables
+  bool has_mobile_base;
+  bool has_cmd_vel_y;
+  
+  // Core Topics
+  std::string joint_states_topic;
+  std::string cmd_vel_topic;
 };
 
 class UserInfo
@@ -54,6 +70,8 @@ public:
   std::vector<std::string> topics_to_record;
   std::vector<std::string> services_to_record;
   std::vector<std::string> actions_to_record;
+  int fps;
+  double sync_threshold;
   // uint8_t recording_duration;
   std::string conversion_format;
   bool compress_output;
@@ -75,11 +93,18 @@ public:
 
   void createRosbagYaml();
   void updateRosbagYaml();
+  void updateSubtaskYaml(const std::string& subtask_name);
 
 private:
   void taskUpdateCallback(
     const std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Request> request,
     std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Response> response);
+  
+  void subtaskUpdateCallback(
+    const std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Request> request,
+    std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Response> response);
+
+  void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg, const std::string topic_name);
 
   rclcpp_action::GoalResponse handleGoal(
     const rclcpp_action::GoalUUID & uuid,
@@ -93,9 +118,15 @@ private:
 
   rclcpp_action::Server<sobits_interfaces::action::VlaRecordState>::SharedPtr record_action_server_;
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr task_update_service_;
+  rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr subtask_update_service_;
 
+  std::shared_ptr<rosbag2_transport::Recorder> recorder_node_;
+  std::thread recorder_thread_;
+  std::mutex recorder_mutex_;
+  std::atomic<bool> is_recording_{false};
 
-  pid_t bag_pid_;
+  std::map<std::string, rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr> camera_info_subs_;
+  std::map<std::string, std::pair<uint32_t, uint32_t>> camera_dimensions_; // topic -> {width, height}
 
   // Parameters
   RobotInfo robot_info_;
@@ -113,6 +144,8 @@ private:
   std::string previous_task_path_;
   uint8_t current_task_id_;
   uint8_t previous_task_id_;
+  
+  std::string current_subtask_name_;
 
   std::string current_bag_name_;
   std::string previous_bag_name_;
