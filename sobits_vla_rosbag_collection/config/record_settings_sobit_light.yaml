@@ -10,16 +10,25 @@
       morphology:
         # Type of the robot (e.g., "mobile_manipulator", "humanoid", "quadruped", etc.)
         type: "mobile_manipulator"
+        # Does the robot possess a mobile base?
+        has_mobile_base: true
+        # Does the robot use Y-axis velocity (e.g. omni/mecanum wheels) or just X-axis (diff drive)?
+        has_cmd_vel_y: false
+        # Essential control domains
+        joint_states_topic: "/sobit_light/joint_states"
+        cmd_vel_topic: "/sobit_light/manual_control/cmd_vel"
         parts:
           - head
           - manipulator
           - end_effector
           - mobile_base
         head:
+          is_actionable: true
           joint_names:
             - "head_yaw_joint"
             - "head_pitch_joint"
         manipulator:
+          is_actionable: true
           joint_names:
             - "arm_shoulder_roll_joint"
             - "arm_shoulder_pitch_joint"
@@ -29,10 +38,12 @@
             - "arm_wrist_pitch_joint"
             - "arm_wrist_roll_joint"
         end_effector:
+          is_actionable: true
           joint_names:
             - "hand_joint"
             - "hand_sub_joint"
         mobile_base:
+          is_actionable: false
           joint_names:
             - "base_l_drive_wheel_joint"
             - "base_r_drive_wheel_jointt"
@@ -63,8 +74,13 @@
 
     # ROS bag recording configuration
     rosbag_config:
-      # Path to the directory where the recorded bag files will be saved
-      record_directory: "/home/sobits/colcon_ws/src/sobits_vla_tools/sobits_vla_rosbag_collection/rosbags"
+      # Path to the directory where the recorded bag files will be saved.
+      # If left empty (""), the launcher will dynamically resolve it to the `rosbags` folder inside `sobits_vla_rosbag_collection`.
+      record_directory: ""
+      # The frame rate mapping for the LeRobot datasets
+      fps: 10
+      # The temporal discrepancy acceptable for synchronizing joints and images (in seconds)
+      sync_threshold: 0.1
       # List of topics to record (cameras, joint_states, tf, sensors, etc.)
       topics_to_record:
         - /sobit_light/back_camera/camera_info
