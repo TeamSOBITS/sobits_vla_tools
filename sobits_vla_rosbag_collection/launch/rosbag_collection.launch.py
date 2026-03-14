@@ -18,12 +18,19 @@ def generate_launch_description_impl(context, *args, **kwargs):
         "record_settings_" + robot_name + ".yaml",
     )
 
+    gamepad_config = os.path.join(
+        pkg_share,
+        "config",
+        "gamepad_settings.yaml",
+    )
+
     record_directory = LaunchConfiguration('record_directory').perform(context)
     if not record_directory:
         record_directory = os.path.join(pkg_share, 'rosbags')
 
     parameters = [
         rosbag_config,
+        gamepad_config,
         {'rosbag_config.record_directory': record_directory}
     ]
 
@@ -36,7 +43,7 @@ def generate_launch_description_impl(context, *args, **kwargs):
             ComposableNode(
                 package='sobits_vla_rosbag_collection',
                 plugin='sobits_vla::RosbagCollection',
-                name='rosbag_collection_node',
+                name='vla_rosbag_collection',
                 namespace=robot_name,
                 parameters=parameters,
             ),

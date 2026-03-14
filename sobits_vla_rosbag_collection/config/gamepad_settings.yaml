@@ -1,0 +1,17 @@
+/**:
+  ros__parameters:
+    # Control settings for the gamepad
+    gamepad_config:
+      # Gamepad type (e.g., "dualshock4", "keyboard")
+      name: "dualshock4"
+      # Mapping of gamepad buttons to actions
+      dualshock4:
+        button_mapping:
+          record: 7 # Top
+          save: 6 # Left
+          delete: 6 # Right
+      keyboard:
+        button_mapping:
+          record: "r"
+          save: "s"
+          delete: "d"
