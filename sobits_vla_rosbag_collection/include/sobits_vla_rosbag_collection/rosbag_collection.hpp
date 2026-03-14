@@ -76,6 +76,7 @@ public:
   bool compress_output;
   std::string compression_format;
   std::string compression_mode;
+  std::string rmw_serialization_format;
   std::string storage_config_file;
   std::string rosbag_options;
 };

@@ -142,5 +142,7 @@
       conversion_format: "mcap"
       # Specify the compression mode ("none", "file", "message")
       compression_mode: "none"
-      # If compression is enabled, specify the compression format ("zstd" is the only supported compression format)
+      # If compression is enabled, specify the compression format ("zstd" or "lz4")
       compression_format: "zstd"
+      # Specify the RMW serialization format ("cdr" or "rmw_fastrtps_cpp")
+      rmw_serialization_format: "cdr"

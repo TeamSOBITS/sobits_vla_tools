@@ -9,9 +9,6 @@
 
 #include "rosbag2_cpp/writer.hpp"
 
-// Assuming sobits_interfaces is available and properly defined
-// and that YAML::Node and related are from the yaml-cpp library.
-
 namespace sobits_vla
 {
 
@@ -101,6 +98,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("rosbag_config.conversion_format", "mcap");
   this->declare_parameter<std::string>("rosbag_config.compression_format", "zstd");
   this->declare_parameter<std::string>("rosbag_config.compression_mode", "none");
+  this->declare_parameter<std::string>("rosbag_config.rmw_serialization_format", "cdr");
   rosbag_info_.recording_dir      = this->get_parameter("rosbag_config.record_directory").as_string();
   rosbag_info_.fps                = this->get_parameter("rosbag_config.fps").as_int();
   rosbag_info_.sync_threshold     = this->get_parameter("rosbag_config.sync_threshold").as_double();
@@ -110,6 +108,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   rosbag_info_.conversion_format  = this->get_parameter("rosbag_config.conversion_format").as_string();
   rosbag_info_.compression_format = this->get_parameter("rosbag_config.compression_format").as_string();
   rosbag_info_.compression_mode   = this->get_parameter("rosbag_config.compression_mode").as_string();
+  rosbag_info_.rmw_serialization_format = this->get_parameter("rosbag_config.rmw_serialization_format").as_string();
 
   // (4) Gamepad parameters
   this->declare_parameter<std::string>("gamepad_config.name", "default_gamepad");
@@ -267,6 +266,7 @@ void RosbagCollection::createRosbag()
     record_options.topics = rosbag_info_.topics_to_record;
   }
   record_options.use_sim_time = this->get_parameter("use_sim_time").as_bool();
+  record_options.rmw_serialization_format = rosbag_info_.rmw_serialization_format;
   
   if (!rosbag_info_.compression_mode.empty()) {
     record_options.compression_mode = rosbag_info_.compression_mode;
@@ -593,6 +593,13 @@ void RosbagCollection::execute(
   // this will always warn. Perhaps it should be checking if a task has been set at all.
   if (current_task_name_ == previous_task_name_){
     RCLCPP_WARN(this->get_logger(), "Please update the task name before starting a new recording");
+    result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+    goal_handle->abort(result);
+    return;
+  }
+
+  if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::ERROR) {
+    RCLCPP_WARN(this->get_logger(), "Cannot start/resume recording while in ERROR state");
     result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
     goal_handle->abort(result);
     return;
