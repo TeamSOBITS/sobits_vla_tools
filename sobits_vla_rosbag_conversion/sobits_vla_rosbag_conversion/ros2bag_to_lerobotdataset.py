@@ -43,6 +43,21 @@ class RosbagConversionNode(Node):
         self.all_subtasks_list = []
         self.has_subtasks = False
 
+        # Create a one-shot timer to start conversion after the node is ready
+        self.timer = self.create_timer(1.0, self.timer_callback)
+
+    def timer_callback(self):
+        """One-shot timer callback to trigger the conversion."""
+        self.timer.cancel()
+        try:
+            self.convert()
+        except Exception as e:
+            self.get_logger().error(f"Conversion failed: {e}")
+        finally:
+            self.get_logger().info("Shutting down node...")
+            # Trigger shutdown
+            raise SystemExit
+
     def _extract_episode_data(self, bag_folder, subtasks_map):
         """
         Iterate over the bag and return a list of frames.
@@ -337,12 +352,13 @@ def main(args=None):
     rclpy.init(args=args)
     node = RosbagConversionNode()
     
-    # Run conversion logic once
-    node.convert()
-    
-    # Do not spin, just finish
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == "__main__":
     main()
