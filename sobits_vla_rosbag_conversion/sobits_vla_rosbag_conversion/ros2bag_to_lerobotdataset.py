@@ -18,122 +18,6 @@ from rosbags.highlevel import AnyReader
 from rosbags.image import message_to_cvimage
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-def extract_episode_data(bag_folder, camera_topics, primary_camera, joint_states_topic, cmd_vel_topic, sync_thres, has_mobile_base, has_cmd_vel_y, action_features, subtasks_map, all_subtasks_list, logger):
-    """
-    Iterate over the bag and return a list of frames.
-    """
-    frames = []
-    latest_images = {}
-    latest_joint_state = None
-    latest_joint_time = 0.0
-    
-    if has_cmd_vel_y:
-        latest_cmd_vel = (0.0, 0.0, 0.0)
-    else:
-        latest_cmd_vel = (0.0, 0.0)
-    
-    topic_to_cam = {v: k for k, v in camera_topics.items()}
-    primary_topic = camera_topics.get(primary_camera)
-    
-    with AnyReader([Path(bag_folder)]) as reader:
-        for connection, timestamp, rawdata in reader.messages():
-            topic = connection.topic
-            
-            if topic == joint_states_topic:
-                msg = reader.deserialize(rawdata, connection.msgtype)
-                joint_pos = dict(zip(msg.name, msg.position))
-                t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-                latest_joint_state = [
-                    joint_pos.get(feat, 0.0) for feat in action_features
-                ]
-                latest_joint_time = t_sec
-                
-            if topic == cmd_vel_topic and has_mobile_base:
-                msg = reader.deserialize(rawdata, connection.msgtype)
-                t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') else t_bag
-                
-                if has_cmd_vel_y:
-                    latest_cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z]
-                else:
-                    latest_cmd_vel = [msg.linear.x, msg.angular.z]
-                    
-                latest_cmd_vel_time = t_sec
-                
-            elif topic in topic_to_cam:
-                cam_name = topic_to_cam[topic]
-                msg = reader.deserialize(rawdata, connection.msgtype)
-                img = message_to_cvimage(msg)
-                
-                # Check format and convert to correct RGB if necessary
-                if len(img.shape) == 3 and img.shape[2] == 3:
-                     # Usually message_to_cvimage returns BGR natively from rosbags
-                     if msg.encoding in ['bgr8', 'bgra8']:
-                         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                
-                t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-                images[cam_name] = img
-                image_times[cam_name] = t_sec
-                
-                # Snapshot on primary camera
-                if cam_name == primary_camera and None not in images.values() and latest_joint_state is not None:
-                # Proceed only if cmd_vel is satisfied (either not needed, or available)
-                    if not has_mobile_base or latest_cmd_vel is not None:
-                        # Sync checks
-                        img_times = list(image_times.values())
-                        max_camera_diff = max(img_times) - min(img_times)
-                        
-                        # For joint state sync, compare against the primary camera time
-                        joint_diff = abs(image_times[primary_camera] - latest_joint_time)
-                        
-                        cmd_vel_diff = 0.0
-                        if has_mobile_base:
-                            cmd_vel_diff = abs(image_times[primary_camera] - latest_cmd_vel_time)
-                            
-                        if max_camera_diff > sync_thres or joint_diff > sync_thres or cmd_vel_diff > sync_thres:
-                            logger.warn(f"Sync threshold exceeded at {t_bag:.2f}s: max_cam_diff={max_camera_diff:.3f}s, joint_diff={joint_diff:.3f}s, cmd_vel_diff={cmd_vel_diff:.3f}s")
-                            
-                        action = latest_joint_state + (latest_cmd_vel if has_mobile_base else [])
-                        state = latest_joint_state + (latest_cmd_vel if has_mobile_base else [])
-                        
-                        frame = {
-                            "action": torch.tensor(action, dtype=torch.float32),
-                            "observation.state": torch.tensor(state, dtype=torch.float32), 
-                        }
-                        
-                        # Ensure all requested cameras are present
-                        missing_camera = False
-                        for c_name in camera_topics.keys():
-                            if images[c_name] is None: # This check should be redundant due to `None not in images.values()`
-                                missing_camera = True
-                                break
-                            img_t = torch.from_numpy(images[c_name]).permute(2, 0, 1).contiguous()
-                            frame[c_name] = img_t
-                            
-                        if not missing_camera:
-                            if all_subtasks_list:
-                                current_subtask_idx = 0 # Default to index 0 ("No Subtask")
-                                if subtasks_map:
-                                    for st_key, st_info in subtasks_map.items():
-                                        start_time = st_info.get("start_timestamp", -1.0)
-                                        end_time = st_info.get("end_timestamp", float('inf'))
-                                        
-                                        if end_time == 0.0:
-                                            end_time = float('inf')
-                                            
-                                        if start_time <= t_sec <= end_time:
-                                            label = st_info.get("label")
-                                            if label in all_subtasks_list:
-                                                current_subtask_idx = all_subtasks_list.index(label)
-                                            break
-                                        
-                                frame["subtask_index"] = torch.tensor([current_subtask_idx], dtype=torch.int64)
-
-                            frames.append((t_sec, frame))
-                            # Reset images to None after snapshot to wait for new set
-                            images = {cam_name: None for cam_name in camera_topics.keys()}
-
-    return frames
-
 class RosbagConversionNode(Node):
     def __init__(self):
         super().__init__('rosbag_conversion_node')
@@ -146,6 +30,139 @@ class RosbagConversionNode(Node):
         self.rosbag_directory = self.get_parameter('rosbag_directory').get_parameter_value().string_value
         self.recorded_bags_meta_file = self.get_parameter('recorded_bags_meta_file').get_parameter_value().string_value
         self.dataset_name = self.get_parameter('dataset_name').get_parameter_value().string_value
+
+        # Configuration attributes
+        self.camera_topics = {}
+        self.primary_camera = ""
+        self.joint_states_topic = "/joint_states"
+        self.cmd_vel_topic = "/cmd_vel"
+        self.sync_threshold = 0.1
+        self.has_mobile_base = True
+        self.has_cmd_vel_y = False
+        self.action_features = []
+        self.all_subtasks_list = []
+        self.has_subtasks = False
+
+    def _extract_episode_data(self, bag_folder, subtasks_map):
+        """
+        Iterate over the bag and return a list of frames.
+        """
+        frames = []
+        images = {cam_name: None for cam_name in self.camera_topics.keys()}
+        image_times = {cam_name: 0.0 for cam_name in self.camera_topics.keys()}
+        latest_joint_state = None
+        latest_joint_time = 0.0
+        
+        latest_cmd_vel = None
+        latest_cmd_vel_time = 0.0
+        
+        if self.has_mobile_base:
+            if self.has_cmd_vel_y:
+                latest_cmd_vel = [0.0, 0.0, 0.0]
+            else:
+                latest_cmd_vel = [0.0, 0.0]
+        
+        topic_to_cam = {v: k for k, v in self.camera_topics.items()}
+        
+        with AnyReader([Path(bag_folder)]) as reader:
+            for connection, timestamp, rawdata in reader.messages():
+                topic = connection.topic
+                t_bag = timestamp * 1e-9
+                
+                if topic == self.joint_states_topic:
+                    msg = reader.deserialize(rawdata, connection.msgtype)
+                    joint_pos = dict(zip(msg.name, msg.position))
+                    t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+                    latest_joint_state = [
+                        joint_pos.get(feat, 0.0) for feat in self.action_features
+                    ]
+                    latest_joint_time = t_sec
+                    
+                if topic == self.cmd_vel_topic and self.has_mobile_base:
+                    msg = reader.deserialize(rawdata, connection.msgtype)
+                    t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') else t_bag
+                    
+                    if self.has_cmd_vel_y:
+                        latest_cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z]
+                    else:
+                        latest_cmd_vel = [msg.linear.x, msg.angular.z]
+                        
+                    latest_cmd_vel_time = t_sec
+                    
+                elif topic in topic_to_cam:
+                    cam_name = topic_to_cam[topic]
+                    msg = reader.deserialize(rawdata, connection.msgtype)
+                    img = message_to_cvimage(msg)
+                    
+                    # Check format and convert to correct RGB if necessary
+                    if len(img.shape) == 3 and img.shape[2] == 3:
+                         # Usually message_to_cvimage returns BGR natively from rosbags
+                         if msg.encoding in ['bgr8', 'bgra8']:
+                             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    
+                    t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+                    images[cam_name] = img
+                    image_times[cam_name] = t_sec
+                    
+                    # Snapshot on primary camera
+                    if cam_name == self.primary_camera and None not in images.values() and latest_joint_state is not None:
+                        # Proceed only if cmd_vel is satisfied (either not needed, or available)
+                        if not self.has_mobile_base or latest_cmd_vel is not None:
+                            # Sync checks
+                            img_times = list(image_times.values())
+                            max_camera_diff = max(img_times) - min(img_times)
+                            
+                            # For joint state sync, compare against the primary camera time
+                            joint_diff = abs(image_times[self.primary_camera] - latest_joint_time)
+                            
+                            cmd_vel_diff = 0.0
+                            if self.has_mobile_base:
+                                cmd_vel_diff = abs(image_times[self.primary_camera] - latest_cmd_vel_time)
+                                
+                            if max_camera_diff > self.sync_threshold or joint_diff > self.sync_threshold or cmd_vel_diff > self.sync_threshold:
+                                self.get_logger().warn(f"Sync threshold exceeded: max_cam_diff={max_camera_diff:.3f}s, joint_diff={joint_diff:.3f}s, cmd_vel_diff={cmd_vel_diff:.3f}s")
+                                
+                            action = latest_joint_state + (latest_cmd_vel if self.has_mobile_base else [])
+                            state = latest_joint_state + (latest_cmd_vel if self.has_mobile_base else [])
+                            
+                            frame = {
+                                "action": torch.tensor(action, dtype=torch.float32),
+                                "observation.state": torch.tensor(state, dtype=torch.float32), 
+                            }
+                            
+                            # Ensure all requested cameras are present
+                            missing_camera = False
+                            for c_name in self.camera_topics.keys():
+                                if images[c_name] is None:
+                                    missing_camera = True
+                                    break
+                                img_t = torch.from_numpy(images[c_name]).permute(2, 0, 1).contiguous()
+                                frame[c_name] = img_t
+                                
+                            if not missing_camera:
+                                if self.all_subtasks_list:
+                                    current_subtask_idx = 0 # Default to index 0 ("No Subtask")
+                                    if subtasks_map:
+                                        for st_key, st_info in subtasks_map.items():
+                                            start_time = st_info.get("start_timestamp", -1.0)
+                                            end_time = st_info.get("end_timestamp", float('inf'))
+                                            
+                                            if end_time == 0.0:
+                                                end_time = float('inf')
+                                                
+                                            if start_time <= t_sec <= end_time:
+                                                label = st_info.get("label")
+                                                if label in self.all_subtasks_list:
+                                                    current_subtask_idx = self.all_subtasks_list.index(label)
+                                                break
+                                            
+                                    frame["subtask_index"] = torch.tensor([current_subtask_idx], dtype=torch.int64)
+
+                                frames.append((t_sec, frame))
+                                # Reset images to None after snapshot to wait for new set
+                                images = {cam_name: None for cam_name in self.camera_topics.keys()}
+
+        return frames
         
     def convert(self):
         self.get_logger().info("Starting dataset conversion...")
@@ -163,15 +180,15 @@ class RosbagConversionNode(Node):
         
         convert_info = meta.get("convert_info", {})
         fps = convert_info.get("fps", 10)
-        sync_threshold = convert_info.get("sync_threshold", 0.1)
+        self.sync_threshold = convert_info.get("sync_threshold", 0.1)
         
         robot_info = meta.get("robot_info", {})
         try:
-            has_mobile_base = robot_info.get("morphology", {}).get("has_mobile_base", True)
-            has_cmd_vel_y = robot_info.get("morphology", {}).get("has_cmd_vel_y", False)
+            self.has_mobile_base = robot_info.get("morphology", {}).get("has_mobile_base", True)
+            self.has_cmd_vel_y = robot_info.get("morphology", {}).get("has_cmd_vel_y", False)
             camera_data = robot_info.get("sensors", {}).get("rgbd", {}).get("properties", {})
-            joint_states_topic = robot_info.get("morphology", {}).get("joint_states_topic", "/joint_states")
-            cmd_vel_topic = robot_info.get("morphology", {}).get("cmd_vel_topic", "/cmd_vel")
+            self.joint_states_topic = robot_info.get("morphology", {}).get("joint_states_topic", "/joint_states")
+            self.cmd_vel_topic = robot_info.get("morphology", {}).get("cmd_vel_topic", "/cmd_vel")
         except KeyError as e:
             self.get_logger().error(f"Missing required key in recorded_bags_meta: {e}")
             return
@@ -181,30 +198,30 @@ class RosbagConversionNode(Node):
             return
 
         # Extract dynamic action features
-        action_features = []
+        self.action_features = []
         try:
             morphology = robot_info.get("morphology", {})
             parts = morphology.get("parts", [])
             for part in parts:
                 part_info = morphology.get(part, {})
                 if part_info.get("is_actionable", False):
-                    action_features.extend(part_info.get("joint_names", []))
+                    self.action_features.extend(part_info.get("joint_names", []))
                     
-            if not action_features:
+            if not self.action_features:
                 self.get_logger().warn("No actionable joints found in morphology. The action space will only consist of cmd_vel if activated.")
         except Exception as e:
             self.get_logger().error(f"Error extracting action features from morphology: {e}")
             return
 
-        camera_topics = {}
+        self.camera_topics = {}
         for cam, vals in camera_data.items():
-            camera_topics[cam] = vals["topic"]
+            self.camera_topics[cam] = vals["topic"]
             
-        primary_camera = list(camera_topics.keys())[0]
+        self.primary_camera = list(self.camera_topics.keys())[0]
 
         cmd_vel_keys = []
-        if has_mobile_base:
-            cmd_vel_keys = ["cmd_vel_x", "cmd_vel_y", "cmd_vel_theta"] if has_cmd_vel_y else ["cmd_vel_x", "cmd_vel_theta"]
+        if self.has_mobile_base:
+            cmd_vel_keys = ["cmd_vel_x", "cmd_vel_y", "cmd_vel_theta"] if self.has_cmd_vel_y else ["cmd_vel_x", "cmd_vel_theta"]
         
         # Extract all unique subtasks from the metadata
         all_subtasks_set = set()
@@ -218,26 +235,26 @@ class RosbagConversionNode(Node):
                     if "label" in st_info:
                         all_subtasks_set.add(st_info["label"])
                         
-        all_subtasks_list = sorted(list(all_subtasks_set))
-        if all_subtasks_list:
-            all_subtasks_list.insert(0, "No Subtask")
+        self.all_subtasks_list = sorted(list(all_subtasks_set))
+        if self.all_subtasks_list:
+            self.all_subtasks_list.insert(0, "No Subtask")
             
-        has_subtasks = len(all_subtasks_list) > 0
+        self.has_subtasks = len(self.all_subtasks_list) > 0
 
         features = {
             "action": {
                 "dtype": "float32",
-                "shape": (len(action_features) + len(cmd_vel_keys),),
-                "names": action_features + cmd_vel_keys
+                "shape": (len(self.action_features) + len(cmd_vel_keys),),
+                "names": self.action_features + cmd_vel_keys
             },
             "observation.state": {
                 "dtype": "float32",
-                "shape": (len(action_features) + len(cmd_vel_keys),),
-                "names": action_features + cmd_vel_keys
+                "shape": (len(self.action_features) + len(cmd_vel_keys),),
+                "names": self.action_features + cmd_vel_keys
             }
         }
         
-        if has_subtasks:
+        if self.has_subtasks:
             features["subtask_index"] = {
                 "dtype": "int64",
                 "shape": (1,),
@@ -259,9 +276,9 @@ class RosbagConversionNode(Node):
             streaming_encoding=True,
         )
 
-        if has_subtasks:
+        if self.has_subtasks:
             import pandas as pd
-            dataset.meta.subtasks = pd.DataFrame({"subtask": all_subtasks_list})
+            dataset.meta.subtasks = pd.DataFrame({"subtask": self.all_subtasks_list})
 
         if hasattr(dataset, "info"):
             dataset.info["robot_info"] = robot_info
@@ -298,19 +315,9 @@ class RosbagConversionNode(Node):
                 ep_meta = episodes_dict.get(ep, {})
                 subtasks = ep_meta.get("subtasks", {})
                 
-                frames = extract_episode_data(
+                frames = self._extract_episode_data(
                     os.path.dirname(bagfile), 
-                    camera_topics, 
-                    primary_camera, 
-                    joint_states_topic, 
-                    cmd_vel_topic,
-                    sync_thres=sync_threshold,
-                    has_mobile_base=has_mobile_base,
-                    has_cmd_vel_y=has_cmd_vel_y,
-                    action_features=action_features,
-                    subtasks_map=subtasks,
-                    all_subtasks_list=all_subtasks_list if has_subtasks else [],
-                    logger=self.get_logger()
+                    subtasks_map=subtasks
                 )
                 
                 if not frames:
