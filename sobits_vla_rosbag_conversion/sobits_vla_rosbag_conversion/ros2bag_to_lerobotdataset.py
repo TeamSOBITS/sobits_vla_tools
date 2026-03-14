@@ -18,7 +18,7 @@ from rosbags.highlevel import AnyReader
 from rosbags.image import message_to_cvimage
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-def extract_episode_data(bag_folder, camera_topics, primary_camera, joint_states_topic, cmd_vel_topic, sync_thres, has_mobile_base, has_cmd_vel_y, action_features, logger):
+def extract_episode_data(bag_folder, camera_topics, primary_camera, joint_states_topic, cmd_vel_topic, sync_thres, has_mobile_base, has_cmd_vel_y, action_features, subtasks_map, all_subtasks_list, logger):
     """
     Iterate over the bag and return a list of frames.
     """
@@ -110,6 +110,24 @@ def extract_episode_data(bag_folder, camera_topics, primary_camera, joint_states
                             frame[c_name] = img_t
                             
                         if not missing_camera:
+                            if all_subtasks_list:
+                                current_subtask_idx = 0 # Default to index 0 ("No Subtask")
+                                if subtasks_map:
+                                    for st_key, st_info in subtasks_map.items():
+                                        start_time = st_info.get("start_timestamp", -1.0)
+                                        end_time = st_info.get("end_timestamp", float('inf'))
+                                        
+                                        if end_time == 0.0:
+                                            end_time = float('inf')
+                                            
+                                        if start_time <= t_sec <= end_time:
+                                            label = st_info.get("label")
+                                            if label in all_subtasks_list:
+                                                current_subtask_idx = all_subtasks_list.index(label)
+                                            break
+                                        
+                                frame["subtask_index"] = torch.tensor([current_subtask_idx], dtype=torch.int64)
+
                             frames.append((t_sec, frame))
                             # Reset images to None after snapshot to wait for new set
                             images = {cam_name: None for cam_name in camera_topics.keys()}
@@ -188,6 +206,24 @@ class RosbagConversionNode(Node):
         if has_mobile_base:
             cmd_vel_keys = ["cmd_vel_x", "cmd_vel_y", "cmd_vel_theta"] if has_cmd_vel_y else ["cmd_vel_x", "cmd_vel_theta"]
         
+        # Extract all unique subtasks from the metadata
+        all_subtasks_set = set()
+        for task_name, task_info in task_list:
+            if task_name == "tasks":
+                continue
+            episodes_dict = task_info.get("episodes", {})
+            for ep_key, ep_meta in episodes_dict.items():
+                subtasks_map = ep_meta.get("subtasks", {})
+                for st_key, st_info in subtasks_map.items():
+                    if "label" in st_info:
+                        all_subtasks_set.add(st_info["label"])
+                        
+        all_subtasks_list = sorted(list(all_subtasks_set))
+        if all_subtasks_list:
+            all_subtasks_list.insert(0, "No Subtask")
+            
+        has_subtasks = len(all_subtasks_list) > 0
+
         features = {
             "action": {
                 "dtype": "float32",
@@ -201,6 +237,13 @@ class RosbagConversionNode(Node):
             }
         }
         
+        if has_subtasks:
+            features["subtask_index"] = {
+                "dtype": "int64",
+                "shape": (1,),
+                "names": ["subtask_index"]
+            }
+            
         for cam_name, vals in camera_data.items():
             features[cam_name] = {
                 "dtype": "video",
@@ -215,6 +258,10 @@ class RosbagConversionNode(Node):
             video_backend="auto",
             streaming_encoding=True,
         )
+
+        if has_subtasks:
+            import pandas as pd
+            dataset.meta.subtasks = pd.DataFrame({"subtask": all_subtasks_list})
 
         if hasattr(dataset, "info"):
             dataset.info["robot_info"] = robot_info
@@ -248,6 +295,9 @@ class RosbagConversionNode(Node):
                 
                 self.get_logger().info(f"Processing bag: {bagfile}")
                 
+                ep_meta = episodes_dict.get(ep, {})
+                subtasks = ep_meta.get("subtasks", {})
+                
                 frames = extract_episode_data(
                     os.path.dirname(bagfile), 
                     camera_topics, 
@@ -258,16 +308,15 @@ class RosbagConversionNode(Node):
                     has_mobile_base=has_mobile_base,
                     has_cmd_vel_y=has_cmd_vel_y,
                     action_features=action_features,
+                    subtasks_map=subtasks,
+                    all_subtasks_list=all_subtasks_list if has_subtasks else [],
                     logger=self.get_logger()
                 )
                 
                 if not frames:
                     self.get_logger().warn(f"No frames extracted from {bagfile}")
                     continue
-                    
-                ep_meta = episodes_dict.get(ep, {})
-                subtasks = ep_meta.get("subtasks", [])
-                
+                                        
                 for i, (t_sec, frame) in enumerate(frames):
                     dataset.add_frame(frame)
                     
