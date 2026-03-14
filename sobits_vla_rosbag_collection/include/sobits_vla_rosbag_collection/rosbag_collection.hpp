@@ -62,6 +62,15 @@ public:
   std::string location;
 };
 
+class SubtaskInfo
+{
+public:
+  std::string key;
+  std::string label;
+  double start_timestamp;
+  double end_timestamp;
+};
+
 class RosbagInfo
 {
 public:
@@ -93,7 +102,8 @@ public:
 
   void createRosbagYaml();
   void updateRosbagYaml();
-  void updateSubtaskYaml(const std::string& subtask_name);
+  void updateEpisodeYaml();
+  void removeEpisodeFromYaml();
 
 private:
   void taskUpdateCallback(
@@ -135,24 +145,24 @@ private:
   std::string gamepad_name_;
 
   // State management
+  std::string getTimestampString();
+
   uint8_t current_state_;
   uint8_t previous_state_;
 
   std::string current_task_name_;
+  std::string current_task_dir_name_;
   std::string previous_task_name_;
   std::string current_task_path_;
   std::string previous_task_path_;
-  uint8_t current_task_id_;
-  uint8_t previous_task_id_;
   
   std::string current_subtask_name_;
+  std::vector<SubtaskInfo> current_episode_subtasks_;
 
   std::string current_bag_name_;
   std::string previous_bag_name_;
   std::string current_bag_path_;
   std::string previous_bag_path_;
-  uint8_t current_bag_id_;
-  uint8_t previous_bag_id_;
 
 };
 

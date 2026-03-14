@@ -8,6 +8,9 @@
 #include <vector>       // For std::vector
 
 #include "rosbag2_cpp/writer.hpp"
+#include <chrono>
+#include <iomanip>
+#include <sstream>
 
 namespace sobits_vla
 {
@@ -132,25 +135,25 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   current_state_      = sobits_interfaces::action::VlaRecordState_Result::STOPPED; // PAUSED, RECORDING, STOPPED, ERROR
   previous_state_     = current_state_;
 
-  current_task_id_    = 0;
-  previous_task_id_   = current_task_id_;
   current_task_name_  = "default task";
   previous_task_name_ = current_task_name_;
-  current_task_path_  = rosbag_info_.recording_dir + "/" + current_task_name_;
-  std::replace(current_task_path_.begin(), current_task_path_.end(), ' ', '_');
-  std::transform(current_task_path_.begin(), current_task_path_.end(), current_task_path_.begin(),
+  
+  current_task_dir_name_ = current_task_name_ + "_" + getTimestampString();
+  std::replace(current_task_dir_name_.begin(), current_task_dir_name_.end(), ' ', '_');
+  std::transform(current_task_dir_name_.begin(), current_task_dir_name_.end(), current_task_dir_name_.begin(),
                  [](unsigned char c) { return std::tolower(c); });
+                 
+  current_task_path_  = rosbag_info_.recording_dir + "/" + current_task_dir_name_;
   previous_task_path_ = current_task_path_;
 
-  current_bag_id_     = 0;
-  previous_bag_id_    = current_bag_id_;
-  current_bag_name_   = "episode_" + std::to_string(current_bag_id_);
+  current_bag_name_   = "episode_" + getTimestampString();
   previous_bag_name_  = current_bag_name_;
   current_bag_path_   = current_task_path_ + "/" + current_bag_name_;
   previous_bag_path_  = current_bag_path_;
 
   // (5) Internal State
   current_subtask_name_ = "";
+  current_episode_subtasks_.clear();
   
   rosbag_info_.rosbag_options = "";
   
@@ -211,6 +214,15 @@ RosbagCollection::~RosbagCollection()
   }
 }
 
+std::string RosbagCollection::getTimestampString()
+{
+  auto now = std::chrono::system_clock::now();
+  auto time_t_now = std::chrono::system_clock::to_time_t(now);
+  std::ostringstream ss;
+  ss << std::put_time(std::localtime(&time_t_now), "%Y%m%d_%H%M%S");
+  return ss.str();
+}
+
 void RosbagCollection::createRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Starting recording...");
@@ -222,17 +234,11 @@ void RosbagCollection::createRosbag()
     return;
   }
 
-  previous_bag_id_ = current_bag_id_;
-  current_bag_id_++;
-
   previous_task_path_ = current_task_path_;
-  current_task_path_ = rosbag_info_.recording_dir + "/" + current_task_name_;
-  std::replace(current_task_path_.begin(), current_task_path_.end(), ' ', '_');
-  std::transform(current_task_path_.begin(), current_task_path_.end(), current_task_path_.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
+  current_task_path_ = rosbag_info_.recording_dir + "/" + current_task_dir_name_;
 
   previous_bag_name_ = current_bag_name_;
-  current_bag_name_ = "episode_" + std::to_string(current_bag_id_);
+  current_bag_name_ = "episode_" + getTimestampString();
 
   previous_bag_path_ = current_bag_path_;
   current_bag_path_ = current_task_path_ + "/" + current_bag_name_;
@@ -249,6 +255,7 @@ void RosbagCollection::createRosbag()
 
   // Clear subtasks
   current_subtask_name_ = "";
+  current_episode_subtasks_.clear();
 
   // Set the current state to RECORDING
   previous_state_ = current_state_;
@@ -330,17 +337,12 @@ void RosbagCollection::removeRosbag()
       throw std::runtime_error("Failed to remove bag directory");
     }
   }
+  
+  // Wipe from metadata BEFORE rolling back names
+  removeEpisodeFromYaml();
 
-  previous_bag_id_ = current_bag_id_;
-  if (current_bag_id_ > 0) {
-    current_bag_id_ = current_bag_id_ - 1;
-  } else {
-    current_bag_id_ = 0;
-  }
-  previous_bag_name_ = current_bag_name_;
-  current_bag_name_ = "episode_" + std::to_string(current_bag_id_); // Adjust as needed based on new ID logic
-  previous_bag_path_ = current_bag_path_;
-  current_bag_path_ = current_task_path_ + "/" + current_bag_name_;
+  current_bag_name_ = previous_bag_name_;
+  current_bag_path_ = previous_bag_path_;
 
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
@@ -364,7 +366,6 @@ void RosbagCollection::saveRosbag()
   RCLCPP_INFO(this->get_logger(), "Stopping recorder for saving...");
   is_recording_ = false;
 
-  // The safest way is to destroy the recorder object, which guarantees the cache is flushed and bag is closed.
   recorder_node_.reset(); 
 
   if (recorder_thread_.joinable()) {
@@ -373,6 +374,9 @@ void RosbagCollection::saveRosbag()
 
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
+  
+  updateEpisodeYaml();
+
   RCLCPP_INFO(this->get_logger(), "Rosbag saved successfully");
 }
 
@@ -464,23 +468,13 @@ void RosbagCollection::updateRosbagYaml()
   }
 
   // Update the task name in the YAML file
-  std::string current_task_label = current_task_name_;
-  std::replace(current_task_label.begin(), current_task_label.end(), ' ', '_');
-  std::transform(current_task_label.begin(), current_task_label.end(), current_task_label.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
+  std::string current_task_label = current_task_dir_name_;
 
-  // If the tasks node is defined, append the current task
-  // If not, create the tasks node 
-  if (yaml_node["recorded_bags"]["tasks"].IsDefined()) {
-    yaml_node["recorded_bags"]["tasks"].push_back(current_task_label);
-  } else {
-    yaml_node["recorded_bags"]["tasks"] = YAML::Node(YAML::NodeType::Sequence);
-    yaml_node["recorded_bags"]["tasks"].push_back(current_task_label);
-  }
   // Add the current task name to the YAML file
-  yaml_node["recorded_bags"][current_task_label]["label"] = current_task_label;
-  yaml_node["recorded_bags"][current_task_label]["bag_dir"] = current_task_path_;
-  yaml_node["recorded_bags"][current_task_label]["gamepad"] = gamepad_name_;
+  yaml_node["recorded_bags"]["tasks_list"].push_back(current_task_label);
+  yaml_node["recorded_bags"]["tasks"][current_task_label]["label"] = current_task_name_;
+  yaml_node["recorded_bags"]["tasks"][current_task_label]["bag_dir"] = current_task_path_;
+  yaml_node["recorded_bags"]["tasks"][current_task_label]["gamepad"] = gamepad_name_;
 
   // Save the updated YAML node to the file
   try {
@@ -500,13 +494,13 @@ void RosbagCollection::updateRosbagYaml()
   return;
 }
 
-void RosbagCollection::updateSubtaskYaml(const std::string& subtask_name)
+void RosbagCollection::updateEpisodeYaml()
 {
-  RCLCPP_INFO(this->get_logger(), "Updating subtask in rosbag YAML file: %s", subtask_name.c_str());
+  RCLCPP_INFO(this->get_logger(), "Updating episode in rosbag YAML file...");
 
-  if (!is_recording_) {
-    RCLCPP_WARN(this->get_logger(), "Cannot add subtask annotation while not recording.");
-    return;
+  // Close any running subtask
+  if (!current_episode_subtasks_.empty() && current_episode_subtasks_.back().end_timestamp == 0.0) {
+    current_episode_subtasks_.back().end_timestamp = this->now().seconds();
   }
 
   // Load the existing YAML file
@@ -516,36 +510,64 @@ void RosbagCollection::updateSubtaskYaml(const std::string& subtask_name)
     if (std::filesystem::exists(yaml_file_path)) {
       yaml_node = YAML::LoadFile(yaml_file_path);
     } else {
-      RCLCPP_WARN(this->get_logger(), "YAML file not found, creating a new node");
+      RCLCPP_WARN(this->get_logger(), "YAML file not found, creating a new one");
+      createRosbagYaml();
+      yaml_node = YAML::LoadFile(yaml_file_path);
     }
   } catch (const std::exception & e) {
     RCLCPP_ERROR(this->get_logger(), "Failed to load YAML file: %s", e.what());
     return;
   }
 
-  std::string current_task_label = current_task_name_;
-  std::replace(current_task_label.begin(), current_task_label.end(), ' ', '_');
-  std::transform(current_task_label.begin(), current_task_label.end(), current_task_label.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-                 
-  // Extract time from ROS time
-  double current_time_sec = this->now().seconds();
+  std::string current_task_label = current_task_dir_name_;
 
-  if (yaml_node["recorded_bags"][current_task_label].IsDefined()) {
-    if (!yaml_node["recorded_bags"][current_task_label]["episodes"].IsDefined()) {
-       yaml_node["recorded_bags"][current_task_label]["episodes"] = YAML::Node(YAML::NodeType::Map);
+  // Ensure task exists
+  if (yaml_node["recorded_bags"]["tasks"][current_task_label].IsDefined()) {
+    
+    // 1. episodes_list
+    if (!yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].IsDefined()) {
+      yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"] = YAML::Node(YAML::NodeType::Sequence);
+    }
+    // Push if not already in list (for safety, though episode names are unique)
+    bool episode_in_list = false;
+    for (YAML::const_iterator it = yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].begin(); it != yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].end(); ++it) {
+      if (it->as<std::string>() == current_bag_name_) { episode_in_list = true; break; }
+    }
+    if (!episode_in_list) {
+      yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].push_back(current_bag_name_);
+    }
+
+    // 2. episodes map
+    if (!yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes"].IsDefined()) {
+       yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes"] = YAML::Node(YAML::NodeType::Map);
     }
     
-    // Check if the current bag entry exists
-    if (!yaml_node["recorded_bags"][current_task_label]["episodes"][current_bag_name_].IsDefined()) {
-       yaml_node["recorded_bags"][current_task_label]["episodes"][current_bag_name_] = YAML::Node(YAML::NodeType::Map);
-       yaml_node["recorded_bags"][current_task_label]["episodes"][current_bag_name_]["subtasks"] = YAML::Node(YAML::NodeType::Sequence);
-    }
+    // Create/Update the specific episode
+    YAML::Node episode_node = YAML::Node(YAML::NodeType::Map);
+    episode_node["bag_path"] = current_bag_path_;
     
-    YAML::Node subtask_node;
-    subtask_node["name"] = subtask_name;
-    subtask_node["timestamp"] = current_time_sec;
-    yaml_node["recorded_bags"][current_task_label]["episodes"][current_bag_name_]["subtasks"].push_back(subtask_node);
+    // 3. Subtasks logic
+    if (!current_episode_subtasks_.empty()) {
+      YAML::Node subtasks_list = YAML::Node(YAML::NodeType::Sequence);
+      YAML::Node subtasks_map = YAML::Node(YAML::NodeType::Map);
+
+      for (size_t i = 0; i < current_episode_subtasks_.size(); ++i) {
+        std::string subtask_key = current_episode_subtasks_[i].key;
+        subtasks_list.push_back(subtask_key);
+
+        YAML::Node single_subtask;
+        single_subtask["label"] = current_episode_subtasks_[i].label;
+        single_subtask["start_timestamp"] = current_episode_subtasks_[i].start_timestamp;
+        single_subtask["end_timestamp"] = current_episode_subtasks_[i].end_timestamp;
+        
+        subtasks_map[subtask_key] = single_subtask;
+      }
+
+      episode_node["subtasks_list"] = subtasks_list;
+      episode_node["subtasks"] = subtasks_map;
+    }
+
+    yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes"][current_bag_name_] = episode_node;
   }
 
   // Save the updated YAML node to the file
@@ -554,7 +576,58 @@ void RosbagCollection::updateSubtaskYaml(const std::string& subtask_name)
     yaml_file << yaml_node;
     yaml_file.close();
   } catch (const std::exception & e) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to update subtask YAML file: %s", e.what());
+    RCLCPP_ERROR(this->get_logger(), "Failed to update episode YAML file: %s", e.what());
+  }
+}
+
+void RosbagCollection::removeEpisodeFromYaml()
+{
+  RCLCPP_INFO(this->get_logger(), "Removing episode from rosbag YAML file: %s", current_bag_name_.c_str());
+
+  std::string yaml_file_path = rosbag_info_.recording_dir + "/recorded_bags_meta.yaml";
+  if (!std::filesystem::exists(yaml_file_path)) {
+    return;
+  }
+
+  YAML::Node yaml_node;
+  try {
+    yaml_node = YAML::LoadFile(yaml_file_path);
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to load YAML file for removal: %s", e.what());
+    return;
+  }
+
+  std::string current_task_label = current_task_dir_name_;
+
+  if (yaml_node["recorded_bags"]["tasks"][current_task_label].IsDefined()) {
+    
+    // Remove from episodes_list
+    if (yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].IsDefined()) {
+      YAML::Node old_list = yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"];
+      YAML::Node new_list = YAML::Node(YAML::NodeType::Sequence);
+      
+      for (YAML::const_iterator it = old_list.begin(); it != old_list.end(); ++it) {
+        if (it->as<std::string>() != current_bag_name_) {
+          new_list.push_back(it->as<std::string>());
+        }
+      }
+      yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"] = new_list;
+    }
+
+    // Remove from episodes map
+    if (yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes"].IsDefined()) {
+      yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes"].remove(current_bag_name_);
+    }
+
+    // Save
+    try {
+      std::ofstream yaml_file(yaml_file_path);
+      yaml_file << yaml_node;
+      yaml_file.close();
+      RCLCPP_INFO(this->get_logger(), "Successfully removed episode from YAML.");
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to save YAML file after removal: %s", e.what());
+    }
   }
 }
 
@@ -696,29 +769,20 @@ void RosbagCollection::taskUpdateCallback(
   }
 
   if (request->label != current_task_name_) {
-    previous_task_id_ = current_task_id_;
-    current_task_id_ = 0;
-
     previous_task_name_ = current_task_name_;
     current_task_name_ = request->label;
 
-    previous_task_path_ = current_task_path_;
-    current_task_path_ = rosbag_info_.recording_dir + "/" + current_task_name_;
-    std::replace(current_task_path_.begin(), current_task_path_.end(), ' ', '_');
-    std::transform(current_task_path_.begin(), current_task_path_.end(), current_task_path_.begin(),
+    current_task_dir_name_ = current_task_name_ + "_" + getTimestampString();
+    std::replace(current_task_dir_name_.begin(), current_task_dir_name_.end(), ' ', '_');
+    std::transform(current_task_dir_name_.begin(), current_task_dir_name_.end(), current_task_dir_name_.begin(),
                    [](unsigned char c) { return std::tolower(c); });
-    RCLCPP_INFO(this->get_logger(), "Updated task name from '%s' to '%s'", previous_task_name_.c_str(), current_task_name_.c_str());
 
-    previous_bag_id_ = current_bag_id_;
-    current_bag_id_ = 0;
+    previous_task_path_ = current_task_path_;
+    current_task_path_ = rosbag_info_.recording_dir + "/" + current_task_dir_name_;
+    RCLCPP_INFO(this->get_logger(), "Updated task name from '%s' to '%s'", previous_task_name_.c_str(), current_task_dir_name_.c_str());
 
     previous_bag_name_ = current_bag_name_;
-    current_bag_name_ = "episode_" + std::to_string(current_bag_id_) + "_" + std::to_string(this->now().nanoseconds());
-    std::replace(current_bag_name_.begin(), current_bag_name_.end(), ' ', '_');
-    std::transform(current_bag_name_.begin(), current_bag_name_.end(), current_bag_name_.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
-    previous_bag_name_ = current_bag_name_; // This line seems to re-assign current_bag_name_ to previous_bag_name_ after modification. Maybe intentional?
-
+    current_bag_name_ = "episode_" + getTimestampString();
     previous_bag_path_ = current_bag_path_;
     current_bag_path_ = current_task_path_ + "/" + current_bag_name_;
 
@@ -750,12 +814,26 @@ void RosbagCollection::subtaskUpdateCallback(
     return;
   }
 
+  double current_time_sec = this->now().seconds();
+
+  // Close the previous subtask if one exists
+  if (!current_episode_subtasks_.empty()) {
+    current_episode_subtasks_.back().end_timestamp = current_time_sec;
+  }
+
   current_subtask_name_ = request->label;
-  updateSubtaskYaml(current_subtask_name_);
+  
+  SubtaskInfo new_subtask;
+  new_subtask.key = "subtask_" + getTimestampString();
+  new_subtask.label = current_subtask_name_;
+  new_subtask.start_timestamp = current_time_sec;
+  new_subtask.end_timestamp = 0.0; // Will be updated on the next subtask or bag save
+  
+  current_episode_subtasks_.push_back(new_subtask);
 
   RCLCPP_INFO(this->get_logger(), "Subtask name updated successfully to '%s'", current_subtask_name_.c_str());
   response->success = true;
-  response->message = "Subtask name updated successfully and recorded in subtask YAML file";
+  response->message = "Subtask name updated successfully";
 }
 
 void RosbagCollection::cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg, const std::string topic_name)
