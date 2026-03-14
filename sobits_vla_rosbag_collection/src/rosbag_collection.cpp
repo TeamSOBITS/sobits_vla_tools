@@ -48,19 +48,13 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("robot_info.name", "sobit_robot");
   this->declare_parameter<std::string>("robot_info.version", "1.0.0");
   this->declare_parameter<std::string>("robot_info.morphology.type", "mobile_manipulator");
-  this->declare_parameter<bool>("robot_info.morphology.has_mobile_base", true);
-  this->declare_parameter<bool>("robot_info.morphology.has_cmd_vel_y", false);
   this->declare_parameter<std::string>("robot_info.morphology.joint_states_topic", "/joint_states");
-  this->declare_parameter<std::string>("robot_info.morphology.cmd_vel_topic", "/cmd_vel");
   this->declare_parameter<std::vector<std::string>>("robot_info.morphology.parts", std::vector<std::string>{"base", "arm", "gripper"});
   
   robot_info_.name = this->get_parameter("robot_info.name").as_string();
   robot_info_.version = this->get_parameter("robot_info.version").as_string();
   robot_info_.morphology = this->get_parameter("robot_info.morphology.type").as_string();
-  robot_info_.has_mobile_base = this->get_parameter("robot_info.morphology.has_mobile_base").as_bool();
-  robot_info_.has_cmd_vel_y = this->get_parameter("robot_info.morphology.has_cmd_vel_y").as_bool();
   robot_info_.joint_states_topic = this->get_parameter("robot_info.morphology.joint_states_topic").as_string();
-  robot_info_.cmd_vel_topic = this->get_parameter("robot_info.morphology.cmd_vel_topic").as_string();
   
   robot_info_.parts = this->get_parameter("robot_info.morphology.parts").as_string_array();
   robot_info_.joint_names.clear();
@@ -70,17 +64,31 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     this->declare_parameter<std::vector<std::string>>("robot_info.morphology." + part + ".joint_names", std::vector<std::string>{});
     robot_info_.is_actionable[part] = this->get_parameter("robot_info.morphology." + part + ".is_actionable").as_bool();
     robot_info_.joint_names[part] = this->get_parameter("robot_info.morphology." + part + ".joint_names").as_string_array();
+    
+    // Only fetch mobile_base/legs specific properties if it is the target part
+    if (part == "mobile_base" || part == "legs") {
+        this->declare_parameter<bool>("robot_info.morphology." + part + ".has_cmd_vel_y", false);
+        this->declare_parameter<bool>("robot_info.morphology." + part + ".has_cmd_vel_z", false);
+        this->declare_parameter<std::string>("robot_info.morphology." + part + ".cmd_vel_topic", "/cmd_vel");
+        
+        robot_info_.part_has_cmd_vel_y[part] = this->get_parameter("robot_info.morphology." + part + ".has_cmd_vel_y").as_bool();
+        robot_info_.part_has_cmd_vel_z[part] = this->get_parameter("robot_info.morphology." + part + ".has_cmd_vel_z").as_bool();
+        robot_info_.part_cmd_vel_topic[part] = this->get_parameter("robot_info.morphology." + part + ".cmd_vel_topic").as_string();
+    }
   }
   this->declare_parameter<std::vector<std::string>>("robot_info.sensors.types", std::vector<std::string>{"camera", "lidar", "imu"});
   robot_info_.sensor_types = this->get_parameter("robot_info.sensors.types").as_string_array();
-  robot_info_.sensor_names.clear();
+    robot_info_.sensor_names.clear();
   robot_info_.sensor_models.clear();
+  robot_info_.sensor_topics.clear();
   for (const auto & sensor_type : robot_info_.sensor_types) {
     RCLCPP_INFO(this->get_logger(), "Robot sensor: %s", sensor_type.c_str());
     this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".names", std::vector<std::string>{});
     this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".models", std::vector<std::string>{});
+    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".topics", std::vector<std::string>{});
     robot_info_.sensor_names[sensor_type] = this->get_parameter("robot_info.sensors." + sensor_type + ".names").as_string_array();
     robot_info_.sensor_models[sensor_type] = this->get_parameter("robot_info.sensors." + sensor_type + ".models").as_string_array();
+    robot_info_.sensor_topics[sensor_type] = this->get_parameter("robot_info.sensors." + sensor_type + ".topics").as_string_array();
   }
 
   // (2) User info parameters
@@ -390,14 +398,18 @@ void RosbagCollection::createRosbagYaml()
   yaml_node["robot_info"]["name"] = robot_info_.name;
   yaml_node["robot_info"]["version"] = robot_info_.version;
   yaml_node["robot_info"]["morphology"]["type"] = robot_info_.morphology;
-  yaml_node["robot_info"]["morphology"]["has_mobile_base"] = robot_info_.has_mobile_base;
-  yaml_node["robot_info"]["morphology"]["has_cmd_vel_y"] = robot_info_.has_cmd_vel_y;
   yaml_node["robot_info"]["morphology"]["joint_states_topic"] = robot_info_.joint_states_topic;
-  yaml_node["robot_info"]["morphology"]["cmd_vel_topic"] = robot_info_.cmd_vel_topic;
   yaml_node["robot_info"]["morphology"]["parts"] = YAML::Node(YAML::NodeType::Sequence);
   for (const auto & part : robot_info_.parts) {
     yaml_node["robot_info"]["morphology"]["parts"].push_back(part);
     yaml_node["robot_info"]["morphology"][part]["is_actionable"] = robot_info_.is_actionable[part];
+    
+    if (part == "mobile_base" || part == "legs") {
+        yaml_node["robot_info"]["morphology"][part]["has_cmd_vel_y"] = robot_info_.part_has_cmd_vel_y[part];
+        yaml_node["robot_info"]["morphology"][part]["has_cmd_vel_z"] = robot_info_.part_has_cmd_vel_z[part];
+        yaml_node["robot_info"]["morphology"][part]["cmd_vel_topic"] = robot_info_.part_cmd_vel_topic[part];
+    }
+    
     yaml_node["robot_info"]["morphology"][part]["joint_names"] = YAML::Node(YAML::NodeType::Sequence);
     for (const auto & joint_name : robot_info_.joint_names[part]) {
       yaml_node["robot_info"]["morphology"][part]["joint_names"].push_back(joint_name);
@@ -408,6 +420,8 @@ void RosbagCollection::createRosbagYaml()
     yaml_node["robot_info"]["sensors"]["types"].push_back(sensor_type);
     yaml_node["robot_info"]["sensors"][sensor_type]["names"] = YAML::Node(YAML::NodeType::Sequence);
     yaml_node["robot_info"]["sensors"][sensor_type]["models"] = YAML::Node(YAML::NodeType::Sequence);
+    yaml_node["robot_info"]["sensors"][sensor_type]["topics"] = YAML::Node(YAML::NodeType::Sequence);
+    
     for (const auto & sensor_name : robot_info_.sensor_names[sensor_type]) {
       yaml_node["robot_info"]["sensors"][sensor_type]["names"].push_back(sensor_name);
       
@@ -424,6 +438,9 @@ void RosbagCollection::createRosbagYaml()
     }
     for (const auto & sensor_model : robot_info_.sensor_models[sensor_type]) {
       yaml_node["robot_info"]["sensors"][sensor_type]["models"].push_back(sensor_model);
+    }
+    for (const auto & sensor_topic : robot_info_.sensor_topics[sensor_type]) {
+      yaml_node["robot_info"]["sensors"][sensor_type]["topics"].push_back(sensor_topic);
     }
   }
 

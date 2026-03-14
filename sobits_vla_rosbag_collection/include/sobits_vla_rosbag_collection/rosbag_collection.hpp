@@ -41,17 +41,17 @@ public:
   std::vector<std::string> parts;
   std::map<std::string, bool> is_actionable;
   std::map<std::string, std::vector<std::string>> joint_names;
+  
+  // Custom properties for specific parts like mobile_base/legs
+  std::map<std::string, bool> part_has_cmd_vel_y;
+  std::map<std::string, bool> part_has_cmd_vel_z;
+  std::map<std::string, std::string> part_cmd_vel_topic;
+  std::string joint_states_topic;
+
   std::vector<std::string> sensor_types;
   std::map<std::string, std::vector<std::string>> sensor_names;
   std::map<std::string, std::vector<std::string>> sensor_models;
-  
-  // Locomotion specific variables
-  bool has_mobile_base;
-  bool has_cmd_vel_y;
-  
-  // Core Topics
-  std::string joint_states_topic;
-  std::string cmd_vel_topic;
+  std::map<std::string, std::vector<std::string>> sensor_topics;
 };
 
 class UserInfo
