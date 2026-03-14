@@ -38,8 +38,12 @@ private:
   std::string gamepad_name_;
 
   uint8_t record_button_;
+  uint8_t pause_button_;
   uint8_t save_button_;
   uint8_t delete_button_;
+
+  double button_cooldown_duration_;
+  rclcpp::Time last_button_press_time_;
 
 };
 

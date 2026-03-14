@@ -4,10 +4,12 @@
     gamepad_config:
       # Gamepad type (e.g., "dualshock4", "keyboard")
       name: "dualshock4"
+      button_cooldown_duration: 0.5 # Cooldown duration for buttons (seconds)
       # Mapping of gamepad buttons to actions
       dualshock4:
         button_mapping:
           record: 7 # Top
+          pause: 7 # Top
           save: 6 # Left
           delete: 6 # Right
       keyboard:
