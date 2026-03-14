@@ -31,14 +31,15 @@ class RosbagConversionNode(Node):
         self.recorded_bags_meta_file = self.get_parameter('recorded_bags_meta_file').get_parameter_value().string_value
         self.dataset_name = self.get_parameter('dataset_name').get_parameter_value().string_value
 
-        # Configuration attributes
+        # Configuration attributes (populated from YAML)
         self.camera_topics = {}
         self.primary_camera = ""
-        self.joint_states_topic = "/joint_states"
-        self.cmd_vel_topic = "/cmd_vel"
+        self.joint_states_topic = ""
+        self.cmd_vel_topic = ""
         self.sync_threshold = 0.1
-        self.has_mobile_base = True
+        self.has_mobile_base = False
         self.has_cmd_vel_y = False
+        self.has_cmd_vel_z = False
         self.action_features = []
         self.all_subtasks_list = []
         self.has_subtasks = False
@@ -97,8 +98,12 @@ class RosbagConversionNode(Node):
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') else t_bag
                     
-                    if self.has_cmd_vel_y:
+                    if self.has_cmd_vel_y and self.has_cmd_vel_z:
+                        latest_cmd_vel = [msg.linear.x, msg.linear.y, msg.linear.z, msg.angular.z]
+                    elif self.has_cmd_vel_y:
                         latest_cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z]
+                    elif self.has_cmd_vel_z:
+                        latest_cmd_vel = [msg.linear.x, msg.linear.z, msg.angular.z]
                     else:
                         latest_cmd_vel = [msg.linear.x, msg.angular.z]
                         
@@ -184,65 +189,108 @@ class RosbagConversionNode(Node):
         self.get_logger().info(f"Target dataset name: {self.dataset_name}")
         self.get_logger().info(f"Reading from rosbags root: {self.rosbag_directory}")
         
-        if not os.path.exists(self.recorded_bags_meta_file):
-            self.get_logger().error(f"Meta file not found: {self.recorded_bags_meta_file}")
-            return
-            
-        with open(self.recorded_bags_meta_file, "r") as f:
-            meta = yaml.safe_load(f)
-            
-        task_list = list(meta.get("recorded_bags", {}).items())
+        self.get_logger().info(f"Searching for metadata files in: {self.rosbag_directory}")
         
-        convert_info = meta.get("convert_info", {})
-        fps = convert_info.get("fps", 10)
-        self.sync_threshold = convert_info.get("sync_threshold", 0.1)
-        
-        robot_info = meta.get("robot_info", {})
-        try:
-            self.has_mobile_base = robot_info.get("morphology", {}).get("has_mobile_base", True)
-            self.has_cmd_vel_y = robot_info.get("morphology", {}).get("has_cmd_vel_y", False)
-            camera_data = robot_info.get("sensors", {}).get("rgbd", {}).get("properties", {})
-            self.joint_states_topic = robot_info.get("morphology", {}).get("joint_states_topic", "/joint_states")
-            self.cmd_vel_topic = robot_info.get("morphology", {}).get("cmd_vel_topic", "/cmd_vel")
-        except KeyError as e:
-            self.get_logger().error(f"Missing required key in recorded_bags_meta: {e}")
-            return
-
-        if not camera_data:
-            self.get_logger().error("No camera configurations found in yaml properties. Exiting.")
-            return
-
-        # Extract dynamic action features
-        self.action_features = []
-        try:
-            morphology = robot_info.get("morphology", {})
-            parts = morphology.get("parts", [])
-            for part in parts:
-                part_info = morphology.get(part, {})
-                if part_info.get("is_actionable", False):
-                    self.action_features.extend(part_info.get("joint_names", []))
+        meta_files = []
+        for root, _, files in os.walk(self.rosbag_directory):
+            for file in files:
+                if file == "recorded_bags_meta.yaml":
+                    meta_files.append(os.path.join(root, file))
                     
-            if not self.action_features:
-                self.get_logger().warn("No actionable joints found in morphology. The action space will only consist of cmd_vel if activated.")
-        except Exception as e:
-            self.get_logger().error(f"Error extracting action features from morphology: {e}")
+        if not meta_files:
+            self.get_logger().error(f"No recorded_bags_meta.yaml files found in {self.rosbag_directory} or its subdirectories.")
+            return
+            
+        self.get_logger().info(f"Found {len(meta_files)} metadata files.")
+        
+        all_tasks = []
+        robot_ref_name = None
+        robot_ref_version = None
+        
+        for idx, meta_file in enumerate(meta_files):
+            with open(meta_file, "r") as f:
+                meta = yaml.safe_load(f)
+                
+            robot_info = meta.get("robot_info", {})
+            r_name = robot_info.get("name")
+            r_vers = robot_info.get("version")
+            
+            if idx == 0:
+                robot_ref_name = r_name
+                robot_ref_version = r_vers
+                # Save the base configurations from the first valid YAML
+                convert_info = meta.get("convert_info", {})
+                fps = convert_info.get("fps", 10)
+                self.sync_threshold = convert_info.get("sync_threshold", 0.1)
+                
+                try:
+                    self.joint_states_topic = robot_info.get("morphology", {}).get("joint_states_topic", "/joint_states")
+                    
+                    # Extract morphology
+                    morphology = robot_info.get("morphology", {})
+                    parts = morphology.get("parts", [])
+                    
+                    self.action_features = []
+                    for part in parts:
+                        part_info = morphology.get(part, {})
+                        if part_info.get("is_actionable", False):
+                            self.action_features.extend(part_info.get("joint_names", []))
+                            
+                            # Check if the part is a mobile base module
+                            if part in ["mobile_base", "legs"]:
+                                self.has_mobile_base = True
+                                self.has_cmd_vel_y = part_info.get("has_cmd_vel_y", False)
+                                self.has_cmd_vel_z = part_info.get("has_cmd_vel_z", False)
+                                self.cmd_vel_topic = part_info.get("cmd_vel_topic", "/cmd_vel")
+
+                    if not self.action_features and not self.has_mobile_base:
+                        self.get_logger().warn("No actionable joints and no active mobile base found in morphology.")
+                        
+                except Exception as e:
+                    self.get_logger().error(f"Error extracting features from morphology in primary yaml: {e}")
+                    return
+            else:
+                if r_name != robot_ref_name or r_vers != robot_ref_version:
+                    self.get_logger().error(f"Found conflicting robot identities! Expected {robot_ref_name} v{robot_ref_version}, but found {r_name} v{r_vers} in {meta_file}")
+                    return
+                    
+            tasks_list_data = list(meta.get("recorded_bags", {}).items())
+            
+            # Extend tasks with the path to the original meta_file to resolve local groups properly
+            for t_name, t_info in tasks_list_data:
+                if t_name == "tasks": continue
+                t_info["_meta_source_dir"] = os.path.dirname(meta_file)
+                all_tasks.append((t_name, t_info))
+
+        camera_data = robot_info.get("sensors", {}).get("rgbd", {})
+        if not camera_data or "names" not in camera_data or "topics" not in camera_data:
+            self.get_logger().error("No precise 'topics' and 'names' arrays found for 'rgbd' sensor in yaml. Exiting.")
             return
 
         self.camera_topics = {}
-        for cam, vals in camera_data.items():
-            self.camera_topics[cam] = vals["topic"]
+        for cam_name, cam_topic in zip(camera_data.get("names", []), camera_data.get("topics", [])):
+            self.camera_topics[cam_name] = cam_topic
             
+        if not self.camera_topics:
+            self.get_logger().error("No camera topics loaded.")
+            return
+
         self.primary_camera = list(self.camera_topics.keys())[0]
 
         cmd_vel_keys = []
         if self.has_mobile_base:
-            cmd_vel_keys = ["cmd_vel_x", "cmd_vel_y", "cmd_vel_theta"] if self.has_cmd_vel_y else ["cmd_vel_x", "cmd_vel_theta"]
+            if self.has_cmd_vel_y and self.has_cmd_vel_z:
+                cmd_vel_keys = ["cmd_vel_x", "cmd_vel_y", "cmd_vel_z", "cmd_vel_theta"]
+            elif self.has_cmd_vel_y:
+                cmd_vel_keys = ["cmd_vel_x", "cmd_vel_y", "cmd_vel_theta"]
+            elif self.has_cmd_vel_z:
+                cmd_vel_keys = ["cmd_vel_x", "cmd_vel_z", "cmd_vel_theta"]
+            else:
+                cmd_vel_keys = ["cmd_vel_x", "cmd_vel_theta"]
         
         # Extract all unique subtasks from the metadata
         all_subtasks_set = set()
-        for task_name, task_info in task_list:
-            if task_name == "tasks":
-                continue
+        for task_name, task_info in all_tasks:
             episodes_dict = task_info.get("episodes", {})
             for ep_key, ep_meta in episodes_dict.items():
                 subtasks_map = ep_meta.get("subtasks", {})
@@ -298,16 +346,14 @@ class RosbagConversionNode(Node):
         if hasattr(dataset, "info"):
             dataset.info["robot_info"] = robot_info
         
-        for chunk_idx, (task_name, task_info) in enumerate(task_list):
-            if task_name == "tasks":
-                continue
-                
+        for chunk_idx, (task_name, task_info) in enumerate(all_tasks):
+            meta_src = task_info.get("_meta_source_dir", self.rosbag_directory)
             bag_group = task_info.get("bag_path", task_info.get("bag_dir", task_name))
             
-            # Use rosbag_directory to locate the group properly
-            group_dir = os.path.join(self.rosbag_directory, bag_group) if not bag_group.startswith("/") else bag_group
+            # Use metadata source directory to locate the group properly
+            group_dir = os.path.join(meta_src, bag_group) if not bag_group.startswith("/") else bag_group
             if not os.path.isdir(group_dir):
-                group_dir = os.path.join(self.rosbag_directory, task_name)
+                group_dir = os.path.join(meta_src, task_name)
                 if not os.path.isdir(group_dir):
                     self.get_logger().warn(f"Directory not found: {group_dir}")
                     continue
