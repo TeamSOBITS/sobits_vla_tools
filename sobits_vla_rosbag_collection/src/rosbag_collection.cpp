@@ -28,19 +28,19 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   // Initialize Action Server
   record_action_server_ = rclcpp_action::create_server<sobits_interfaces::action::VlaRecordState>(
     this,
-    "vla_record_state",
+    this->get_name() + std::string("/vla_record_state"),
     std::bind(&RosbagCollection::handleGoal, this, std::placeholders::_1, std::placeholders::_2),
     std::bind(&RosbagCollection::handleCancel, this, std::placeholders::_1),
     std::bind(&RosbagCollection::handleAccepted, this, std::placeholders::_1));
 
   // Initialize Service Server for Tasks
   task_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
-    "vla_task_update",
+    this->get_name() + std::string("/vla_task_update"),
     std::bind(&RosbagCollection::taskUpdateCallback, this, std::placeholders::_1, std::placeholders::_2));
 
   // Initialize Service Server for Subtasks (long-horizon)
   subtask_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
-    "vla_subtask_update",
+    this->get_name() + std::string("/vla_subtask_update"),
     std::bind(&RosbagCollection::subtaskUpdateCallback, this, std::placeholders::_1, std::placeholders::_2));
 
   // Declare and get parameters (TODO: make it into a new function)

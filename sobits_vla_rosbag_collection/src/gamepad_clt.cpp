@@ -20,7 +20,7 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
 
   // Create action client for VlaRecordState
   action_client_ = rclcpp_action::create_client<sobits_interfaces::action::VlaRecordState>(
-      this, "vla_record_state");
+      this, "vla_rosbag_collection/vla_record_state");
   // Set up goal options
   goal_options_.goal_response_callback = std::bind(
       &GamepadClient::goalResponseCallback, this, std::placeholders::_1);
@@ -49,6 +49,12 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
   record_button_ = this->get_parameter("gamepad_config." + gamepad_name_ + ".button_mapping.record").as_int();
   save_button_   = this->get_parameter("gamepad_config." + gamepad_name_ + ".button_mapping.save").as_int();
   delete_button_ = this->get_parameter("gamepad_config." + gamepad_name_ + ".button_mapping.delete").as_int();
+
+  // Log params
+  RCLCPP_INFO(this->get_logger(), "Gamepad name: %s", gamepad_name_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Record button: %d", record_button_);
+  RCLCPP_INFO(this->get_logger(), "Save button: %d", save_button_);
+  RCLCPP_INFO(this->get_logger(), "Delete button: %d", delete_button_);
 
   // Init values
   current_state_  = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
