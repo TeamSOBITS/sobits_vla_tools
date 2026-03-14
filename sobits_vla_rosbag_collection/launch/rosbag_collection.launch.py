@@ -37,12 +37,14 @@ def generate_launch_description_impl(context, *args, **kwargs):
                 package='sobits_vla_rosbag_collection',
                 plugin='sobits_vla::RosbagCollection',
                 name='rosbag_collection_node',
+                namespace=robot_name,
                 parameters=parameters,
             ),
             ComposableNode(
                 package='sobits_vla_rosbag_collection',
                 plugin='sobits_vla::GamepadClient',
                 name='gamepad_clt_node',
+                namespace=robot_name,
                 parameters=[rosbag_config],
             )
         ],
