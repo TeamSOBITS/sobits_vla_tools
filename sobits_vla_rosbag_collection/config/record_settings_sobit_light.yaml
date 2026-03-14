@@ -10,13 +10,8 @@
       morphology:
         # Type of the robot (e.g., "mobile_manipulator", "humanoid", "quadruped", etc.)
         type: "mobile_manipulator"
-        # Does the robot possess a mobile base?
-        has_mobile_base: true
-        # Does the robot use Y-axis velocity (e.g. omni/mecanum wheels) or just X-axis (diff drive)?
-        has_cmd_vel_y: false
         # Essential control domains
         joint_states_topic: "/sobit_light/joint_states"
-        cmd_vel_topic: "/sobit_light/manual_control/cmd_vel"
         parts:
           - head
           - manipulator
@@ -43,7 +38,12 @@
             - "hand_joint"
             - "hand_sub_joint"
         mobile_base:
-          is_actionable: false
+          is_actionable: true
+          # Does the robot use Y-axis velocity (e.g. omni/mecanum wheels) or just X-axis (diff drive)?
+          has_cmd_vel_y: false
+          # Does the robot use Z-axis velocity (e.g. drones)?
+          has_cmd_vel_z: false
+          cmd_vel_topic: "/sobit_light/manual_control/cmd_vel"
           joint_names:
             - "base_l_drive_wheel_joint"
             - "base_r_drive_wheel_jointt"
@@ -56,12 +56,23 @@
         rgbd:
           names: ["head_camera", "hand_camera"]
           models: ["realsense_d435", "realsense_d455"]
+          topics:
+            [
+              "/sobit_light/head_camera/color/image_raw/compressed",
+              "/sobit_light/hand_camera/color/image_rect_raw/compressed",
+            ]
         lidar:
           names: ["lidar_front"]
           models: ["unk"]
+          topics: ["/sobit_light/lidar/scan"]
         fish_eye:
           names: ["camera_front", "camera_rear"]
           models: ["unk", "unk"]
+          topics:
+            [
+              "/sobit_light/front_camera/image_raw",
+              "/sobit_light/back_camera/image_raw",
+            ]
 
     # User information for contact
     user_info:
