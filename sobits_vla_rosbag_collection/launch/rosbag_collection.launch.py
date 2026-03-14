@@ -25,8 +25,22 @@ def generate_launch_description_impl(context, *args, **kwargs):
     )
 
     record_directory = LaunchConfiguration('record_directory').perform(context)
+    # If no record directory is specified, use the `rosbags` directory in the source directory of the package
     if not record_directory:
-        record_directory = os.path.join(pkg_share, 'rosbags')
+        launch_file_path = os.path.abspath(__file__)
+        pkg_name = "sobits_vla_rosbag_collection"
+        ws_root = launch_file_path.split('/install/')[0]
+        src_base = os.path.join(ws_root, 'src')
+        sobits_vla_path = os.path.join(src_base, "sobits_vla_tools", pkg_name)
+        if os.path.exists(sobits_vla_path):
+            record_directory = os.path.join(sobits_vla_path, 'rosbags')
+    if not os.path.exists(record_directory):
+        try:
+            os.makedirs(record_directory, exist_ok=True)
+        except Exception as e:
+            print(f"[ERROR] Failed to create record directory {record_directory}: {e}")
+
+    print(f"[INFO] Rosbags will be saved in: {record_directory}")
 
     parameters = [
         rosbag_config,
@@ -52,7 +66,7 @@ def generate_launch_description_impl(context, *args, **kwargs):
                 plugin='sobits_vla::GamepadClient',
                 name='gamepad_clt_node',
                 namespace=robot_name,
-                parameters=[rosbag_config],
+                parameters=[gamepad_config],
             )
         ],
         output='screen',
