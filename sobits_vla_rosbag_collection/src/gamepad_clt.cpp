@@ -168,3 +168,6 @@ void GamepadClient::sendGoal(const uint8_t & command)
 }
 
 } // namespace sobits_vla
+
+#include <rclcpp_components/register_node_macro.hpp>
+RCLCPP_COMPONENTS_REGISTER_NODE(sobits_vla::GamepadClient)

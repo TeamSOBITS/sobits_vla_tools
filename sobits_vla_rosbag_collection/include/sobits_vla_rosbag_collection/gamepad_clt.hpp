@@ -4,7 +4,6 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
-#include <rclcpp_components/register_node_macro.hpp>
 
 namespace sobits_vla
 {
@@ -45,5 +44,3 @@ private:
 };
 
 } // namespace sobits_vla
-
-RCLCPP_COMPONENTS_REGISTER_NODE(sobits_vla::GamepadClient)

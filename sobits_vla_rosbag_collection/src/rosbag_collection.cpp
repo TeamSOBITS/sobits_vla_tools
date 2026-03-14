@@ -762,3 +762,6 @@ void RosbagCollection::cameraInfoCallback(const sensor_msgs::msg::CameraInfo::Sh
 }
 
 } // namespace sobits_vla
+
+#include <rclcpp_components/register_node_macro.hpp>
+RCLCPP_COMPONENTS_REGISTER_NODE(sobits_vla::RosbagCollection)

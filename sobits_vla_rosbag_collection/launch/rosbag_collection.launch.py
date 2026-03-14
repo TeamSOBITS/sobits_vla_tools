@@ -2,7 +2,8 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch_ros.actions import Node
+from launch_ros.actions import Node, ComposableNodeContainer
+from launch_ros.descriptions import ComposableNode
 from launch.substitutions import LaunchConfiguration
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 
@@ -26,28 +27,30 @@ def generate_launch_description_impl(context, *args, **kwargs):
         {'rosbag_config.record_directory': record_directory}
     ]
 
-    rosbag_collection_node = Node(
-        package="sobits_vla_rosbag_collection",
-        executable="rosbag_collection_node",
-        name="rosbag_collection_node",
+    container = ComposableNodeContainer(
+        name='vla_rosbag_collection_container',
         namespace=robot_name,
-        parameters=parameters,
-        output="screen",
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='sobits_vla_rosbag_collection',
+                plugin='sobits_vla::RosbagCollection',
+                name='rosbag_collection_node',
+                parameters=parameters,
+            ),
+            ComposableNode(
+                package='sobits_vla_rosbag_collection',
+                plugin='sobits_vla::GamepadClient',
+                name='gamepad_clt_node',
+                parameters=[rosbag_config],
+            )
+        ],
+        output='screen',
     )
-
-    gamepad_clt_node = Node(
-        package="sobits_vla_rosbag_collection",
-        executable="gamepad_clt_node",
-        name="gamepad_clt_node",
-        namespace=robot_name,
-        parameters=[rosbag_config],
-        output="screen",
-    )
-
 
     return [
-        rosbag_collection_node,
-        gamepad_clt_node,
+        container,
     ]
 
 def generate_launch_description():
