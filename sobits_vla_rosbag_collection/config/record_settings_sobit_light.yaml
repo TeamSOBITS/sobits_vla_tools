@@ -80,6 +80,14 @@
               "/sobit_light/front_camera/image_raw",
               "/sobit_light/back_camera/image_raw",
             ]
+          # camera_info topics (explicit — one per entry in 'topics', same order)
+          info_topics:
+            [
+              "/sobit_light/head_camera/color/camera_info",
+              "/sobit_light/hand_camera/color/camera_info",
+              "/sobit_light/front_camera/camera_info",
+              "/sobit_light/back_camera/camera_info",
+            ]
           add_compressed: true # automatically also record the /compressed variant of each topic
           add_cam_info: true # automatically also record the /camera_info variant of each topic
         lidar:
