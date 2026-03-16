@@ -23,19 +23,20 @@ class RosbagConversionNode(Node):
         super().__init__('rosbag_conversion_node')
         
         self.declare_parameter('rosbag_directory', '')
-        self.declare_parameter('recorded_bags_meta_file', '')
         self.declare_parameter('dataset_name', 'MyDataset')
+        self.declare_parameter('primary_camera', 'head_camera')
         
         # Extract parameters
         self.rosbag_directory = self.get_parameter('rosbag_directory').get_parameter_value().string_value
-        self.recorded_bags_meta_file = self.get_parameter('recorded_bags_meta_file').get_parameter_value().string_value
         self.dataset_name = self.get_parameter('dataset_name').get_parameter_value().string_value
+        self.primary_camera = self.get_parameter('primary_camera').get_parameter_value().string_value
 
         # Configuration attributes (populated from YAML)
         self.camera_topics = {}
-        self.primary_camera = ""
+        # primary_camera is pre-set from ROS param above; can be overridden if not found
         self.joint_states_topic = ""
         self.cmd_vel_topic = ""
+        self.odom_topic = ""
         self.sync_threshold = 0.1
         self.has_mobile_base = False
         self.has_cmd_vel_y = False
@@ -204,6 +205,7 @@ class RosbagConversionNode(Node):
         self.get_logger().info(f"Found {len(meta_files)} metadata files.")
         
         all_tasks = []
+        all_users = []
         robot_ref_name = None
         robot_ref_version = None
         
@@ -242,6 +244,7 @@ class RosbagConversionNode(Node):
                                 self.has_cmd_vel_y = part_info.get("has_cmd_vel_y", False)
                                 self.has_cmd_vel_z = part_info.get("has_cmd_vel_z", False)
                                 self.cmd_vel_topic = part_info.get("cmd_vel_topic", "/cmd_vel")
+                                self.odom_topic = part_info.get("odom_topic", "")
 
                     if not self.action_features and not self.has_mobile_base:
                         self.get_logger().warn("No actionable joints and no active mobile base found in morphology.")
@@ -254,6 +257,12 @@ class RosbagConversionNode(Node):
                     self.get_logger().error(f"Found conflicting robot identities! Expected {robot_ref_name} v{robot_ref_version}, but found {r_name} v{r_vers} in {meta_file}")
                     return
                     
+                    
+            # Collect user info if present
+            u_info = meta.get("user_info")
+            if u_info and u_info not in all_users:
+                all_users.append(u_info)
+                
             tasks_list_data = list(meta.get("recorded_bags", {}).items())
             
             # Extend tasks with the path to the original meta_file to resolve local groups properly
@@ -262,9 +271,28 @@ class RosbagConversionNode(Node):
                 t_info["_meta_source_dir"] = os.path.dirname(meta_file)
                 all_tasks.append((t_name, t_info))
 
-        camera_data = robot_info.get("sensors", {}).get("rgbd", {})
+        # Find the camera sensor type dynamically by looking for the type whose names include the primary camera
+        sensors = robot_info.get("sensors", {})
+        sensor_types = sensors.get("types", [])
+        camera_data = {}
+        for stype in sensor_types:
+            sdata = sensors.get(stype, {})
+            if self.primary_camera in sdata.get("names", []):
+                camera_data = sdata
+                self.get_logger().info(f"Found primary camera '{self.primary_camera}' in sensor type '{stype}'")
+                break
+        
+        if not camera_data:
+            # Fallback: use the first sensor type that has names and topics
+            for stype in sensor_types:
+                sdata = sensors.get(stype, {})
+                if sdata.get("names") and sdata.get("topics"):
+                    camera_data = sdata
+                    self.get_logger().warn(f"Primary camera '{self.primary_camera}' not found in any sensor type. Falling back to sensor type '{stype}'.")
+                    break
+        
         if not camera_data or "names" not in camera_data or "topics" not in camera_data:
-            self.get_logger().error("No precise 'topics' and 'names' arrays found for 'rgbd' sensor in yaml. Exiting.")
+            self.get_logger().error("No camera with 'names' and 'topics' arrays found in yaml sensors. Exiting.")
             return
 
         self.camera_topics = {}
@@ -275,7 +303,13 @@ class RosbagConversionNode(Node):
             self.get_logger().error("No camera topics loaded.")
             return
 
-        self.primary_camera = list(self.camera_topics.keys())[0]
+        # Validate primary_camera is actually in the loaded topics; if not, fall back to first
+        if self.primary_camera not in self.camera_topics:
+            fallback = list(self.camera_topics.keys())[0]
+            self.get_logger().warn(f"Primary camera '{self.primary_camera}' not in camera_topics. Falling back to '{fallback}'.")
+            self.primary_camera = fallback
+        else:
+            self.get_logger().info(f"Using primary camera: '{self.primary_camera}'")
 
         cmd_vel_keys = []
         if self.has_mobile_base:
@@ -345,6 +379,8 @@ class RosbagConversionNode(Node):
 
         if hasattr(dataset, "info"):
             dataset.info["robot_info"] = robot_info
+            if all_users:
+                dataset.info["user_info"] = all_users if len(all_users) > 1 else all_users[0]
         
         for chunk_idx, (task_name, task_info) in enumerate(all_tasks):
             meta_src = task_info.get("_meta_source_dir", self.rosbag_directory)
