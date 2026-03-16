@@ -55,6 +55,7 @@ public:
   std::map<std::string, std::vector<std::string>> sensor_names;
   std::map<std::string, std::vector<std::string>> sensor_models;
   std::map<std::string, std::vector<std::string>> sensor_topics;
+  std::map<std::string, std::vector<std::string>> sensor_info_topics;  // explicit camera_info topics
   std::map<std::string, bool> sensor_add_compressed;
   std::map<std::string, bool> sensor_add_cam_info;
 };
@@ -80,6 +81,7 @@ class RosbagInfo
 {
 public:
   std::string recording_dir;
+  std::vector<std::string> topics_to_record;
   std::vector<std::string> additional_topics;
   std::vector<std::string> additional_services;
   std::vector<std::string> additional_actions;
@@ -109,6 +111,8 @@ public:
   void updateRosbagYaml();
   void updateEpisodeYaml();
   void removeEpisodeFromYaml();
+  void buildTopicList();
+  std::string getTimestampString();
 
 private:
   void taskUpdateCallback(
@@ -139,9 +143,10 @@ private:
   std::thread recorder_thread_;
   std::mutex recorder_mutex_;
   std::atomic<bool> is_recording_{false};
+  bool task_has_been_set_{false};
 
   std::map<std::string, rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr> camera_info_subs_;
-  std::map<std::string, std::pair<uint32_t, uint32_t>> camera_dimensions_; // topic -> {width, height}
+  std::map<std::string, std::pair<uint32_t, uint32_t>> camera_dimensions_;
 
   // Parameters
   RobotInfo robot_info_;
@@ -150,8 +155,6 @@ private:
   std::string gamepad_name_;
 
   // State management
-  std::string getTimestampString();
-
   uint8_t current_state_;
   uint8_t previous_state_;
 

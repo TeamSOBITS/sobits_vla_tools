@@ -6,6 +6,7 @@
 #include <fstream>      // For std::ofstream
 #include <string>       // For std::string
 #include <vector>       // For std::vector
+#include <set>          // For topic deduplication in buildTopicList()
 
 #include "rosbag2_cpp/writer.hpp"
 #include <chrono>
@@ -43,7 +44,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     this->get_name() + std::string("/vla_subtask_update"),
     std::bind(&RosbagCollection::subtaskUpdateCallback, this, std::placeholders::_1, std::placeholders::_2));
 
-  // Declare and get parameters (TODO: make it into a new function)
+  // Declare and get parameters
   // (1) Robot info parameters
   this->declare_parameter<std::string>("robot_info.name", "sobit_robot");
   this->declare_parameter<std::string>("robot_info.version", "1.0.0");
@@ -92,13 +93,15 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".names", std::vector<std::string>{});
     this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".models", std::vector<std::string>{});
     this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".topics", std::vector<std::string>{});
+    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".info_topics", std::vector<std::string>{});
     this->declare_parameter<bool>("robot_info.sensors." + sensor_type + ".add_compressed", false);
     this->declare_parameter<bool>("robot_info.sensors." + sensor_type + ".add_cam_info", false);
-    robot_info_.sensor_names[sensor_type] = this->get_parameter("robot_info.sensors." + sensor_type + ".names").as_string_array();
-    robot_info_.sensor_models[sensor_type] = this->get_parameter("robot_info.sensors." + sensor_type + ".models").as_string_array();
-    robot_info_.sensor_topics[sensor_type] = this->get_parameter("robot_info.sensors." + sensor_type + ".topics").as_string_array();
+    robot_info_.sensor_names[sensor_type]          = this->get_parameter("robot_info.sensors." + sensor_type + ".names").as_string_array();
+    robot_info_.sensor_models[sensor_type]         = this->get_parameter("robot_info.sensors." + sensor_type + ".models").as_string_array();
+    robot_info_.sensor_topics[sensor_type]         = this->get_parameter("robot_info.sensors." + sensor_type + ".topics").as_string_array();
+    robot_info_.sensor_info_topics[sensor_type]    = this->get_parameter("robot_info.sensors." + sensor_type + ".info_topics").as_string_array();
     robot_info_.sensor_add_compressed[sensor_type] = this->get_parameter("robot_info.sensors." + sensor_type + ".add_compressed").as_bool();
-    robot_info_.sensor_add_cam_info[sensor_type] = this->get_parameter("robot_info.sensors." + sensor_type + ".add_cam_info").as_bool();
+    robot_info_.sensor_add_cam_info[sensor_type]   = this->get_parameter("robot_info.sensors." + sensor_type + ".add_cam_info").as_bool();
   }
 
   // (2) User info parameters
@@ -135,20 +138,19 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("gamepad_config.name", "default_gamepad");
   gamepad_name_ = this->get_parameter("gamepad_config.name").as_string();
 
-  // Sniff Camera Info if add_cam_info is set for any sensor type (or from additional_topics)
+  // Subscribe to info_topics per sensor type to obtain camera dimension
   for (const auto & sensor_type : robot_info_.sensor_types) {
-    if (robot_info_.sensor_add_cam_info[sensor_type]) {
-      for (const auto & cam_topic : robot_info_.sensor_topics[sensor_type]) {
-        std::string cam_info_topic = cam_topic + "/camera_info";
-        RCLCPP_INFO(this->get_logger(), "Subscribing to sniff dimensions: %s", cam_info_topic.c_str());
-        camera_info_subs_[cam_info_topic] = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-            cam_info_topic,
-            rclcpp::QoS(1).best_effort(),
-            [this, cam_info_topic](const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
-                this->cameraInfoCallback(msg, cam_info_topic);
-            }
-        );
-      }
+    const auto & info_topics = robot_info_.sensor_info_topics[sensor_type];
+    for (const auto & cam_info_topic : info_topics) {
+      if (cam_info_topic.empty()) continue;
+      RCLCPP_INFO(this->get_logger(), "Subscribing to sniff dimensions: %s", cam_info_topic.c_str());
+      camera_info_subs_[cam_info_topic] = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+          cam_info_topic,
+          rclcpp::QoS(1).best_effort(),
+          [this, cam_info_topic](const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+              this->cameraInfoCallback(msg, cam_info_topic);
+          }
+      );
     }
   }
 
@@ -205,6 +207,9 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(this->get_logger(), "No additional actions to record specified.");
   }
 
+  // Build the topic list once and cache it
+  buildTopicList();
+
   // Create the recording directory if it does not exist
   if (!std::filesystem::exists(rosbag_info_.recording_dir)) {
     try {
@@ -217,7 +222,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     }
   }
 
-  // Create the rosbag YAML file
+  // Create (or verify + append to) the rosbag YAML file
   createRosbagYaml();
 
   RCLCPP_INFO(this->get_logger(), "RosbagCollection initialized");
@@ -242,6 +247,66 @@ std::string RosbagCollection::getTimestampString()
   std::ostringstream ss;
   ss << std::put_time(std::localtime(&time_t_now), "%Y%m%d_%H%M%S");
   return ss.str();
+}
+
+void RosbagCollection::buildTopicList()
+{
+  std::vector<std::string> all_topics;
+
+  // Sensor topics: base + optional compressed + optional cam_info variants
+  for (const auto & sensor_type : robot_info_.sensor_types) {
+    for (const auto & topic : robot_info_.sensor_topics[sensor_type]) {
+      all_topics.push_back(topic);
+      if (robot_info_.sensor_add_compressed.count(sensor_type) && robot_info_.sensor_add_compressed.at(sensor_type)) {
+        all_topics.push_back(topic + "/compressed");
+      }
+    }
+    // Camera info topics from the explicit info_topics list
+    if (robot_info_.sensor_add_cam_info.count(sensor_type) && robot_info_.sensor_add_cam_info.at(sensor_type)) {
+      for (const auto & info_topic : robot_info_.sensor_info_topics[sensor_type]) {
+        if (!info_topic.empty()) {
+          all_topics.push_back(info_topic);
+        }
+      }
+    }
+  }
+
+  // Morphology: joint_states, cmd_vel, odom, and per-part explicit topics
+  if (!robot_info_.joint_states_topic.empty()) {
+    all_topics.push_back(robot_info_.joint_states_topic);
+  }
+  for (const auto & part : robot_info_.parts) {
+    if (robot_info_.part_cmd_vel_topic.count(part) && !robot_info_.part_cmd_vel_topic.at(part).empty()) {
+      all_topics.push_back(robot_info_.part_cmd_vel_topic.at(part));
+    }
+    if (robot_info_.part_odom_topic.count(part) && !robot_info_.part_odom_topic.at(part).empty()) {
+      all_topics.push_back(robot_info_.part_odom_topic.at(part));
+    }
+    for (const auto & topic : robot_info_.part_topics[part]) {
+      if (!topic.empty()) {
+        all_topics.push_back(topic);
+      }
+    }
+  }
+
+  // Additional explicit topics from config
+  for (const auto & topic : rosbag_info_.additional_topics) {
+    if (!topic.empty()) {
+      all_topics.push_back(topic);
+    }
+  }
+
+  // Deduplicate while preserving order
+  std::vector<std::string> deduped;
+  std::set<std::string> seen;
+  for (const auto & t : all_topics) {
+    if (seen.insert(t).second) {
+      deduped.push_back(t);
+    }
+  }
+
+  rosbag_info_.topics_to_record = std::move(deduped);
+  RCLCPP_INFO(this->get_logger(), "Cached %zu topics to record.", rosbag_info_.topics_to_record.size());
 }
 
 void RosbagCollection::createRosbag()
@@ -289,52 +354,10 @@ void RosbagCollection::createRosbag()
   
   rosbag2_transport::RecordOptions record_options;
   
-  // Build the full topic list dynamically from sensor definitions and morphology
-  std::vector<std::string> all_topics;
-  
-  // (A) Sensor topics: base + optional compressed + optional cam_info variants
-  for (const auto & sensor_type : robot_info_.sensor_types) {
-    for (const auto & topic : robot_info_.sensor_topics[sensor_type]) {
-      all_topics.push_back(topic);
-      if (robot_info_.sensor_add_compressed.count(sensor_type) && robot_info_.sensor_add_compressed.at(sensor_type)) {
-        all_topics.push_back(topic + "/compressed");
-      }
-      if (robot_info_.sensor_add_cam_info.count(sensor_type) && robot_info_.sensor_add_cam_info.at(sensor_type)) {
-        all_topics.push_back(topic + "/camera_info");
-      }
-    }
-  }
-  
-  // (B) Morphology: joint_states, cmd_vel, and per-part explicit topics
-  if (!robot_info_.joint_states_topic.empty()) {
-    all_topics.push_back(robot_info_.joint_states_topic);
-  }
-  for (const auto & part : robot_info_.parts) {
-    if (robot_info_.part_cmd_vel_topic.count(part) && !robot_info_.part_cmd_vel_topic.at(part).empty()) {
-      all_topics.push_back(robot_info_.part_cmd_vel_topic.at(part));
-    }
-    if (robot_info_.part_odom_topic.count(part) && !robot_info_.part_odom_topic.at(part).empty()) {
-      all_topics.push_back(robot_info_.part_odom_topic.at(part));
-    }
-    // Include explicit per-part topics (joint_trajectory, controller_state, etc.)
-    for (const auto & topic : robot_info_.part_topics[part]) {
-      if (!topic.empty()) {
-        all_topics.push_back(topic);
-      }
-    }
-  }
-  
-  // (C) Additional explicit topics from config
-  for (const auto & topic : rosbag_info_.additional_topics) {
-    if (!topic.empty()) {
-      all_topics.push_back(topic);
-    }
-  }
-
-  if (all_topics.empty()) {
+  if (rosbag_info_.topics_to_record.empty()) {
     record_options.all_topics = true;
   } else {
-    record_options.topics = all_topics;
+    record_options.topics = rosbag_info_.topics_to_record;
   }
   record_options.use_sim_time = this->get_parameter("use_sim_time").as_bool();
   record_options.rmw_serialization_format = rosbag_info_.rmw_serialization_format;
@@ -752,10 +775,8 @@ void RosbagCollection::execute(
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<sobits_interfaces::action::VlaRecordState::Result>();
 
-  // This check seems problematic. If current_task_name_ is never different from previous_task_name_ initially,
-  // this will always warn. Perhaps it should be checking if a task has been set at all.
-  if (current_task_name_ == previous_task_name_){
-    RCLCPP_WARN(this->get_logger(), "Please update the task name before starting a new recording");
+  if (!task_has_been_set_) {
+    RCLCPP_WARN(this->get_logger(), "Please set a task name via the vla_task_update service before starting a recording.");
     result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
     goal_handle->abort(result);
     return;
@@ -877,7 +898,6 @@ void RosbagCollection::taskUpdateCallback(
     current_bag_path_ = current_task_path_ + "/" + current_bag_name_;
 
     // Update the rosbag YAML file
-    // TODO: Call when rosbag with the new task name is created
     updateRosbagYaml();
   } else {
     RCLCPP_WARN(this->get_logger(), "Task name '%s' is already the current task name", request->label.c_str());
@@ -889,6 +909,7 @@ void RosbagCollection::taskUpdateCallback(
   RCLCPP_INFO(this->get_logger(), "Task name updated successfully to '%s'", current_task_name_.c_str());
   response->success = true;
   response->message = "Task name updated successfully and rosbag YAML file updated";
+  task_has_been_set_ = true;
 }
 
 void RosbagCollection::subtaskUpdateCallback(
