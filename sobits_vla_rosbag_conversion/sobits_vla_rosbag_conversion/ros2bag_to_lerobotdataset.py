@@ -67,9 +67,7 @@ class RosbagConversionNode(Node):
             self.get_logger().info("Shutting down node...")
             raise SystemExit
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Helper: compare two morphology blocks for consistency
-    # ─────────────────────────────────────────────────────────────────────────
+    # Compare two morphology blocks for consistency
     def _morphologies_match(self, ref_morph: dict, other_morph: dict) -> bool:
         """Return True if the two morphology dicts are functionally equivalent."""
         for key in ["type", "has_mobile_base", "has_cmd_vel_y", "joint_states_topic"]:
@@ -88,9 +86,7 @@ class RosbagConversionNode(Node):
                 return False
         return True
 
-    # ─────────────────────────────────────────────────────────────────────────
     # Episode extraction
-    # ─────────────────────────────────────────────────────────────────────────
     def _extract_episode_data(self, bag_folder, subtasks_map):
         """
         Iterate over the bag and return a list of (timestamp, frame) tuples.
@@ -104,29 +100,29 @@ class RosbagConversionNode(Node):
         latest_cmd_vel = [0.0, 0.0, 0.0] if self.has_cmd_vel_y else ([0.0, 0.0] if self.has_mobile_base else None)
         latest_cmd_vel_time = 0.0
 
-        # O1: compute wanted topic set and filter connections
+        # Compute wanted topic set and filter connections
+        # TODO: obtain wanted topics from yaml
         wanted = set(self.camera_topics.values()) | {self.joint_states_topic}
         if self.has_mobile_base and self.cmd_vel_topic:
             wanted.add(self.cmd_vel_topic)
 
-        sync_deltas = []  # for F6 quality stats
+        sync_deltas = []
 
         with AnyReader([Path(bag_folder)]) as reader:
-            # F3: pre-validate topics
+            # Pre-validate topics
             available = {c.topic for c in reader.connections}
             missing = wanted - available
             if missing:
                 self.get_logger().warn(f"Bag {bag_folder} missing topics: {missing}. Skipping.")
                 return []
 
-            # O1: filter at connection level
+            # Filter at connection level
             connections = [c for c in reader.connections if c.topic in wanted]
 
             for connection, timestamp, rawdata in reader.messages(connections=connections):
                 topic = connection.topic
                 t_bag = timestamp * 1e-9
 
-                # Bug #3 fix: strict if / elif / elif chain
                 if topic == self.joint_states_topic:
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     joint_pos = dict(zip(msg.name, msg.position))
@@ -160,7 +156,6 @@ class RosbagConversionNode(Node):
 
                     # Snapshot trigger: primary camera
                     if cam_name == self.primary_camera and latest_joint_state is not None:
-                        # Bug #4 fix: require all cameras but only reset primary
                         if any(v is None for v in images.values()):
                             continue
                         if self.has_mobile_base and latest_cmd_vel is None:
@@ -188,7 +183,6 @@ class RosbagConversionNode(Node):
 
                         if not self.skip_cameras:
                             for c_name in self.camera_topics.keys():
-                                # O4: avoid redundant contiguous copy via numpy path
                                 img_arr = np.ascontiguousarray(images[c_name].transpose(2, 0, 1))
                                 frame[f"observation.images.{c_name}"] = torch.from_numpy(img_arr)
 
@@ -202,20 +196,16 @@ class RosbagConversionNode(Node):
                                     end_t = float('inf')
                                 if start_t <= t_sec <= end_t:
                                     label = st_info.get("label", "") if isinstance(st_info, dict) else ""
-                                    # O3: O(1) lookup
                                     current_subtask_idx = self.subtask_label_to_idx.get(label, 0)
                                     break
                             frame["subtask_index"] = torch.tensor([current_subtask_idx], dtype=torch.int64)
 
                         frames.append((t_sec, frame))
-                        # Bug #4 fix: only reset primary camera to trigger next snapshot
                         images[self.primary_camera] = None
 
         return frames, sync_deltas
 
-    # ─────────────────────────────────────────────────────────────────────────
     # Main conversion
-    # ─────────────────────────────────────────────────────────────────────────
     def convert(self):
         self.get_logger().info("Starting dataset conversion...")
         self.get_logger().info(f"Target dataset name: {self.dataset_name}")
@@ -281,7 +271,7 @@ class RosbagConversionNode(Node):
                     self.get_logger().error(f"Error extracting morphology features: {e}")
                     return
             else:
-                # Bug #6: full morphology comparison
+                # Morphology comparison
                 if r_name != robot_ref_name or r_vers != robot_ref_version:
                     self.get_logger().error(
                         f"Robot identity mismatch! Expected {robot_ref_name} v{robot_ref_version}, "
@@ -299,12 +289,11 @@ class RosbagConversionNode(Node):
             if u_info and u_info not in all_users:
                 all_users.append(u_info)
 
-            # Bug #5: iterate tasks dict directly (no tasks_list)
             for t_name, t_info in meta.get("recorded_bags", {}).get("tasks", {}).items():
                 t_info["_meta_source_dir"] = os.path.dirname(meta_file)
                 all_tasks.append((t_name, t_info))
 
-        # ── Camera sensor discovery ──────────────────────────────────────────
+        # Camera sensor discovery
         sensors = robot_info.get("sensors", {})
         sensor_types = sensors.get("types", [])
         camera_data = None
@@ -343,7 +332,7 @@ class RosbagConversionNode(Node):
             self.get_logger().warn(f"Primary camera '{self.primary_camera}' not in topics. Falling back to '{fallback}'.")
             self.primary_camera = fallback
 
-        # ── Subtask index ──────────────────────────────────────────────────
+        # Subtask index
         all_subtasks_set = set()
         for _, task_info in all_tasks:
             for _, ep_meta in task_info.get("episodes", {}).items():
@@ -356,11 +345,10 @@ class RosbagConversionNode(Node):
         self.all_subtasks_list = sorted(list(all_subtasks_set))
         if self.all_subtasks_list:
             self.all_subtasks_list.insert(0, "No Subtask")
-        # O3: build the O(1) lookup dict
         self.subtask_label_to_idx = {label: i for i, label in enumerate(self.all_subtasks_list)}
         self.has_subtasks = len(self.all_subtasks_list) > 0
 
-        # ── Feature schema ────────────────────────────────────────────────
+        # Feature schema
         cmd_vel_keys = []
         if self.has_mobile_base:
             if self.has_cmd_vel_y and self.has_cmd_vel_z:
@@ -373,6 +361,8 @@ class RosbagConversionNode(Node):
                 cmd_vel_keys = ["cmd_vel_x", "cmd_vel_theta"]
 
         action_dim = len(self.action_features) + len(cmd_vel_keys)
+        # TODO: state_dim calculation
+        
         features = {
             "action": {"dtype": "float32", "shape": (action_dim,), "names": self.action_features + cmd_vel_keys},
             "observation.state": {"dtype": "float32", "shape": (action_dim,), "names": self.action_features + cmd_vel_keys},
@@ -392,7 +382,7 @@ class RosbagConversionNode(Node):
                     "names": ["channels", "height", "width"],
                 }
 
-        # ── Create dataset ────────────────────────────────────────────────
+        # Create dataset
         dataset = LeRobotDataset.create(
             repo_id=self.dataset_name,
             fps=fps,
@@ -410,7 +400,7 @@ class RosbagConversionNode(Node):
             if all_users:
                 dataset.info["user_info"] = all_users if len(all_users) > 1 else all_users[0]
 
-        # ── Count total episodes for progress logging (F2) ───────────────
+        # Count total episodes for progress logging
         total_episodes = 0
         for _, task_info in all_tasks:
             meta_src = task_info.get("_meta_source_dir", self.rosbag_directory)
@@ -427,7 +417,7 @@ class RosbagConversionNode(Node):
         first_episode_done = False
         current_episode_num = 0
 
-        # ── Conversion loop ───────────────────────────────────────────────
+        # Conversion loop
         for _, (task_name, task_info) in enumerate(all_tasks):
             meta_src = task_info.get("_meta_source_dir", self.rosbag_directory)
             bag_group = task_info.get("bag_path", task_info.get("bag_dir", task_name))
@@ -453,7 +443,7 @@ class RosbagConversionNode(Node):
                 bagfile = os.path.join(ep_path, bag_files[0])
                 current_episode_num += 1
 
-                # F2: progress bar
+                # progress bar
                 self.get_logger().info(f"[{current_episode_num}/{total_episodes}] Processing: {bagfile}")
 
                 ep_meta = episodes_dict.get(ep, {})
@@ -469,7 +459,8 @@ class RosbagConversionNode(Node):
                     self.get_logger().warn(f"No frames extracted from {bagfile}")
                     continue
 
-                # F5: FPS validation on first episode
+                # FPS validation on first episode
+                # TODO: check onyl first episode?
                 if not first_episode_done and len(frames) > 1:
                     first_episode_done = True
                     duration = frames[-1][0] - frames[0][0]
@@ -486,7 +477,7 @@ class RosbagConversionNode(Node):
 
                 dataset.save_episode(task=instruction)
 
-                # F6: accumulate episode stats
+                # Accumulate episode stats
                 if sync_deltas:
                     self.episode_stats.append({
                         "bag": os.path.basename(ep_path),
@@ -500,7 +491,7 @@ class RosbagConversionNode(Node):
         dataset.finalize()
         self.get_logger().info("Dataset creation completed!")
 
-        # F6: episode quality report
+        # Episode quality report
         if self.episode_stats:
             self.get_logger().info("\n── Episode Quality Report ──────────────────────────────────────────")
             self.get_logger().info(f"{'Episode':<30} {'Frames':>7} {'Avg(ms)':>9} {'Max(ms)':>9} {'Min(ms)':>9}")
