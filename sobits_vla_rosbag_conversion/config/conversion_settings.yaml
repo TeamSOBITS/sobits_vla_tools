@@ -12,3 +12,7 @@
     # The script will snapshot a frame every time a new image arrives from this camera.
     # Typically this should be the most important visual feed (e.g., the head or wrist camera).
     primary_camera: "head_camera"
+
+    # If true, skip all camera image features and produce a state/action-only dataset.
+    # Dramatically faster for quick prototyping or debugging without video encoding.
+    skip_cameras: false
