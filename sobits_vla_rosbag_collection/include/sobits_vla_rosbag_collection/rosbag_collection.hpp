@@ -40,18 +40,23 @@ public:
   std::string morphology;
   std::vector<std::string> parts;
   std::map<std::string, bool> is_actionable;
+  std::map<std::string, std::vector<std::string>> part_topics;
+  std::map<std::string, std::vector<std::string>> part_actions;
   std::map<std::string, std::vector<std::string>> joint_names;
   
   // Custom properties for specific parts like mobile_base/legs
   std::map<std::string, bool> part_has_cmd_vel_y;
   std::map<std::string, bool> part_has_cmd_vel_z;
   std::map<std::string, std::string> part_cmd_vel_topic;
+  std::map<std::string, std::string> part_odom_topic;
   std::string joint_states_topic;
 
   std::vector<std::string> sensor_types;
   std::map<std::string, std::vector<std::string>> sensor_names;
   std::map<std::string, std::vector<std::string>> sensor_models;
   std::map<std::string, std::vector<std::string>> sensor_topics;
+  std::map<std::string, bool> sensor_add_compressed;
+  std::map<std::string, bool> sensor_add_cam_info;
 };
 
 class UserInfo
@@ -75,9 +80,9 @@ class RosbagInfo
 {
 public:
   std::string recording_dir;
-  std::vector<std::string> topics_to_record;
-  std::vector<std::string> services_to_record;
-  std::vector<std::string> actions_to_record;
+  std::vector<std::string> additional_topics;
+  std::vector<std::string> additional_services;
+  std::vector<std::string> additional_actions;
   int fps;
   double sync_threshold;
   // uint8_t recording_duration;
