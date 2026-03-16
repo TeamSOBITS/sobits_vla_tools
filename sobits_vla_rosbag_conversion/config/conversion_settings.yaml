@@ -4,9 +4,11 @@
     # If left empty (""), it defaults to the `rosbags` folder of `sobits_vla_rosbag_collection`.
     rosbag_directory: ""
 
-    # Path to the recorded bags metadata yaml.
-    # If left empty (""), it defaults to `recorded_bags_meta.yaml` inside the resolved `rosbag_directory`.
-    recorded_bags_meta_file: ""
-
     # HuggingFace repository ID or local dataset directory name
     dataset_name: "MyDataset"
+
+    # Primary camera to use as the synchronization trigger for frame assembly.
+    # Must match one of the camera names defined in the `rgb_cam.names` list of `recorded_bags_meta.yaml`.
+    # The script will snapshot a frame every time a new image arrives from this camera.
+    # Typically this should be the most important visual feed (e.g., the head or wrist camera).
+    primary_camera: "head_camera"
