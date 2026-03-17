@@ -112,6 +112,9 @@
       # Path to the directory where the recorded bag files will be saved.
       # If left empty (""), the launcher will dynamically resolve it to the `rosbags` folder inside `sobits_vla_rosbag_collection`.
       record_directory: ""
+      # Minimum free disk space (MB) before warning/stopping recording.
+      # Default 2048 MB (2 GB). Set to 0 to disable.
+      min_disk_space_mb: 2048
       # Expected sensor publish rate (Hz) for live FPS monitoring during recording.
       # Warns if any camera or joint_states topic drops below 80% of this rate.
       # Set to 0 to disable monitoring.

@@ -114,6 +114,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 
   // (3) Rosbag parameters
   this->declare_parameter<std::string>("rosbag_config.record_directory", "");
+  this->declare_parameter<int>("rosbag_config.min_disk_space_mb", 2048);
   this->declare_parameter<int>("rosbag_config.expected_sensor_fps", 0);
   this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_topics", std::vector<std::string>{});
   this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_services", std::vector<std::string>{});
@@ -122,6 +123,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("rosbag_config.compression_format", "zstd");
   this->declare_parameter<std::string>("rosbag_config.compression_mode", "none");
   this->declare_parameter<std::string>("rosbag_config.rmw_serialization_format", "cdr");
+  min_disk_space_mb_                = static_cast<uint64_t>(this->get_parameter("rosbag_config.min_disk_space_mb").as_int());
   expected_sensor_fps_              = this->get_parameter("rosbag_config.expected_sensor_fps").as_int();
   rosbag_info_.recording_dir        = this->get_parameter("rosbag_config.record_directory").as_string();
   rosbag_info_.additional_topics    = this->get_parameter("rosbag_config.additional_topics").as_string_array();
@@ -220,6 +222,21 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     {
       RCLCPP_ERROR(this->get_logger(), "Failed to create recording directory: %s", e.what());
       throw std::runtime_error("Failed to create recording directory");
+    }
+  }
+
+  // Startup disk space check
+  if (min_disk_space_mb_ > 0) {
+    try {
+      auto space = std::filesystem::space(rosbag_info_.recording_dir);
+      uint64_t free_mb = space.available / (1024 * 1024);
+      RCLCPP_INFO(this->get_logger(), "Disk space: %lu MB free (minimum: %lu MB)", free_mb, min_disk_space_mb_);
+      if (free_mb < min_disk_space_mb_) {
+        RCLCPP_ERROR(this->get_logger(),
+          "LOW DISK SPACE at startup! Free up space before recording.");
+      }
+    } catch (const std::filesystem::filesystem_error & e) {
+      RCLCPP_WARN(this->get_logger(), "Failed to check disk space: %s", e.what());
     }
   }
 
@@ -408,9 +425,12 @@ bool RosbagCollection::validateTopics()
   return all_ok;
 }
 
-void RosbagCollection::startFpsMonitor()
+void RosbagCollection::startRecordingMonitor()
 {
-  if (expected_sensor_fps_ <= 0) return;
+  if (expected_sensor_fps_ <= 0 && min_disk_space_mb_ == 0) return;
+
+  // FPS topic subscriptions (only if fps monitoring is enabled)
+  if (expected_sensor_fps_ > 0) {
 
   // Collect topics to monitor: cameras + joint_states + command topics
   std::set<std::string> monitor_topics;
@@ -445,15 +465,18 @@ void RosbagCollection::startFpsMonitor()
       });
     monitor_subs_.push_back(sub);
   }
+  } // end if (expected_sensor_fps_ > 0)
 
-  // Timer: check rates every 2 seconds
+  // Timer: check rates and disk space every 2 seconds
   fps_monitor_timer_ = this->create_wall_timer(
     std::chrono::seconds(2),
     [this]() {
       if (!is_recording_) return;
+
+      // FPS checks
+      if (expected_sensor_fps_ > 0) {
       double interval = 2.0;
       double threshold = expected_sensor_fps_ * 0.8;
-
       for (auto & [topic, prev_count] : monitor_prev_counts_) {
         uint64_t current = monitor_counts_[topic].load();
         double rate = static_cast<double>(current - prev_count) / interval;
@@ -468,13 +491,30 @@ void RosbagCollection::startFpsMonitor()
             "FPS STALL: '%s' stopped publishing!", topic.c_str());
         }
       }
+      } // end if (expected_sensor_fps_ > 0)
+
+      // Disk space check
+      if (min_disk_space_mb_ > 0) {
+        try {
+          auto space = std::filesystem::space(rosbag_info_.recording_dir);
+          uint64_t free_mb = space.available / (1024 * 1024);
+          if (free_mb < min_disk_space_mb_) {
+            RCLCPP_ERROR(this->get_logger(),
+              "LOW DISK SPACE: %lu MB free (minimum: %lu MB). "
+              "Recording may produce corrupted bags!",
+              free_mb, min_disk_space_mb_);
+          }
+        } catch (const std::filesystem::filesystem_error & e) {
+          RCLCPP_WARN(this->get_logger(), "Failed to check disk space: %s", e.what());
+        }
+      }
     });
 
-  RCLCPP_INFO(this->get_logger(), "FPS monitor started: watching %zu topics at expected %d Hz.",
-    monitor_subs_.size(), expected_sensor_fps_);
+  RCLCPP_INFO(this->get_logger(), "Recording monitor started (fps_topics=%zu, expected_hz=%d, min_disk_mb=%lu).",
+    monitor_subs_.size(), expected_sensor_fps_, min_disk_space_mb_);
 }
 
-void RosbagCollection::stopFpsMonitor()
+void RosbagCollection::stopRecordingMonitor()
 {
   if (fps_monitor_timer_) {
     fps_monitor_timer_->cancel();
@@ -572,14 +612,14 @@ void RosbagCollection::createRosbag()
   });
 
   RCLCPP_INFO(this->get_logger(), "Rosbag recording started successfully");
-  startFpsMonitor();
+  startRecordingMonitor();
 }
 
 
 void RosbagCollection::removeRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Removing rosbag...");
-  stopFpsMonitor();
+  stopRecordingMonitor();
 
   std::lock_guard<std::mutex> lock(recorder_mutex_);
 
@@ -624,7 +664,7 @@ void RosbagCollection::removeRosbag()
 void RosbagCollection::saveRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Saving rosbag...");
-  stopFpsMonitor();
+  stopRecordingMonitor();
 
   std::lock_guard<std::mutex> lock(recorder_mutex_);
 

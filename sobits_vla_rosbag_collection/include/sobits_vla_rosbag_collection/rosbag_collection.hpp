@@ -111,8 +111,8 @@ public:
   void removeEpisodeFromYaml();
   void buildTopicList();
   bool validateTopics();
-  void startFpsMonitor();
-  void stopFpsMonitor();
+  void startRecordingMonitor();
+  void stopRecordingMonitor();
   std::string getTimestampString();
 
 private:
@@ -149,8 +149,9 @@ private:
   std::map<std::string, rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr> camera_info_subs_;
   std::map<std::string, std::pair<uint32_t, uint32_t>> camera_dimensions_;
 
-  // FPS monitoring during recording
+  // Recording health monitoring
   int expected_sensor_fps_{0};
+  uint64_t min_disk_space_mb_{2048};  // minimum free disk space in MB (default 2GB)
   std::vector<rclcpp::GenericSubscription::SharedPtr> monitor_subs_;
   std::map<std::string, std::atomic<uint64_t>> monitor_counts_;
   std::map<std::string, uint64_t> monitor_prev_counts_;
