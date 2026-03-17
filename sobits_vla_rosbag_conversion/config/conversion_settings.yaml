@@ -29,6 +29,11 @@
     #                If empty, all cameras found in metadata are included.
     # `compressed` - one bool per entry in `names`; true = use compressed_topics, false = use raw topics.
     #                Entries beyond the length of `names` are ignored; missing entries default to false.
+    # Skip frames where no joint is moving (all velocities below threshold).
+    # Useful for removing idle segments from the dataset.
+    # Set threshold to 0.0 to disable.
+    skip_static_threshold: 0.0
+
     cameras:
       skip: false
       primary: "head_camera"

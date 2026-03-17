@@ -28,6 +28,7 @@ class RosbagConversionNode(Node):
         self.declare_parameter('output_directory', '')
         self.declare_parameter('push_to_hub', False)
         self.declare_parameter('hub_private', False)
+        self.declare_parameter('skip_static_threshold', 0.0)
         self.declare_parameter('cameras.skip', False)
         self.declare_parameter('cameras.primary', 'head_camera')
         self.declare_parameter('cameras.names', [''])
@@ -39,6 +40,7 @@ class RosbagConversionNode(Node):
         self.output_directory = Path(output_dir) if output_dir else None
         self.push_to_hub = self.get_parameter('push_to_hub').get_parameter_value().bool_value
         self.hub_private = self.get_parameter('hub_private').get_parameter_value().bool_value
+        self.skip_static_threshold = self.get_parameter('skip_static_threshold').get_parameter_value().double_value
         self.skip_cameras = self.get_parameter('cameras.skip').get_parameter_value().bool_value
         self.primary_camera = self.get_parameter('cameras.primary').get_parameter_value().string_value
         raw_names = self.get_parameter('cameras.names').get_parameter_value().string_array_value
@@ -108,6 +110,7 @@ class RosbagConversionNode(Node):
         images = {cam_name: None for cam_name in self.camera_topics.keys()}
         image_times = {cam_name: 0.0 for cam_name in self.camera_topics.keys()}
         latest_joint_state = None
+        latest_joint_velocity = None
         latest_joint_time = 0.0
         latest_cmd_vel = [0.0, 0.0, 0.0] if self.has_cmd_vel_y else ([0.0, 0.0] if self.has_mobile_base else None)
         latest_cmd_vel_time = 0.0
@@ -138,8 +141,10 @@ class RosbagConversionNode(Node):
                 if topic == self.joint_states_topic:
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     joint_pos = dict(zip(msg.name, msg.position))
+                    joint_vel = dict(zip(msg.name, msg.velocity)) if msg.velocity else {}
                     t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
                     latest_joint_state = [joint_pos.get(feat, 0.0) for feat in self.action_features]
+                    latest_joint_velocity = [joint_vel.get(feat, 0.0) for feat in self.action_features]
                     latest_joint_time = t_sec
 
                 elif topic == self.cmd_vel_topic and self.has_mobile_base:
@@ -186,6 +191,11 @@ class RosbagConversionNode(Node):
                                 f"joint_diff={joint_diff:.3f}s, cmd_vel_diff={cmd_vel_diff:.3f}s"
                             )
                         sync_deltas.append(max_sync)
+
+                        # Skip static frames: skip if no joint velocity exceeds threshold
+                        if self.skip_static_threshold > 0.0 and latest_joint_velocity is not None:
+                            if not np.any(np.abs(latest_joint_velocity) > self.skip_static_threshold):
+                                continue
 
                         action = latest_joint_state + (latest_cmd_vel if self.has_mobile_base else [])
                         frame = {
