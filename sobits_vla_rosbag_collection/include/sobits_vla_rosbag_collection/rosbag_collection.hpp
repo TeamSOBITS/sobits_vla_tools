@@ -112,6 +112,7 @@ public:
   void updateEpisodeYaml();
   void removeEpisodeFromYaml();
   void buildTopicList();
+  bool validateTopics();
   std::string getTimestampString();
 
 private:

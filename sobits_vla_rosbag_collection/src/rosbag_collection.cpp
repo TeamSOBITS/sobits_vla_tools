@@ -210,6 +210,9 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   // Build the topic list once and cache it
   buildTopicList();
 
+  // Validate that declared topics exist on the ROS graph
+  validateTopics();
+
   // Create the recording directory if it does not exist
   if (!std::filesystem::exists(rosbag_info_.recording_dir)) {
     try {
@@ -311,9 +314,111 @@ void RosbagCollection::buildTopicList()
   RCLCPP_INFO(this->get_logger(), "Cached %zu topics to record.", rosbag_info_.topics_to_record.size());
 }
 
+bool RosbagCollection::validateTopics()
+{
+  // Query the live ROS graph for currently published topics
+  auto graph_topics = this->get_topic_names_and_types();
+  std::set<std::string> active_topics;
+  for (const auto & [name, types] : graph_topics) {
+    active_topics.insert(name);
+  }
+
+  // Build a set of critical topics (those needed by conversion)
+  std::set<std::string> critical;
+  critical.insert(robot_info_.joint_states_topic);
+  for (const auto & part : robot_info_.parts) {
+    if (!robot_info_.part_command_topic[part].empty()) {
+      critical.insert(robot_info_.part_command_topic[part]);
+    }
+    if (robot_info_.part_cmd_vel_topic.count(part) && !robot_info_.part_cmd_vel_topic.at(part).empty()) {
+      critical.insert(robot_info_.part_cmd_vel_topic.at(part));
+    }
+  }
+  // Primary camera topics
+  for (const auto & sensor_type : robot_info_.sensor_types) {
+    for (const auto & topic : robot_info_.sensor_topics[sensor_type]) {
+      if (!topic.empty()) {
+        critical.insert(topic);
+      }
+    }
+  }
+
+  // Check all topics to record against the graph
+  bool all_ok = true;
+  std::vector<std::string> missing_critical;
+  std::vector<std::string> missing_other;
+
+  for (const auto & topic : rosbag_info_.topics_to_record) {
+    if (active_topics.find(topic) == active_topics.end()) {
+      if (critical.count(topic)) {
+        missing_critical.push_back(topic);
+      } else {
+        missing_other.push_back(topic);
+      }
+    }
+  }
+
+  if (!missing_critical.empty()) {
+    all_ok = false;
+    RCLCPP_ERROR(this->get_logger(),
+      "CRITICAL: %zu topic(s) required for dataset conversion are NOT published!",
+      missing_critical.size());
+    for (const auto & t : missing_critical) {
+      std::string role = "unknown";
+      if (t == robot_info_.joint_states_topic) {
+        role = "joint state observation";
+      } else {
+        for (const auto & part : robot_info_.parts) {
+          if (robot_info_.part_command_topic.count(part) && robot_info_.part_command_topic.at(part) == t) {
+            role = "joint command (" + part + ")";
+            break;
+          }
+          if (robot_info_.part_cmd_vel_topic.count(part) && robot_info_.part_cmd_vel_topic.at(part) == t) {
+            role = "base velocity command";
+            break;
+          }
+        }
+        if (role == "unknown") {
+          for (const auto & stype : robot_info_.sensor_types) {
+            for (size_t i = 0; i < robot_info_.sensor_topics[stype].size(); ++i) {
+              if (robot_info_.sensor_topics[stype][i] == t) {
+                role = "camera (" + (i < robot_info_.sensor_names[stype].size()
+                  ? robot_info_.sensor_names[stype][i] : "?") + ")";
+                break;
+              }
+            }
+          }
+        }
+      }
+      RCLCPP_ERROR(this->get_logger(), "  MISSING: %s  (%s)", t.c_str(), role.c_str());
+    }
+  }
+
+  if (!missing_other.empty()) {
+    RCLCPP_WARN(this->get_logger(),
+      "%zu non-critical topic(s) are not currently published:", missing_other.size());
+    for (const auto & t : missing_other) {
+      RCLCPP_WARN(this->get_logger(), "  not found: %s", t.c_str());
+    }
+  }
+
+  if (all_ok && missing_other.empty()) {
+    RCLCPP_INFO(this->get_logger(), "All %zu topics are active on the ROS graph.",
+      rosbag_info_.topics_to_record.size());
+  }
+
+  return all_ok;
+}
+
 void RosbagCollection::createRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Starting recording...");
+
+  // Pre-recording topic health check
+  if (!validateTopics()) {
+    RCLCPP_WARN(this->get_logger(),
+      "Some critical topics are missing. Recording will proceed, but the bag may not be convertible.");
+  }
 
   std::lock_guard<std::mutex> lock(recorder_mutex_);
 
