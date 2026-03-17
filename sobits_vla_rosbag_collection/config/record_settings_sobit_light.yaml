@@ -66,10 +66,10 @@
       # List of sensors on the robot
       sensors:
         types:
-          - rgb_cam # color camera
-          - depth_cam # depth camera
-          - point_cloud
-          - lidar # light detection and ranging sensor
+          - rgb_cam # color images
+          - depth_cam # depth images
+          # - point_cloud # point cloud data (e.g., from a LiDAR or depth camera)
+          # - lidar # light detection and ranging sensor
         rgb_cam:
           names: ["head_camera", "hand_camera", "camera_front", "camera_rear"]
           models: ["realsense_d435", "realsense_d455", "unk", "unk"]
@@ -89,7 +89,6 @@
               "/sobit_light/back_camera/camera_info",
             ]
           add_compressed: true # automatically also record the /compressed variant of each topic
-          add_cam_info: true # automatically also record the /camera_info variant of each topic
         lidar:
           names: ["lidar_front"]
           models: ["unk"]
@@ -121,10 +120,10 @@
         - /sobit_light/joy
         - /tf
         - /tf_static
-      # Additional services to record (TODO: not available until ROS 2 Jazzy)
+      # Additional services to record
       additional_services:
         - ""
-      # Additional actions to record (TODO: not available until ROS 2 Kilted)
+      # Additional actions to record
       additional_actions:
         - ""
       # Format for the recorded bag files (e.g., "mcap", "sqlite3")

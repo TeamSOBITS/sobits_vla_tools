@@ -57,7 +57,6 @@ public:
   std::map<std::string, std::vector<std::string>> sensor_topics;
   std::map<std::string, std::vector<std::string>> sensor_info_topics;  // explicit camera_info topics
   std::map<std::string, bool> sensor_add_compressed;
-  std::map<std::string, bool> sensor_add_cam_info;
 };
 
 class UserInfo
