@@ -113,6 +113,7 @@ public:
   bool validateTopics();
   void startRecordingMonitor();
   void stopRecordingMonitor();
+  bool verifyBagIntegrity(const std::string & bag_path);
   std::string getTimestampString();
 
 private:

@@ -9,6 +9,8 @@
 #include <set>          // For topic deduplication in buildTopicList()
 
 #include "rosbag2_cpp/writer.hpp"
+#include "rosbag2_cpp/reader.hpp"
+#include "rosbag2_cpp/readers/sequential_reader.hpp"
 #include <chrono>
 #include <iomanip>
 #include <sstream>
@@ -720,9 +722,93 @@ void RosbagCollection::saveRosbag()
     return;
   }
 
+  // Bag integrity check
+  if (!verifyBagIntegrity(current_bag_path_)) {
+    RCLCPP_ERROR(this->get_logger(),
+      "Bag integrity check FAILED for: %s. Discarding.", current_bag_path_.c_str());
+    if (std::filesystem::exists(current_bag_path_)) {
+      std::filesystem::remove_all(current_bag_path_);
+    }
+    removeEpisodeFromYaml();
+    return;
+  }
+
   updateEpisodeYaml();
 
   RCLCPP_INFO(this->get_logger(), "Rosbag saved successfully (duration: %.1fs)", duration_sec);
+}
+
+bool RosbagCollection::verifyBagIntegrity(const std::string & bag_path)
+{
+  // 1. Check directory exists
+  if (!std::filesystem::exists(bag_path)) {
+    RCLCPP_ERROR(this->get_logger(), "Bag directory does not exist: %s", bag_path.c_str());
+    return false;
+  }
+
+  // 2. Check for storage files (.mcap or .db3)
+  bool has_storage_file = false;
+  uintmax_t storage_size = 0;
+  for (const auto & entry : std::filesystem::directory_iterator(bag_path)) {
+    auto ext = entry.path().extension().string();
+    if (ext == ".mcap" || ext == ".db3") {
+      has_storage_file = true;
+      storage_size = entry.file_size();
+      break;
+    }
+  }
+  if (!has_storage_file) {
+    RCLCPP_ERROR(this->get_logger(), "No .mcap or .db3 file found in: %s", bag_path.c_str());
+    return false;
+  }
+  if (storage_size == 0) {
+    RCLCPP_ERROR(this->get_logger(), "Storage file is empty (0 bytes) in: %s", bag_path.c_str());
+    return false;
+  }
+
+  // 3. Try opening with rosbag2 reader and check topic/message counts
+  try {
+    rosbag2_cpp::Reader reader;
+    rosbag2_storage::StorageOptions storage_opts;
+    storage_opts.uri = bag_path;
+    storage_opts.storage_id = rosbag_info_.conversion_format;
+    reader.open(storage_opts);
+
+    auto metadata = reader.get_metadata();
+    size_t total_messages = 0;
+    std::vector<std::string> empty_topics;
+    for (const auto & topic_info : metadata.topics_with_message_count) {
+      total_messages += topic_info.message_count;
+      if (topic_info.message_count == 0) {
+        empty_topics.push_back(topic_info.topic_metadata.name);
+      }
+    }
+
+    if (total_messages == 0) {
+      RCLCPP_ERROR(this->get_logger(), "Bag has 0 messages: %s", bag_path.c_str());
+      return false;
+    }
+
+    if (!empty_topics.empty()) {
+      RCLCPP_WARN(this->get_logger(),
+        "Bag has %zu topic(s) with 0 messages:", empty_topics.size());
+      for (const auto & t : empty_topics) {
+        RCLCPP_WARN(this->get_logger(), "  empty: %s", t.c_str());
+      }
+    }
+
+    RCLCPP_INFO(this->get_logger(),
+      "Bag integrity OK: %zu topics, %zu messages, %.1f MB",
+      metadata.topics_with_message_count.size(),
+      total_messages,
+      static_cast<double>(storage_size) / (1024.0 * 1024.0));
+
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to read bag: %s — %s", bag_path.c_str(), e.what());
+    return false;
+  }
+
+  return true;
 }
 
 void RosbagCollection::createRosbagYaml()
