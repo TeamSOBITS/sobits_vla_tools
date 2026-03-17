@@ -280,22 +280,26 @@ class RosbagConversionNode(Node):
                             ee_mat = tf_tree.resolve(
                                 self.ee_pose_target, self.ee_pose_source, stamp_ns
                             )
-                            if ee_mat is not None:
-                                ee_abs = mat_to_pose6d(ee_mat)
-                                # Unwrap angles for continuity before computing relative
-                                if prev_ee_pose is not None:
-                                    for ax in range(3, 6):
-                                        diff = ee_abs[ax] - prev_ee_pose[ax]
-                                        if diff > np.pi:
-                                            ee_abs[ax] -= 2 * np.pi
-                                        elif diff < -np.pi:
-                                            ee_abs[ax] += 2 * np.pi
-                                    ee_rel = ee_abs - prev_ee_pose
-                                else:
-                                    ee_rel = np.zeros(6, dtype=np.float32)
-                                frame["observation.ee_pose"] = torch.from_numpy(ee_abs)
-                                frame["observation.ee_pose.delta"] = torch.from_numpy(ee_rel)
-                                prev_ee_pose = ee_abs.copy()
+                            if ee_mat is None:
+                                self.get_logger().warn(
+                                    f"TF lookup failed: '{self.ee_pose_source}' → '{self.ee_pose_target}' "
+                                    f"at t={t_sec:.3f}s. Skipping frame."
+                                )
+                                continue
+                            ee_abs = mat_to_pose6d(ee_mat)
+                            if prev_ee_pose is not None:
+                                for ax in range(3, 6):
+                                    diff = ee_abs[ax] - prev_ee_pose[ax]
+                                    if diff > np.pi:
+                                        ee_abs[ax] -= 2 * np.pi
+                                    elif diff < -np.pi:
+                                        ee_abs[ax] += 2 * np.pi
+                                ee_rel = ee_abs - prev_ee_pose
+                            else:
+                                ee_rel = np.zeros(6, dtype=np.float32)
+                            frame["observation.ee_pose"] = torch.from_numpy(ee_abs.copy())
+                            frame["observation.ee_pose.delta"] = torch.from_numpy(ee_rel)
+                            prev_ee_pose = ee_abs.copy()
 
                         if not self.skip_cameras:
                             for c_name in self.camera_topics.keys():
