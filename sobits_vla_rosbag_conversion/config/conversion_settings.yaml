@@ -34,6 +34,17 @@
     # Set threshold to 0.0 to disable.
     skip_static_threshold: 0.0
 
+    # End-effector pose observation via TF tree.
+    # Computes 6D pose (x, y, z, roll, pitch, yaw) from the TF chain.
+    # `enabled`      - if true, include EE pose as an observation feature.
+    # `target_frame` - reference frame (usually the robot base).
+    # `source_frame` - end-effector frame (e.g. "hand_palm_link").
+    # Both frames must exist in /tf or /tf_static recorded in the bag.
+    ee_pose:
+      enabled: false
+      target_frame: "base_link"
+      source_frame: "hand_palm_link"
+
     cameras:
       skip: false
       primary: "head_camera"

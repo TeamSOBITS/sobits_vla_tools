@@ -17,6 +17,7 @@ from rclpy.node import Node
 from rosbags.highlevel import AnyReader
 from rosbags.image import message_to_cvimage
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from sobits_vla_rosbag_conversion.tf_buffer import OfflineTFTree, mat_to_pose6d
 
 
 class RosbagConversionNode(Node):
@@ -29,6 +30,9 @@ class RosbagConversionNode(Node):
         self.declare_parameter('push_to_hub', False)
         self.declare_parameter('hub_private', False)
         self.declare_parameter('skip_static_threshold', 0.0)
+        self.declare_parameter('ee_pose.enabled', False)
+        self.declare_parameter('ee_pose.target_frame', 'base_link')
+        self.declare_parameter('ee_pose.source_frame', 'hand_palm_link')
         self.declare_parameter('cameras.skip', False)
         self.declare_parameter('cameras.primary', 'head_camera')
         self.declare_parameter('cameras.names', [''])
@@ -41,6 +45,9 @@ class RosbagConversionNode(Node):
         self.push_to_hub = self.get_parameter('push_to_hub').get_parameter_value().bool_value
         self.hub_private = self.get_parameter('hub_private').get_parameter_value().bool_value
         self.skip_static_threshold = self.get_parameter('skip_static_threshold').get_parameter_value().double_value
+        self.ee_pose_enabled = self.get_parameter('ee_pose.enabled').get_parameter_value().bool_value
+        self.ee_pose_target = self.get_parameter('ee_pose.target_frame').get_parameter_value().string_value
+        self.ee_pose_source = self.get_parameter('ee_pose.source_frame').get_parameter_value().string_value
         self.skip_cameras = self.get_parameter('cameras.skip').get_parameter_value().bool_value
         self.primary_camera = self.get_parameter('cameras.primary').get_parameter_value().string_value
         raw_names = self.get_parameter('cameras.names').get_parameter_value().string_array_value
@@ -116,11 +123,17 @@ class RosbagConversionNode(Node):
         latest_cmd_vel_time = 0.0
         action_initialized = False  # True once a real command is received
 
+        # EE pose tracking
+        tf_tree = OfflineTFTree() if self.ee_pose_enabled else None
+        prev_ee_pose = None
+
         # Compute wanted topic set and filter connections
         # TODO: obtain wanted topics from yaml
         wanted = set(self.camera_topics.values()) | {self.joint_states_topic}
         if self.has_mobile_base and self.cmd_vel_topic:
             wanted.add(self.cmd_vel_topic)
+        if self.ee_pose_enabled:
+            wanted |= {"/tf", "/tf_static"}
 
         last_frame_time = 0.0  # timestamp of the last assembled frame (for freshness)
 
@@ -149,6 +162,10 @@ class RosbagConversionNode(Node):
                     latest_joint_state = [joint_pos.get(feat, 0.0) for feat in self.action_features]
                     latest_joint_velocity = [joint_vel.get(feat, 0.0) for feat in self.action_features]
                     latest_joint_time = t_sec
+
+                elif tf_tree is not None and topic in ("/tf", "/tf_static"):
+                    msg = reader.deserialize(rawdata, connection.msgtype)
+                    tf_tree.ingest(msg, is_static=(topic == "/tf_static"))
 
                 elif topic == self.cmd_vel_topic and self.has_mobile_base:
                     msg = reader.deserialize(rawdata, connection.msgtype)
@@ -236,6 +253,29 @@ class RosbagConversionNode(Node):
                         if self.has_mobile_base:
                             delta_freshness += [cmd_vel_fresh] * len(latest_cmd_vel)
                         frame["action.delta.is_fresh"] = torch.tensor(delta_freshness, dtype=torch.bool)
+
+                        # End-effector pose via TF chain
+                        if tf_tree is not None:
+                            stamp_ns = int(t_sec * 1e9)
+                            ee_mat = tf_tree.resolve(
+                                self.ee_pose_target, self.ee_pose_source, stamp_ns
+                            )
+                            if ee_mat is not None:
+                                ee_abs = mat_to_pose6d(ee_mat)
+                                # Unwrap angles for continuity before computing relative
+                                if prev_ee_pose is not None:
+                                    for ax in range(3, 6):
+                                        diff = ee_abs[ax] - prev_ee_pose[ax]
+                                        if diff > np.pi:
+                                            ee_abs[ax] -= 2 * np.pi
+                                        elif diff < -np.pi:
+                                            ee_abs[ax] += 2 * np.pi
+                                    ee_rel = ee_abs - prev_ee_pose
+                                else:
+                                    ee_rel = np.zeros(6, dtype=np.float32)
+                                frame["observation.ee_pose"] = torch.from_numpy(ee_abs)
+                                frame["observation.ee_pose.delta"] = torch.from_numpy(ee_rel)
+                                prev_ee_pose = ee_abs.copy()
 
                         if not self.skip_cameras:
                             for c_name in self.camera_topics.keys():
@@ -446,6 +486,15 @@ class RosbagConversionNode(Node):
             "observation.state": {"dtype": "float32", "shape": (action_dim,), "names": self.action_features + cmd_vel_keys},
             "observation.state.is_fresh": {"dtype": "bool", "shape": (action_dim,), "names": None},
         }
+        if self.ee_pose_enabled:
+            ee_names = ["x", "y", "z", "roll", "pitch", "yaw"]
+            features["observation.ee_pose"] = {
+                "dtype": "float32", "shape": (6,), "names": ee_names,
+            }
+            features["observation.ee_pose.delta"] = {
+                "dtype": "float32", "shape": (6,), "names": ee_names,
+            }
+
         if self.has_subtasks:
             features["subtask_index"] = {"dtype": "int64", "shape": (1,), "names": ["subtask_index"]}
 
