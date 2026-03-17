@@ -114,6 +114,7 @@ class RosbagConversionNode(Node):
         latest_joint_time = 0.0
         latest_cmd_vel = [0.0, 0.0, 0.0] if self.has_cmd_vel_y else ([0.0, 0.0] if self.has_mobile_base else None)
         latest_cmd_vel_time = 0.0
+        action_initialized = False  # True once a real command is received
 
         # Compute wanted topic set and filter connections
         # TODO: obtain wanted topics from yaml
@@ -159,6 +160,7 @@ class RosbagConversionNode(Node):
                     else:
                         latest_cmd_vel = [msg.linear.x, msg.angular.z]
                     latest_cmd_vel_time = t_sec
+                    action_initialized = True
 
                 elif topic in self.topic_to_cam:
                     cam_name = self.topic_to_cam[topic]
@@ -197,10 +199,15 @@ class RosbagConversionNode(Node):
                             if not np.any(np.abs(latest_joint_velocity) > self.skip_static_threshold):
                                 continue
 
-                        action = latest_joint_state + (latest_cmd_vel if self.has_mobile_base else [])
+                        state = latest_joint_state + (latest_cmd_vel if self.has_mobile_base else [])
+                        # Action: use current state as action if no command received yet
+                        if not action_initialized and self.has_mobile_base:
+                            action = latest_joint_state + ([0.0] * len(latest_cmd_vel))
+                        else:
+                            action = state[:]
                         frame = {
                             "action": torch.tensor(action, dtype=torch.float32),
-                            "observation.state": torch.tensor(action, dtype=torch.float32),
+                            "observation.state": torch.tensor(state, dtype=torch.float32),
                         }
 
                         if not self.skip_cameras:
