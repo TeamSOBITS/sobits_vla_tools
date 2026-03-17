@@ -69,8 +69,9 @@ class RosbagConversionNode(Node):
         self.subtask_label_to_idx = {}
         self.has_subtasks = False
 
-        # Episode quality tracking
+        # Conversion tracking
         self.episode_stats = []
+        self.skipped_bags = []  # [(bag_path, [missing_topics])]
 
         # One-shot timer to start conversion after the node is ready
         self.timer = self.create_timer(1.0, self.timer_callback)
@@ -114,6 +115,9 @@ class RosbagConversionNode(Node):
         Uses connection-level topic filter (O1) and cached topic_to_cam (O2).
         """
         frames = []
+        skipped_static = 0
+        skipped_tf = 0
+        skipped_img_decode = 0
         images = {cam_name: None for cam_name in self.camera_topics.keys()}
         image_times = {cam_name: 0.0 for cam_name in self.camera_topics.keys()}
         latest_joint_state = None
@@ -142,12 +146,37 @@ class RosbagConversionNode(Node):
         sync_deltas = []
 
         with AnyReader([Path(bag_folder)]) as reader:
-            # Pre-validate topics
+            # Pre-validate topics — log each missing topic with its purpose
             available = {c.topic for c in reader.connections}
             missing = wanted - available
             if missing:
-                self.get_logger().warn(f"Bag {bag_folder} missing topics: {missing}. Skipping.")
-                return []
+                self.get_logger().error(f"Bag '{bag_folder}' is missing {len(missing)} required topic(s). Skipping episode.")
+                for m in sorted(missing):
+                    if m == self.joint_states_topic:
+                        reason = "joint state observation"
+                    elif m in self.part_command_topics:
+                        reason = "joint command (action)"
+                    elif m == self.cmd_vel_topic:
+                        reason = "base velocity command (action.base)"
+                    elif m in self.topic_to_cam:
+                        reason = f"camera image ({self.topic_to_cam[m]})"
+                    elif m in ("/tf", "/tf_static"):
+                        reason = "TF transforms (ee_pose)"
+                    else:
+                        reason = "unknown"
+                    self.get_logger().error(f"  missing: {m}  ({reason})")
+                self.skipped_bags.append({
+                    "bag": bag_folder,
+                    "reason": "missing_topics",
+                    "missing": {m: reason for m in sorted(missing) for reason in [
+                        "joint_state" if m == self.joint_states_topic else
+                        "joint_command" if m in self.part_command_topics else
+                        "base_velocity" if m == self.cmd_vel_topic else
+                        f"camera:{self.topic_to_cam[m]}" if m in self.topic_to_cam else
+                        "tf" if m in ("/tf", "/tf_static") else "unknown"
+                    ]},
+                })
+                return None
 
             # Filter at connection level
             connections = [c for c in reader.connections if c.topic in wanted]
@@ -195,10 +224,23 @@ class RosbagConversionNode(Node):
                 elif topic in self.topic_to_cam:
                     cam_name = self.topic_to_cam[topic]
                     msg = reader.deserialize(rawdata, connection.msgtype)
-                    img = message_to_cvimage(msg)
-                    if len(img.shape) == 3 and img.shape[2] == 3:
-                        if msg.encoding in ['bgr8', 'bgra8']:
+                    try:
+                        if hasattr(msg, 'format'):
+                            # CompressedImage: decode JPEG/PNG bytes via OpenCV
+                            img = cv2.imdecode(np.frombuffer(msg.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                            if img is None:
+                                skipped_img_decode += 1
+                                continue
                             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                        else:
+                            # Raw Image: use rosbags conversion
+                            img = message_to_cvimage(msg)
+                            if len(img.shape) == 3 and img.shape[2] == 3:
+                                if msg.encoding in ['bgr8', 'bgra8']:
+                                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    except Exception:
+                        skipped_img_decode += 1
+                        continue
                     t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
                     images[cam_name] = img
                     image_times[cam_name] = t_sec
@@ -227,6 +269,7 @@ class RosbagConversionNode(Node):
                         # Skip static frames: skip if no joint velocity exceeds threshold
                         if self.skip_static_threshold > 0.0 and latest_joint_velocity is not None:
                             if not np.any(np.abs(latest_joint_velocity) > self.skip_static_threshold):
+                                skipped_static += 1
                                 continue
 
                         # State: measured joint positions only (no cmd_vel)
@@ -280,10 +323,12 @@ class RosbagConversionNode(Node):
                                 self.ee_pose_target, self.ee_pose_source, stamp_ns
                             )
                             if ee_mat is None:
-                                self.get_logger().warn(
-                                    f"TF lookup failed: '{self.ee_pose_source}' → '{self.ee_pose_target}' "
-                                    f"at t={t_sec:.3f}s. Skipping frame."
-                                )
+                                skipped_tf += 1
+                                if skipped_tf <= 5:
+                                    self.get_logger().warn(
+                                        f"TF lookup failed: '{self.ee_pose_source}' → '{self.ee_pose_target}' "
+                                        f"at t={t_sec:.3f}s. Skipping frame."
+                                    )
                                 continue
                             ee_abs = mat_to_pose6d(ee_mat)
                             if prev_ee_pose is not None:
@@ -327,7 +372,12 @@ class RosbagConversionNode(Node):
                         last_frame_time = t_sec
                         images[self.primary_camera] = None
 
-        return frames, sync_deltas
+        if skipped_tf > 5:
+            self.get_logger().warn(f"TF lookup failed {skipped_tf} times total (suppressed after 5).")
+        if skipped_img_decode > 0:
+            self.get_logger().warn(f"Image decode failed {skipped_img_decode} times.")
+
+        return frames, sync_deltas, skipped_static, skipped_tf, skipped_img_decode
 
     # Main conversion
     def convert(self):
@@ -395,7 +445,8 @@ class RosbagConversionNode(Node):
                                     self.part_command_topics.add(cmd_topic)
 
                     if not self.action_features and not self.has_mobile_base:
-                        self.get_logger().warn("No actionable joints and no active mobile base found.")
+                        self.get_logger().error("No actionable joints and no active mobile base found. Aborting.")
+                        return
                 except Exception as e:
                     self.get_logger().error(f"Error extracting morphology features: {e}")
                     return
@@ -617,14 +668,35 @@ class RosbagConversionNode(Node):
                 ep_meta = episodes_dict.get(ep, {})
                 subtasks = ep_meta.get("subtasks", {})
 
-                result = self._extract_episode_data(os.path.dirname(bagfile), subtasks_map=subtasks)
-                if not result:
-                    self.get_logger().warn(f"No frames extracted from {bagfile}")
+                try:
+                    result = self._extract_episode_data(os.path.dirname(bagfile), subtasks_map=subtasks)
+                except Exception as e:
+                    self.get_logger().error(f"Failed to read bag {bagfile}: {e}")
+                    self.skipped_bags.append({
+                        "bag": os.path.dirname(bagfile),
+                        "reason": "read_error",
+                        "error": str(e),
+                    })
                     continue
-                frames, sync_deltas = result
+
+                if result is None:
+                    # Missing required topics — already logged and tracked in skipped_bags
+                    continue
+                frames, sync_deltas, ep_skipped_static, ep_skipped_tf, ep_skipped_img = result
 
                 if not frames:
-                    self.get_logger().warn(f"No frames extracted from {bagfile}")
+                    self.get_logger().warn(
+                        f"No frames extracted from {bagfile} "
+                        f"(skipped_static={ep_skipped_static}, skipped_tf={ep_skipped_tf}, "
+                        f"skipped_img_decode={ep_skipped_img})"
+                    )
+                    self.skipped_bags.append({
+                        "bag": os.path.dirname(bagfile),
+                        "reason": "no_frames",
+                        "skipped_static": ep_skipped_static,
+                        "skipped_tf": ep_skipped_tf,
+                        "skipped_img_decode": ep_skipped_img,
+                    })
                     continue
 
                 # FPS validation on first episode
@@ -646,36 +718,58 @@ class RosbagConversionNode(Node):
                 dataset.save_episode(task=instruction)
 
                 # Accumulate episode stats
+                ep_stat = {
+                    "bag": os.path.basename(ep_path),
+                    "task": instruction,
+                    "frames": len(frames),
+                    "skipped_static": ep_skipped_static,
+                    "skipped_tf": ep_skipped_tf,
+                    "skipped_img_decode": ep_skipped_img,
+                }
                 if sync_deltas:
-                    self.episode_stats.append({
-                        "bag": os.path.basename(ep_path),
-                        "frames": len(frames),
-                        "avg_sync_ms": np.mean(sync_deltas) * 1000,
-                        "max_sync_ms": np.max(sync_deltas) * 1000,
-                        "min_sync_ms": np.min(sync_deltas) * 1000,
-                    })
+                    ep_stat["sync_avg_ms"] = round(float(np.mean(sync_deltas) * 1000), 2)
+                    ep_stat["sync_max_ms"] = round(float(np.max(sync_deltas) * 1000), 2)
+                    ep_stat["sync_min_ms"] = round(float(np.min(sync_deltas) * 1000), 2)
+                self.episode_stats.append(ep_stat)
                 self.get_logger().info(f"  → Saved {len(frames)} frames.")
 
-        dataset.finalize()
-        self.get_logger().info(f"Dataset saved to: {dataset.root}")
-        self.get_logger().info("Dataset creation completed!")
+        if not self.episode_stats:
+            self.get_logger().error("No episodes were successfully converted. Dataset is empty.")
+        else:
+            dataset.finalize()
+            self.get_logger().info(f"Dataset saved to: {dataset.root}")
+            self.get_logger().info("Dataset creation completed!")
 
-        if self.push_to_hub:
+        if self.push_to_hub and self.episode_stats:
             self.get_logger().info(f"Pushing dataset to HuggingFace Hub as '{self.dataset_name}'...")
             dataset.push_to_hub(private=self.hub_private)
             self.get_logger().info("Push to Hub completed!")
 
-        # Episode quality report
-        if self.episode_stats:
-            self.get_logger().info("\n── Episode Quality Report ──────────────────────────────────────────")
-            self.get_logger().info(f"{'Episode':<30} {'Frames':>7} {'Avg(ms)':>9} {'Max(ms)':>9} {'Min(ms)':>9}")
-            self.get_logger().info("─" * 70)
-            for s in self.episode_stats:
-                self.get_logger().info(
-                    f"{s['bag']:<30} {s['frames']:>7} {s['avg_sync_ms']:>9.1f} "
-                    f"{s['max_sync_ms']:>9.1f} {s['min_sync_ms']:>9.1f}"
-                )
-            self.get_logger().info("─" * 70)
+        # Write conversion stats to YAML alongside the dataset
+        stats_report = {
+            "dataset_name": self.dataset_name,
+            "rosbag_directory": self.rosbag_directory,
+            "fps": fps,
+            "sync_threshold": self.sync_threshold,
+            "skip_static_threshold": self.skip_static_threshold,
+            "ee_pose_enabled": self.ee_pose_enabled,
+            "cameras_skip": self.skip_cameras,
+            "total_episodes": len(self.episode_stats),
+            "total_frames": sum(s["frames"] for s in self.episode_stats),
+            "skipped_bags": self.skipped_bags if self.skipped_bags else [],
+            "episodes": self.episode_stats,
+        }
+        stats_path = Path(dataset.root) / "conversion_stats.yaml"
+        with open(stats_path, "w") as f:
+            yaml.dump(stats_report, f, default_flow_style=False, sort_keys=False)
+        self.get_logger().info(f"Conversion stats saved to: {stats_path}")
+
+        # Log summary
+        self.get_logger().info(
+            f"Summary: {len(self.episode_stats)} episodes, "
+            f"{stats_report['total_frames']} frames, "
+            f"{len(self.skipped_bags)} skipped bags"
+        )
 
 
 def main(args=None):
