@@ -4,15 +4,33 @@
     # If left empty (""), it defaults to the `rosbags` folder of `sobits_vla_rosbag_collection`.
     rosbag_directory: ""
 
-    # HuggingFace repository ID or local dataset directory name
+    # HuggingFace repository ID for the output dataset (e.g. "my-org/my-dataset").
     dataset_name: "MyDataset"
 
-    # Primary camera to use as the synchronization trigger for frame assembly.
-    # Must match one of the camera names defined in the `rgb_cam.names` list of `recorded_bags_meta.yaml`.
-    # The script will snapshot a frame every time a new image arrives from this camera.
-    # Typically this should be the most important visual feed (e.g., the head or wrist camera).
-    primary_camera: "head_camera"
+    # Local directory where the dataset is saved.
+    # If left empty (""), defaults to ~/.cache/huggingface/lerobot/<dataset_name>
+    # (or $HF_LEROBOT_HOME/<dataset_name> if that env var is set).
+    output_directory: ""
 
-    # If true, skip all camera image features and produce a state/action-only dataset.
-    # Dramatically faster for quick prototyping or debugging without video encoding.
-    skip_cameras: false
+    # If true, push the finalized dataset to HuggingFace Hub using `dataset_name` as the repo ID.
+    # Requires HF credentials (run: huggingface-cli login).
+    push_to_hub: false
+
+    # If true, the HuggingFace Hub repository will be created as private.
+    # Only relevant when push_to_hub is true.
+    hub_private: false
+
+    # Cameras to include in the dataset conversion.
+    # `skip`       - if true, omit all camera image features; produces a state/action-only dataset.
+    #                Dramatically faster for quick prototyping or debugging without video encoding.
+    # `primary`    - sync trigger camera; a new frame is assembled each time an image arrives from it.
+    #                Must match one of the names listed in `names` below.
+    # `names`      - camera names as declared in recorded_bags_meta.yaml sensors section.
+    #                If empty, all cameras found in metadata are included.
+    # `compressed` - one bool per entry in `names`; true = use compressed_topics, false = use raw topics.
+    #                Entries beyond the length of `names` are ignored; missing entries default to false.
+    cameras:
+      skip: false
+      primary: "head_camera"
+      names: ["head_camera", "hand_camera"]
+      compressed: [false, false]
