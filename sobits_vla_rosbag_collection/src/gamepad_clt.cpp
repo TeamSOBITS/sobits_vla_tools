@@ -126,19 +126,18 @@ void GamepadClient::timerCallback()
     }
   } 
   
-  // Save button
+  // Save / Delete toggle (same button)
+  // RECORDING or PAUSED → SAVE; STOPPED (just saved) → DELETE (undo last save)
   if (!button_pressed && last_joy_msg_->axes[abs(save_button_)] > 0) {
-    if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::RECORDING || 
+    if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::RECORDING ||
         current_state_ == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
       sendGoal(sobits_interfaces::action::VlaRecordState_Goal::SAVE);
       button_pressed = true;
+    } else if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::STOPPED &&
+               previous_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
+      sendGoal(sobits_interfaces::action::VlaRecordState_Goal::DELETE);
+      button_pressed = true;
     }
-  }
-
-  // Delete button
-  if (!button_pressed && last_joy_msg_->axes[abs(delete_button_)] < 0) {
-    sendGoal(sobits_interfaces::action::VlaRecordState_Goal::DELETE);
-    button_pressed = true;
   }
 
   if (button_pressed) {
