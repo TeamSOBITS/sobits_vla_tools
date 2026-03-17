@@ -27,6 +27,8 @@ class RosbagConversionNode(Node):
         self.declare_parameter('rosbag_directory', '')
         self.declare_parameter('dataset_name', 'MyDataset')
         self.declare_parameter('output_directory', '')
+        self.declare_parameter('fps', 10)
+        self.declare_parameter('sync_threshold', 0.1)
         self.declare_parameter('push_to_hub', False)
         self.declare_parameter('hub_private', False)
         self.declare_parameter('skip_static_threshold', 0.0)
@@ -42,6 +44,8 @@ class RosbagConversionNode(Node):
         self.dataset_name = self.get_parameter('dataset_name').get_parameter_value().string_value
         output_dir = self.get_parameter('output_directory').get_parameter_value().string_value
         self.output_directory = Path(output_dir) if output_dir else None
+        self.fps = self.get_parameter('fps').get_parameter_value().integer_value
+        self.sync_threshold = self.get_parameter('sync_threshold').get_parameter_value().double_value
         self.push_to_hub = self.get_parameter('push_to_hub').get_parameter_value().bool_value
         self.hub_private = self.get_parameter('hub_private').get_parameter_value().bool_value
         self.skip_static_threshold = self.get_parameter('skip_static_threshold').get_parameter_value().double_value
@@ -60,7 +64,6 @@ class RosbagConversionNode(Node):
         self.joint_states_topic = ""
         self.cmd_vel_topic = ""
         self.odom_topic = ""
-        self.sync_threshold = 0.1
         self.has_mobile_base = False
         self.has_cmd_vel_y = False
         self.has_cmd_vel_z = False
@@ -142,6 +145,8 @@ class RosbagConversionNode(Node):
             wanted |= {"/tf", "/tf_static"}
 
         last_frame_time = 0.0  # timestamp of the last assembled frame (for freshness)
+        min_frame_interval = 1.0 / self.fps if self.fps > 0 else 0.0  # downsampling interval
+        skipped_downsample = 0
 
         sync_deltas = []
 
@@ -266,6 +271,12 @@ class RosbagConversionNode(Node):
                             )
                         sync_deltas.append(max_sync)
 
+                        # Downsample: enforce minimum interval between frames
+                        if min_frame_interval > 0.0 and last_frame_time > 0.0:
+                            if (t_sec - last_frame_time) < min_frame_interval:
+                                skipped_downsample += 1
+                                continue
+
                         # Skip static frames: skip if no joint velocity exceeds threshold
                         if self.skip_static_threshold > 0.0 and latest_joint_velocity is not None:
                             if not np.any(np.abs(latest_joint_velocity) > self.skip_static_threshold):
@@ -377,7 +388,7 @@ class RosbagConversionNode(Node):
         if skipped_img_decode > 0:
             self.get_logger().warn(f"Image decode failed {skipped_img_decode} times.")
 
-        return frames, sync_deltas, skipped_static, skipped_tf, skipped_img_decode
+        return frames, sync_deltas, skipped_static, skipped_tf, skipped_img_decode, skipped_downsample
 
     # Main conversion
     def convert(self):
@@ -418,10 +429,6 @@ class RosbagConversionNode(Node):
                 robot_ref_name = r_name
                 robot_ref_version = r_vers
                 ref_morphology = morphology
-
-                convert_info = meta.get("convert_info", {})
-                fps = convert_info.get("fps", 10)
-                self.sync_threshold = convert_info.get("sync_threshold", 0.1)
 
                 try:
                     self.joint_states_topic = morphology.get("joint_states_topic", "/joint_states")
@@ -603,7 +610,7 @@ class RosbagConversionNode(Node):
         # Create dataset
         dataset = LeRobotDataset.create(
             repo_id=self.dataset_name,
-            fps=fps,
+            fps=self.fps,
             features=features,
             root=self.output_directory,
             video_backend="auto",
@@ -633,7 +640,6 @@ class RosbagConversionNode(Node):
                             for f in os.listdir(os.path.join(group_dir, ep)))
                 )
 
-        first_episode_done = False
         current_episode_num = 0
 
         # Conversion loop
@@ -682,35 +688,40 @@ class RosbagConversionNode(Node):
                 if result is None:
                     # Missing required topics — already logged and tracked in skipped_bags
                     continue
-                frames, sync_deltas, ep_skipped_static, ep_skipped_tf, ep_skipped_img = result
+                frames, sync_deltas, ep_skipped_static, ep_skipped_tf, ep_skipped_img, ep_skipped_ds = result
 
                 if not frames:
                     self.get_logger().warn(
                         f"No frames extracted from {bagfile} "
-                        f"(skipped_static={ep_skipped_static}, skipped_tf={ep_skipped_tf}, "
-                        f"skipped_img_decode={ep_skipped_img})"
+                        f"(downsample={ep_skipped_ds}, static={ep_skipped_static}, "
+                        f"tf={ep_skipped_tf}, img_decode={ep_skipped_img})"
                     )
                     self.skipped_bags.append({
                         "bag": os.path.dirname(bagfile),
                         "reason": "no_frames",
+                        "skipped_downsample": ep_skipped_ds,
                         "skipped_static": ep_skipped_static,
                         "skipped_tf": ep_skipped_tf,
                         "skipped_img_decode": ep_skipped_img,
                     })
                     continue
 
-                # FPS validation on first episode
-                # TODO: check onyl first episode?
-                if not first_episode_done and len(frames) > 1:
-                    first_episode_done = True
+                # FPS validation — drop episodes that can't meet the configured rate
+                if len(frames) > 1:
                     duration = frames[-1][0] - frames[0][0]
-                    if duration > 0:
-                        actual_fps = len(frames) / duration
-                        if actual_fps < fps * 0.8:
-                            self.get_logger().warn(
-                                f"Actual frame rate ({actual_fps:.1f} fps) is significantly lower than "
-                                f"configured dataset fps ({fps}). Consider reducing fps in record_settings."
-                            )
+                    actual_fps = len(frames) / duration if duration > 0 else 0.0
+                    if actual_fps < self.fps * 0.8:
+                        self.get_logger().warn(
+                            f"Dropping {bagfile}: actual fps ({actual_fps:.1f}) is below "
+                            f"configured fps ({self.fps}) threshold (80%)."
+                        )
+                        self.skipped_bags.append({
+                            "bag": os.path.dirname(bagfile),
+                            "reason": "fps_too_low",
+                            "actual_fps": round(actual_fps, 1),
+                            "required_fps": self.fps,
+                        })
+                        continue
 
                 for _, frame in frames:
                     dataset.add_frame(frame)
@@ -722,6 +733,7 @@ class RosbagConversionNode(Node):
                     "bag": os.path.basename(ep_path),
                     "task": instruction,
                     "frames": len(frames),
+                    "skipped_downsample": ep_skipped_ds,
                     "skipped_static": ep_skipped_static,
                     "skipped_tf": ep_skipped_tf,
                     "skipped_img_decode": ep_skipped_img,
@@ -749,7 +761,7 @@ class RosbagConversionNode(Node):
         stats_report = {
             "dataset_name": self.dataset_name,
             "rosbag_directory": self.rosbag_directory,
-            "fps": fps,
+            "fps": self.fps,
             "sync_threshold": self.sync_threshold,
             "skip_static_threshold": self.skip_static_threshold,
             "ee_pose_enabled": self.ee_pose_enabled,

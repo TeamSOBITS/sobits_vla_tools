@@ -12,6 +12,14 @@
     # (or $HF_LEROBOT_HOME/<dataset_name> if that env var is set).
     output_directory: ""
 
+    # Target frame rate for the dataset. Frames from the primary camera that arrive
+    # faster than this rate are downsampled (dropped) to match.
+    fps: 10
+
+    # Maximum acceptable temporal gap (seconds) between sensor readings in a single frame.
+    # Frames exceeding this threshold are flagged in the logs.
+    sync_threshold: 0.1
+
     # If true, push the finalized dataset to HuggingFace Hub using `dataset_name` as the repo ID.
     # Requires HF credentials (run: huggingface-cli login).
     push_to_hub: false
