@@ -1067,7 +1067,6 @@ void RosbagCollection::createRosbagYaml()
   yaml_node["user_info"]["location"] = user_info_.location;
 
   // Save the YAML node to a file
-  std::string yaml_file_path = rosbag_info_.recording_dir + "/recorded_bags_meta.yaml";
   try {
     std::ofstream yaml_file(yaml_file_path);
     if (!yaml_file.is_open()) {
