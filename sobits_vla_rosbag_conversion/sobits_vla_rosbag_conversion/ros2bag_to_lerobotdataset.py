@@ -122,6 +122,8 @@ class RosbagConversionNode(Node):
         if self.has_mobile_base and self.cmd_vel_topic:
             wanted.add(self.cmd_vel_topic)
 
+        last_frame_time = 0.0  # timestamp of the last assembled frame (for freshness)
+
         sync_deltas = []
 
         with AnyReader([Path(bag_folder)]) as reader:
@@ -210,10 +212,28 @@ class RosbagConversionNode(Node):
                             "observation.state": torch.tensor(state, dtype=torch.float32),
                         }
 
+                        # Freshness masks: True if data updated since last assembled frame
+                        joint_dim = len(self.action_features)
+                        state_fresh = latest_joint_time > last_frame_time
+                        frame["observation.state.is_fresh"] = torch.full(
+                            (len(state),), state_fresh, dtype=torch.bool
+                        )
+
+                        action_joint_fresh = state_fresh and action_initialized
+                        cmd_vel_fresh = latest_cmd_vel_time > last_frame_time if self.has_mobile_base else False
+                        action_freshness = [action_joint_fresh] * joint_dim
+                        if self.has_mobile_base:
+                            action_freshness += [cmd_vel_fresh] * len(latest_cmd_vel)
+                        frame["action.is_fresh"] = torch.tensor(action_freshness, dtype=torch.bool)
+
                         if not self.skip_cameras:
                             for c_name in self.camera_topics.keys():
                                 img_arr = np.ascontiguousarray(images[c_name].transpose(2, 0, 1))
                                 frame[f"observation.images.{c_name}"] = torch.from_numpy(img_arr)
+                                cam_fresh = image_times[c_name] > last_frame_time
+                                frame[f"observation.images.{c_name}.is_fresh"] = torch.full(
+                                    (3, 1, 1), cam_fresh, dtype=torch.bool
+                                )
 
                         # Subtask annotation
                         if self.all_subtasks_list and subtasks_map:
@@ -230,6 +250,7 @@ class RosbagConversionNode(Node):
                             frame["subtask_index"] = torch.tensor([current_subtask_idx], dtype=torch.int64)
 
                         frames.append((t_sec, frame))
+                        last_frame_time = t_sec
                         images[self.primary_camera] = None
 
         return frames, sync_deltas
@@ -408,7 +429,9 @@ class RosbagConversionNode(Node):
         
         features = {
             "action": {"dtype": "float32", "shape": (action_dim,), "names": self.action_features + cmd_vel_keys},
+            "action.is_fresh": {"dtype": "bool", "shape": (action_dim,), "names": None},
             "observation.state": {"dtype": "float32", "shape": (action_dim,), "names": self.action_features + cmd_vel_keys},
+            "observation.state.is_fresh": {"dtype": "bool", "shape": (action_dim,), "names": None},
         }
         if self.has_subtasks:
             features["subtask_index"] = {"dtype": "int64", "shape": (1,), "names": ["subtask_index"]}
@@ -422,6 +445,11 @@ class RosbagConversionNode(Node):
                     "dtype": "video",
                     "shape": (3, h, w),
                     "names": ["channels", "height", "width"],
+                }
+                features[f"observation.images.{cam_name}.is_fresh"] = {
+                    "dtype": "bool",
+                    "shape": (3, 1, 1),
+                    "names": None,
                 }
 
         # Create dataset
