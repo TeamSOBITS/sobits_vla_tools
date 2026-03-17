@@ -160,6 +160,8 @@ private:
   std::map<std::string, std::atomic<uint64_t>> monitor_counts_;
   std::map<std::string, uint64_t> monitor_prev_counts_;
   rclcpp::TimerBase::SharedPtr fps_monitor_timer_;
+  std::atomic<bool> max_duration_triggered_{false};  // prevents repeated auto-save
+  bool fps_warmup_{true};  // skip first FPS check tick (topics warming up)
   // Timestamp jump detection
   double timestamp_jump_threshold_sec_{1.0};  // max drift between ROS clock and wall clock per check
   rclcpp::Time prev_ros_time_;

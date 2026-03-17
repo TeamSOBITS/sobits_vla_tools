@@ -435,7 +435,11 @@ bool RosbagCollection::validateTopics()
 
 void RosbagCollection::startRecordingMonitor()
 {
-  if (expected_sensor_fps_ <= 0 && min_disk_space_mb_ == 0) return;
+  bool need_fps = expected_sensor_fps_ > 0;
+  bool need_disk = min_disk_space_mb_ > 0;
+  bool need_timestamp = timestamp_jump_threshold_sec_ > 0.0;
+  bool need_max_duration = max_episode_duration_sec_ > 0.0;
+  if (!need_fps && !need_disk && !need_timestamp && !need_max_duration) return;
 
   // FPS topic subscriptions (only if fps monitoring is enabled)
   if (expected_sensor_fps_ > 0) {
@@ -481,25 +485,33 @@ void RosbagCollection::startRecordingMonitor()
     [this]() {
       if (!is_recording_) return;
 
-      // FPS checks
+      // FPS checks (skip first tick — topics may still be warming up)
       if (expected_sensor_fps_ > 0) {
-      double interval = 2.0;
-      double threshold = expected_sensor_fps_ * 0.8;
-      for (auto & [topic, prev_count] : monitor_prev_counts_) {
-        uint64_t current = monitor_counts_[topic].load();
-        double rate = static_cast<double>(current - prev_count) / interval;
-        prev_count = current;
+        if (fps_warmup_) {
+          // Initialize prev_counts to current so first real check starts from a clean baseline
+          for (auto & [topic, prev_count] : monitor_prev_counts_) {
+            prev_count = monitor_counts_[topic].load();
+          }
+          fps_warmup_ = false;
+        } else {
+          double interval = 2.0;
+          double threshold = expected_sensor_fps_ * 0.8;
+          for (auto & [topic, prev_count] : monitor_prev_counts_) {
+            uint64_t current = monitor_counts_[topic].load();
+            double rate = static_cast<double>(current - prev_count) / interval;
+            prev_count = current;
 
-        if (rate < threshold && rate > 0.0) {
-          RCLCPP_WARN(this->get_logger(),
-            "FPS DROP: '%s' publishing at %.1f Hz (expected >= %.1f Hz)",
-            topic.c_str(), rate, static_cast<double>(expected_sensor_fps_));
-        } else if (rate == 0.0 && current > 0) {
-          RCLCPP_ERROR(this->get_logger(),
-            "FPS STALL: '%s' stopped publishing!", topic.c_str());
+            if (rate < threshold && rate > 0.0) {
+              RCLCPP_WARN(this->get_logger(),
+                "FPS DROP: '%s' publishing at %.1f Hz (expected >= %.1f Hz)",
+                topic.c_str(), rate, static_cast<double>(expected_sensor_fps_));
+            } else if (rate == 0.0 && current > 0) {
+              RCLCPP_ERROR(this->get_logger(),
+                "FPS STALL: '%s' stopped publishing!", topic.c_str());
+            }
+          }
         }
       }
-      } // end if (expected_sensor_fps_ > 0)
 
       // Disk space check
       if (min_disk_space_mb_ > 0) {
@@ -540,15 +552,15 @@ void RosbagCollection::startRecordingMonitor()
         prev_ros_time_ = now_ros;
       }
 
-      // Max episode duration check — warn and trigger save
-      if (max_episode_duration_sec_ > 0.0) {
+      // Max episode duration check — warn and trigger save (once)
+      if (max_episode_duration_sec_ > 0.0 && !max_duration_triggered_) {
         auto elapsed = std::chrono::steady_clock::now() - recording_start_time_;
         double duration_sec = std::chrono::duration<double>(elapsed).count();
         if (duration_sec >= max_episode_duration_sec_) {
+          max_duration_triggered_ = true;
           RCLCPP_WARN(this->get_logger(),
             "Max episode duration reached (%.1fs >= %.1fs). Auto-saving.",
             duration_sec, max_episode_duration_sec_);
-          // Trigger save in a separate thread to avoid blocking the timer callback
           std::thread([this]() { saveRosbag(); }).detach();
         }
       }
@@ -568,6 +580,7 @@ void RosbagCollection::stopRecordingMonitor()
   monitor_counts_.clear();
   monitor_prev_counts_.clear();
   timestamp_monitor_initialized_ = false;
+  fps_warmup_ = true;
 }
 
 void RosbagCollection::createRosbag()
@@ -612,6 +625,7 @@ void RosbagCollection::createRosbag()
 
   // Set the current state to RECORDING
   recording_start_time_ = std::chrono::steady_clock::now();
+  max_duration_triggered_ = false;
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
 
