@@ -94,12 +94,12 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".models", std::vector<std::string>{});
     this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".topics", std::vector<std::string>{});
     this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".info_topics", std::vector<std::string>{});
-    this->declare_parameter<bool>("robot_info.sensors." + sensor_type + ".add_compressed", false);
-    robot_info_.sensor_names[sensor_type]          = this->get_parameter("robot_info.sensors." + sensor_type + ".names").as_string_array();
-    robot_info_.sensor_models[sensor_type]         = this->get_parameter("robot_info.sensors." + sensor_type + ".models").as_string_array();
-    robot_info_.sensor_topics[sensor_type]         = this->get_parameter("robot_info.sensors." + sensor_type + ".topics").as_string_array();
-    robot_info_.sensor_info_topics[sensor_type]    = this->get_parameter("robot_info.sensors." + sensor_type + ".info_topics").as_string_array();
-    robot_info_.sensor_add_compressed[sensor_type] = this->get_parameter("robot_info.sensors." + sensor_type + ".add_compressed").as_bool();
+    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".compressed_topics", std::vector<std::string>{});
+    robot_info_.sensor_names[sensor_type]             = this->get_parameter("robot_info.sensors." + sensor_type + ".names").as_string_array();
+    robot_info_.sensor_models[sensor_type]            = this->get_parameter("robot_info.sensors." + sensor_type + ".models").as_string_array();
+    robot_info_.sensor_topics[sensor_type]            = this->get_parameter("robot_info.sensors." + sensor_type + ".topics").as_string_array();
+    robot_info_.sensor_info_topics[sensor_type]       = this->get_parameter("robot_info.sensors." + sensor_type + ".info_topics").as_string_array();
+    robot_info_.sensor_compressed_topics[sensor_type] = this->get_parameter("robot_info.sensors." + sensor_type + ".compressed_topics").as_string_array();
   }
 
   // (2) User info parameters
@@ -255,8 +255,11 @@ void RosbagCollection::buildTopicList()
   for (const auto & sensor_type : robot_info_.sensor_types) {
     for (const auto & topic : robot_info_.sensor_topics[sensor_type]) {
       all_topics.push_back(topic);
-      if (robot_info_.sensor_add_compressed.count(sensor_type) && robot_info_.sensor_add_compressed.at(sensor_type)) {
-        all_topics.push_back(topic + "/compressed");
+    }
+    // Compressed topics from the explicit compressed_topics list
+    for (const auto & compressed_topic : robot_info_.sensor_compressed_topics[sensor_type]) {
+      if (!compressed_topic.empty()) {
+        all_topics.push_back(compressed_topic);
       }
     }
     // Camera info topics from the explicit info_topics list
@@ -532,7 +535,9 @@ void RosbagCollection::createRosbagYaml()
     for (const auto & sensor_topic : robot_info_.sensor_topics[sensor_type]) {
       yaml_node["robot_info"]["sensors"][sensor_type]["topics"].push_back(sensor_topic);
     }
-    yaml_node["robot_info"]["sensors"][sensor_type]["add_compressed"] = robot_info_.sensor_add_compressed[sensor_type];
+    for (const auto & compressed_topic : robot_info_.sensor_compressed_topics[sensor_type]) {
+      yaml_node["robot_info"]["sensors"][sensor_type]["compressed_topics"].push_back(compressed_topic);
+    }
   }
 
   yaml_node["convert_info"]["fps"] = rosbag_info_.fps;
