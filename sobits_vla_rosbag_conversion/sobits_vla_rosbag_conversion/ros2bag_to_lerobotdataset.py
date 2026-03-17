@@ -230,48 +230,49 @@ class RosbagConversionNode(Node):
                             if not np.any(np.abs(latest_joint_velocity) > self.skip_static_threshold):
                                 continue
 
-                        state = latest_joint_state + (latest_cmd_vel if self.has_mobile_base else [])
-                        # Action: use commanded position per joint, fall back to state if not yet received
-                        action_joints = [
+                        # State: measured joint positions only (no cmd_vel)
+                        state = latest_joint_state
+                        # Action: commanded joint positions, fall back to measured if not yet received
+                        action = [
                             commanded_joints.get(feat, latest_joint_state[i])
                             for i, feat in enumerate(self.action_features)
                         ]
-                        action = action_joints + (latest_cmd_vel if self.has_mobile_base else [])
                         frame = {
                             "action": torch.tensor(action, dtype=torch.float32),
                             "observation.state": torch.tensor(state, dtype=torch.float32),
                         }
 
-                        # Freshness masks: True if data updated since last assembled frame
+                        # Freshness masks
                         joint_dim = len(self.action_features)
                         state_fresh = latest_joint_time > last_frame_time
                         frame["observation.state.is_fresh"] = torch.full(
-                            (len(state),), state_fresh, dtype=torch.bool
+                            (joint_dim,), state_fresh, dtype=torch.bool
                         )
 
                         # Per-joint action freshness based on individual command timestamps
-                        cmd_vel_fresh = latest_cmd_vel_time > last_frame_time if self.has_mobile_base else False
                         action_freshness = [
                             commanded_joints_time.get(feat, 0.0) > last_frame_time
                             for feat in self.action_features
                         ]
-                        if self.has_mobile_base:
-                            action_freshness += [cmd_vel_fresh] * len(latest_cmd_vel)
                         frame["action.is_fresh"] = torch.tensor(action_freshness, dtype=torch.bool)
 
-                        # Delta action: joint delta = commanded - measured, base vel is already relative
+                        # Delta action: commanded - measured per joint
                         delta = [action[i] - state[i] for i in range(joint_dim)]
-                        if self.has_mobile_base:
-                            delta += list(latest_cmd_vel)  # base vel is inherently delta
                         frame["action.delta"] = torch.tensor(delta, dtype=torch.float32)
                         # Delta freshness requires both command and state to be fresh
                         delta_freshness = [
                             action_freshness[i] and state_fresh
                             for i in range(joint_dim)
                         ]
-                        if self.has_mobile_base:
-                            delta_freshness += [cmd_vel_fresh] * len(latest_cmd_vel)
                         frame["action.delta.is_fresh"] = torch.tensor(delta_freshness, dtype=torch.bool)
+
+                        # Base velocity action (separate feature, inherently delta)
+                        if self.has_mobile_base:
+                            frame["action.base"] = torch.tensor(latest_cmd_vel, dtype=torch.float32)
+                            cmd_vel_fresh = latest_cmd_vel_time > last_frame_time
+                            frame["action.base.is_fresh"] = torch.full(
+                                (len(self.base_keys),), cmd_vel_fresh, dtype=torch.bool
+                            )
 
                         # End-effector pose via TF chain
                         if tf_tree is not None:
@@ -373,12 +374,11 @@ class RosbagConversionNode(Node):
                     self.joint_states_topic = morphology.get("joint_states_topic", "/joint_states")
                     parts = morphology.get("parts", [])
 
-                    self.action_features = []
+                    self.action_features = []  # joint names (excludes mobile base)
                     self.part_command_topics = set()  # topics carrying joint commands
                     for part in parts:
                         part_info = morphology.get(part, {})
                         if part_info.get("is_actionable", False):
-                            self.action_features.extend(part_info.get("joint_names", []))
                             if part in ["mobile_base", "legs"]:
                                 self.has_mobile_base = True
                                 self.has_cmd_vel_y = part_info.get("has_cmd_vel_y", False)
@@ -386,6 +386,7 @@ class RosbagConversionNode(Node):
                                 self.cmd_vel_topic = part_info.get("cmd_vel_topic", "/cmd_vel")
                                 self.odom_topic = part_info.get("odom_topic", "")
                             else:
+                                self.action_features.extend(part_info.get("joint_names", []))
                                 # Collect part topics (controller_state + joint_trajectory)
                                 # Command topics (JointTrajectory) are identified by msgtype at read time
                                 for topic in part_info.get("topics", []):
@@ -489,28 +490,35 @@ class RosbagConversionNode(Node):
         self.has_subtasks = len(self.all_subtasks_list) > 0
 
         # Feature schema
-        cmd_vel_keys = []
+        self.base_keys = []
         if self.has_mobile_base:
             if self.has_cmd_vel_y and self.has_cmd_vel_z:
-                cmd_vel_keys = ["cmd_vel_x", "cmd_vel_y", "cmd_vel_z", "cmd_vel_theta"]
+                self.base_keys = ["base_x", "base_y", "base_z", "base_theta"]
             elif self.has_cmd_vel_y:
-                cmd_vel_keys = ["cmd_vel_x", "cmd_vel_y", "cmd_vel_theta"]
+                self.base_keys = ["base_x", "base_y", "base_theta"]
             elif self.has_cmd_vel_z:
-                cmd_vel_keys = ["cmd_vel_x", "cmd_vel_z", "cmd_vel_theta"]
+                self.base_keys = ["base_x", "base_z", "base_theta"]
             else:
-                cmd_vel_keys = ["cmd_vel_x", "cmd_vel_theta"]
+                self.base_keys = ["base_x", "base_theta"]
 
-        action_dim = len(self.action_features) + len(cmd_vel_keys)
-        # TODO: state_dim calculation
-        
+        joint_dim = len(self.action_features)
+        base_dim = len(self.base_keys)
+
         features = {
-            "action": {"dtype": "float32", "shape": (action_dim,), "names": self.action_features + cmd_vel_keys},
-            "action.is_fresh": {"dtype": "bool", "shape": (action_dim,), "names": None},
-            "action.delta": {"dtype": "float32", "shape": (action_dim,), "names": self.action_features + cmd_vel_keys},
-            "action.delta.is_fresh": {"dtype": "bool", "shape": (action_dim,), "names": None},
-            "observation.state": {"dtype": "float32", "shape": (action_dim,), "names": self.action_features + cmd_vel_keys},
-            "observation.state.is_fresh": {"dtype": "bool", "shape": (action_dim,), "names": None},
+            # Joint action: commanded positions (absolute)
+            "action": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
+            "action.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
+            # Joint action delta: commanded - measured
+            "action.delta": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
+            "action.delta.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
+            # Joint state: measured positions from /joint_states
+            "observation.state": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
+            "observation.state.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
         }
+        # Base velocity action (separate — already delta, different units from joint positions)
+        if self.has_mobile_base:
+            features["action.base"] = {"dtype": "float32", "shape": (base_dim,), "names": self.base_keys}
+            features["action.base.is_fresh"] = {"dtype": "bool", "shape": (base_dim,), "names": None}
         if self.ee_pose_enabled:
             ee_names = ["x", "y", "z", "roll", "pitch", "yaw"]
             features["observation.ee_pose"] = {
