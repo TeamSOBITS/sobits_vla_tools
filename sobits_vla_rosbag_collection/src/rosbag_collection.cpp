@@ -114,8 +114,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 
   // (3) Rosbag parameters
   this->declare_parameter<std::string>("rosbag_config.record_directory", "");
-  this->declare_parameter<int>("rosbag_config.fps", 10);
-  this->declare_parameter<double>("rosbag_config.sync_threshold", 0.1);
+  this->declare_parameter<int>("rosbag_config.expected_sensor_fps", 0);
   this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_topics", std::vector<std::string>{});
   this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_services", std::vector<std::string>{});
   this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_actions", std::vector<std::string>{});
@@ -123,9 +122,8 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("rosbag_config.compression_format", "zstd");
   this->declare_parameter<std::string>("rosbag_config.compression_mode", "none");
   this->declare_parameter<std::string>("rosbag_config.rmw_serialization_format", "cdr");
+  expected_sensor_fps_              = this->get_parameter("rosbag_config.expected_sensor_fps").as_int();
   rosbag_info_.recording_dir        = this->get_parameter("rosbag_config.record_directory").as_string();
-  rosbag_info_.fps                  = this->get_parameter("rosbag_config.fps").as_int();
-  rosbag_info_.sync_threshold       = this->get_parameter("rosbag_config.sync_threshold").as_double();
   rosbag_info_.additional_topics    = this->get_parameter("rosbag_config.additional_topics").as_string_array();
   rosbag_info_.additional_services  = this->get_parameter("rosbag_config.additional_services").as_string_array();
   rosbag_info_.additional_actions   = this->get_parameter("rosbag_config.additional_actions").as_string_array();
@@ -410,6 +408,83 @@ bool RosbagCollection::validateTopics()
   return all_ok;
 }
 
+void RosbagCollection::startFpsMonitor()
+{
+  if (expected_sensor_fps_ <= 0) return;
+
+  // Collect topics to monitor: cameras + joint_states + command topics
+  std::set<std::string> monitor_topics;
+  monitor_topics.insert(robot_info_.joint_states_topic);
+  for (const auto & stype : robot_info_.sensor_types) {
+    for (const auto & topic : robot_info_.sensor_topics[stype]) {
+      if (!topic.empty()) monitor_topics.insert(topic);
+    }
+  }
+  for (const auto & part : robot_info_.parts) {
+    if (!robot_info_.part_command_topic[part].empty()) {
+      monitor_topics.insert(robot_info_.part_command_topic[part]);
+    }
+  }
+
+  // Discover topic types from the ROS graph
+  auto graph_topics = this->get_topic_names_and_types();
+
+  // Create a generic subscription per topic (count only, no deserialization)
+  for (const auto & topic : monitor_topics) {
+    auto it = graph_topics.find(topic);
+    if (it == graph_topics.end() || it->second.empty()) continue;
+
+    const std::string & topic_type = it->second[0];
+    monitor_counts_[topic] = 0;
+    monitor_prev_counts_[topic] = 0;
+
+    auto sub = this->create_generic_subscription(
+      topic, topic_type, rclcpp::SensorDataQoS(),
+      [this, topic](std::shared_ptr<rclcpp::SerializedMessage>) {
+        monitor_counts_[topic]++;
+      });
+    monitor_subs_.push_back(sub);
+  }
+
+  // Timer: check rates every 2 seconds
+  fps_monitor_timer_ = this->create_wall_timer(
+    std::chrono::seconds(2),
+    [this]() {
+      if (!is_recording_) return;
+      double interval = 2.0;
+      double threshold = expected_sensor_fps_ * 0.8;
+
+      for (auto & [topic, prev_count] : monitor_prev_counts_) {
+        uint64_t current = monitor_counts_[topic].load();
+        double rate = static_cast<double>(current - prev_count) / interval;
+        prev_count = current;
+
+        if (rate < threshold && rate > 0.0) {
+          RCLCPP_WARN(this->get_logger(),
+            "FPS DROP: '%s' publishing at %.1f Hz (expected >= %.1f Hz)",
+            topic.c_str(), rate, static_cast<double>(expected_sensor_fps_));
+        } else if (rate == 0.0 && current > 0) {
+          RCLCPP_ERROR(this->get_logger(),
+            "FPS STALL: '%s' stopped publishing!", topic.c_str());
+        }
+      }
+    });
+
+  RCLCPP_INFO(this->get_logger(), "FPS monitor started: watching %zu topics at expected %d Hz.",
+    monitor_subs_.size(), expected_sensor_fps_);
+}
+
+void RosbagCollection::stopFpsMonitor()
+{
+  if (fps_monitor_timer_) {
+    fps_monitor_timer_->cancel();
+    fps_monitor_timer_.reset();
+  }
+  monitor_subs_.clear();
+  monitor_counts_.clear();
+  monitor_prev_counts_.clear();
+}
+
 void RosbagCollection::createRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Starting recording...");
@@ -497,12 +572,14 @@ void RosbagCollection::createRosbag()
   });
 
   RCLCPP_INFO(this->get_logger(), "Rosbag recording started successfully");
+  startFpsMonitor();
 }
 
 
 void RosbagCollection::removeRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Removing rosbag...");
+  stopFpsMonitor();
 
   std::lock_guard<std::mutex> lock(recorder_mutex_);
 
@@ -547,6 +624,7 @@ void RosbagCollection::removeRosbag()
 void RosbagCollection::saveRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Saving rosbag...");
+  stopFpsMonitor();
 
   std::lock_guard<std::mutex> lock(recorder_mutex_);
 
@@ -648,8 +726,6 @@ void RosbagCollection::createRosbagYaml()
     }
   }
 
-  yaml_node["convert_info"]["fps"] = rosbag_info_.fps;
-  yaml_node["convert_info"]["sync_threshold"] = rosbag_info_.sync_threshold;
 
   // (2) Add user info
   yaml_node["user_info"]["name"] = user_info_.name;

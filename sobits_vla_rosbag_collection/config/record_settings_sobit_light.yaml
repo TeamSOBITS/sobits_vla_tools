@@ -112,10 +112,10 @@
       # Path to the directory where the recorded bag files will be saved.
       # If left empty (""), the launcher will dynamically resolve it to the `rosbags` folder inside `sobits_vla_rosbag_collection`.
       record_directory: ""
-      # The frame rate mapping for the LeRobot datasets
-      fps: 10
-      # The temporal discrepancy acceptable for synchronizing joints and images (in seconds)
-      sync_threshold: 0.1
+      # Expected sensor publish rate (Hz) for live FPS monitoring during recording.
+      # Warns if any camera or joint_states topic drops below 80% of this rate.
+      # Set to 0 to disable monitoring.
+      expected_sensor_fps: 10
       # Additional topics to record beyond those inferred from sensor and morphology definitions
       additional_topics:
         - /sobit_light/velocity_controller/commands

@@ -85,8 +85,6 @@ public:
   std::vector<std::string> additional_topics;
   std::vector<std::string> additional_services;
   std::vector<std::string> additional_actions;
-  int fps;
-  double sync_threshold;
   // uint8_t recording_duration;
   std::string conversion_format;
   bool compress_output;
@@ -113,6 +111,8 @@ public:
   void removeEpisodeFromYaml();
   void buildTopicList();
   bool validateTopics();
+  void startFpsMonitor();
+  void stopFpsMonitor();
   std::string getTimestampString();
 
 private:
@@ -148,6 +148,13 @@ private:
 
   std::map<std::string, rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr> camera_info_subs_;
   std::map<std::string, std::pair<uint32_t, uint32_t>> camera_dimensions_;
+
+  // FPS monitoring during recording
+  int expected_sensor_fps_{0};
+  std::vector<rclcpp::GenericSubscription::SharedPtr> monitor_subs_;
+  std::map<std::string, std::atomic<uint64_t>> monitor_counts_;
+  std::map<std::string, uint64_t> monitor_prev_counts_;
+  rclcpp::TimerBase::SharedPtr fps_monitor_timer_;
 
   // Parameters
   RobotInfo robot_info_;
