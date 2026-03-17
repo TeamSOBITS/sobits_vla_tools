@@ -25,13 +25,25 @@ class RosbagConversionNode(Node):
 
         self.declare_parameter('rosbag_directory', '')
         self.declare_parameter('dataset_name', 'MyDataset')
-        self.declare_parameter('primary_camera', 'head_camera')
-        self.declare_parameter('skip_cameras', False)
+        self.declare_parameter('output_directory', '')
+        self.declare_parameter('push_to_hub', False)
+        self.declare_parameter('hub_private', False)
+        self.declare_parameter('cameras.skip', False)
+        self.declare_parameter('cameras.primary', 'head_camera')
+        self.declare_parameter('cameras.names', [''])
+        self.declare_parameter('cameras.compressed', [False])
 
         self.rosbag_directory = self.get_parameter('rosbag_directory').get_parameter_value().string_value
         self.dataset_name = self.get_parameter('dataset_name').get_parameter_value().string_value
-        self.primary_camera = self.get_parameter('primary_camera').get_parameter_value().string_value
-        self.skip_cameras = self.get_parameter('skip_cameras').get_parameter_value().bool_value
+        output_dir = self.get_parameter('output_directory').get_parameter_value().string_value
+        self.output_directory = Path(output_dir) if output_dir else None
+        self.push_to_hub = self.get_parameter('push_to_hub').get_parameter_value().bool_value
+        self.hub_private = self.get_parameter('hub_private').get_parameter_value().bool_value
+        self.skip_cameras = self.get_parameter('cameras.skip').get_parameter_value().bool_value
+        self.primary_camera = self.get_parameter('cameras.primary').get_parameter_value().string_value
+        raw_names = self.get_parameter('cameras.names').get_parameter_value().string_array_value
+        self.cameras_names = [n for n in raw_names if n]  # filter empty placeholder
+        self.cameras_compressed = list(self.get_parameter('cameras.compressed').get_parameter_value().bool_array_value)
 
         # Configuration attributes (populated from YAML)
         self.camera_topics = {}
@@ -189,7 +201,7 @@ class RosbagConversionNode(Node):
                         # Subtask annotation
                         if self.all_subtasks_list and subtasks_map:
                             current_subtask_idx = 0
-                            for st_key, st_info in (subtasks_map.items() if isinstance(subtasks_map, dict) else {}):
+                            for _, st_info in (subtasks_map.items() if isinstance(subtasks_map, dict) else {}):
                                 start_t = st_info.get("start_timestamp", -1.0) if isinstance(st_info, dict) else -1.0
                                 end_t = st_info.get("end_timestamp", float('inf')) if isinstance(st_info, dict) else float('inf')
                                 if end_t == 0.0:
@@ -293,43 +305,57 @@ class RosbagConversionNode(Node):
                 t_info["_meta_source_dir"] = os.path.dirname(meta_file)
                 all_tasks.append((t_name, t_info))
 
-        # Camera sensor discovery
+        # Build flat per-camera maps from all sensor types
         sensors = robot_info.get("sensors", {})
         sensor_types = sensors.get("types", [])
-        camera_data = None
+        all_cam_raw = {}         # name -> raw topic
+        all_cam_compressed = {}  # name -> compressed topic
+        all_cam_props = {}       # name -> properties dict (width, height)
 
         for stype in sensor_types:
             sdata = sensors.get(stype, {})
             names = sdata.get("names", [])
             topics = sdata.get("topics", [])
-            if self.primary_camera in names and names and topics:
-                camera_data = {"names": names, "topics": topics, "sdata": sdata}
-                self.get_logger().info(f"Found primary camera '{self.primary_camera}' in sensor type '{stype}'")
-                break
+            compressed_topics = sdata.get("compressed_topics", [])
+            props = sdata.get("properties", {})
+            for i, name in enumerate(names):
+                if i < len(topics):
+                    all_cam_raw[name] = topics[i]
+                if i < len(compressed_topics) and compressed_topics[i]:
+                    all_cam_compressed[name] = compressed_topics[i]
+                all_cam_props[name] = props.get(name, {})
 
-        if camera_data is None:
-            for stype in sensor_types:
-                sdata = sensors.get(stype, {})
-                names = sdata.get("names", [])
-                topics = sdata.get("topics", [])
-                if names and topics:
-                    camera_data = {"names": names, "topics": topics, "sdata": sdata}
-                    self.get_logger().warn(
-                        f"Primary camera '{self.primary_camera}' not found. Falling back to sensor type '{stype}'."
-                    )
-                    break
-
-        if camera_data is None:
-            self.get_logger().error("No usable camera sensor type found in yaml. Exiting.")
+        if not all_cam_raw:
+            self.get_logger().error("No usable camera sensor type found in metadata. Exiting.")
             return
 
-        self.camera_topics = {n: t for n, t in zip(camera_data["names"], camera_data["topics"])}
+        # Apply camera selection: use config list or fall back to all cameras
+        selected_names = self.cameras_names if self.cameras_names else list(all_cam_raw.keys())
+        selected_compressed = list(self.cameras_compressed)
+        # Pad compressed flags with False if shorter than names
+        if len(selected_compressed) < len(selected_names):
+            selected_compressed += [False] * (len(selected_names) - len(selected_compressed))
+
+        self.camera_topics = {}
+        for name, use_compressed in zip(selected_names, selected_compressed):
+            if name not in all_cam_raw:
+                self.get_logger().error(f"Camera '{name}' not found in metadata sensors. Aborting.")
+                return
+            if use_compressed:
+                topic = all_cam_compressed.get(name, "")
+                if not topic:
+                    self.get_logger().warn(f"Camera '{name}': no compressed topic in metadata, falling back to raw.")
+                    topic = all_cam_raw[name]
+            else:
+                topic = all_cam_raw[name]
+            self.camera_topics[name] = topic
+
         # O2: build cached reverse map once
         self.topic_to_cam = {v: k for k, v in self.camera_topics.items()}
 
         if self.primary_camera not in self.camera_topics:
             fallback = list(self.camera_topics.keys())[0]
-            self.get_logger().warn(f"Primary camera '{self.primary_camera}' not in topics. Falling back to '{fallback}'.")
+            self.get_logger().warn(f"Primary camera '{self.primary_camera}' not in selected cameras. Falling back to '{fallback}'.")
             self.primary_camera = fallback
 
         # Subtask index
@@ -371,9 +397,8 @@ class RosbagConversionNode(Node):
             features["subtask_index"] = {"dtype": "int64", "shape": (1,), "names": ["subtask_index"]}
 
         if not self.skip_cameras:
-            sdata = camera_data["sdata"]
-            for cam_name in camera_data["names"]:
-                props = sdata.get("properties", {}).get(cam_name, {})
+            for cam_name in self.camera_topics.keys():
+                props = all_cam_props.get(cam_name, {})
                 w = props.get("width", 640)
                 h = props.get("height", 480)
                 features[f"observation.images.{cam_name}"] = {
@@ -387,6 +412,7 @@ class RosbagConversionNode(Node):
             repo_id=self.dataset_name,
             fps=fps,
             features=features,
+            root=self.output_directory,
             video_backend="auto",
             streaming_encoding=True,
         )
@@ -489,7 +515,13 @@ class RosbagConversionNode(Node):
                 self.get_logger().info(f"  → Saved {len(frames)} frames.")
 
         dataset.finalize()
+        self.get_logger().info(f"Dataset saved to: {dataset.root}")
         self.get_logger().info("Dataset creation completed!")
+
+        if self.push_to_hub:
+            self.get_logger().info(f"Pushing dataset to HuggingFace Hub as '{self.dataset_name}'...")
+            dataset.push_to_hub(private=self.hub_private)
+            self.get_logger().info("Push to Hub completed!")
 
         # Episode quality report
         if self.episode_stats:
