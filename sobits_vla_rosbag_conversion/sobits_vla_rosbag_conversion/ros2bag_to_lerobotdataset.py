@@ -226,6 +226,17 @@ class RosbagConversionNode(Node):
                             action_freshness += [cmd_vel_fresh] * len(latest_cmd_vel)
                         frame["action.is_fresh"] = torch.tensor(action_freshness, dtype=torch.bool)
 
+                        # Delta action: joint delta = action - state, base velocity is already relative
+                        delta = [action[i] - state[i] for i in range(joint_dim)]
+                        if self.has_mobile_base:
+                            delta += list(latest_cmd_vel)  # base vel is inherently delta
+                        frame["action.delta"] = torch.tensor(delta, dtype=torch.float32)
+                        # Delta freshness requires both action and state to be fresh
+                        delta_freshness = [action_joint_fresh and state_fresh] * joint_dim
+                        if self.has_mobile_base:
+                            delta_freshness += [cmd_vel_fresh] * len(latest_cmd_vel)
+                        frame["action.delta.is_fresh"] = torch.tensor(delta_freshness, dtype=torch.bool)
+
                         if not self.skip_cameras:
                             for c_name in self.camera_topics.keys():
                                 img_arr = np.ascontiguousarray(images[c_name].transpose(2, 0, 1))
@@ -430,6 +441,8 @@ class RosbagConversionNode(Node):
         features = {
             "action": {"dtype": "float32", "shape": (action_dim,), "names": self.action_features + cmd_vel_keys},
             "action.is_fresh": {"dtype": "bool", "shape": (action_dim,), "names": None},
+            "action.delta": {"dtype": "float32", "shape": (action_dim,), "names": self.action_features + cmd_vel_keys},
+            "action.delta.is_fresh": {"dtype": "bool", "shape": (action_dim,), "names": None},
             "observation.state": {"dtype": "float32", "shape": (action_dim,), "names": self.action_features + cmd_vel_keys},
             "observation.state.is_fresh": {"dtype": "bool", "shape": (action_dim,), "names": None},
         }
