@@ -119,7 +119,7 @@ class RosbagConversionNode(Node):
         latest_joint_state = None
         latest_joint_velocity = None
         latest_joint_time = 0.0
-        latest_cmd_vel = [0.0, 0.0, 0.0] if self.has_cmd_vel_y else ([0.0, 0.0] if self.has_mobile_base else None)
+        latest_cmd_vel = [0.0] * len(self.base_keys) if self.has_mobile_base else None
         latest_cmd_vel_time = 0.0
         # Per-joint commanded positions and timestamps (from JointTrajectory messages)
         commanded_joints = {}       # {joint_name: position}
