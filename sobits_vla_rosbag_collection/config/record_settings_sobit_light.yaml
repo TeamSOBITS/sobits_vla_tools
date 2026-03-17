@@ -112,6 +112,12 @@
       # Path to the directory where the recorded bag files will be saved.
       # If left empty (""), the launcher will dynamically resolve it to the `rosbags` folder inside `sobits_vla_rosbag_collection`.
       record_directory: ""
+      # Minimum episode duration in seconds. Episodes shorter than this are
+      # rejected on save (likely accidental). Set to 0 to disable.
+      min_episode_duration: 1.0
+      # Maximum episode duration in seconds. Recording is auto-stopped when
+      # exceeded (prevents runaway recordings). Set to 0 to disable.
+      max_episode_duration: 0.0
       # Minimum free disk space (MB) before warning/stopping recording.
       # Default 2048 MB (2 GB). Set to 0 to disable.
       min_disk_space_mb: 2048

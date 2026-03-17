@@ -144,6 +144,9 @@ private:
   std::thread recorder_thread_;
   std::mutex recorder_mutex_;
   std::atomic<bool> is_recording_{false};
+  std::chrono::steady_clock::time_point recording_start_time_;
+  double min_episode_duration_sec_{0.0};  // 0 = disabled
+  double max_episode_duration_sec_{0.0};  // 0 = disabled
   bool task_has_been_set_{false};
 
   std::map<std::string, rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr> camera_info_subs_;

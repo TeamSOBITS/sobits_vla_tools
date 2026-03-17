@@ -114,6 +114,8 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 
   // (3) Rosbag parameters
   this->declare_parameter<std::string>("rosbag_config.record_directory", "");
+  this->declare_parameter<double>("rosbag_config.min_episode_duration", 1.0);
+  this->declare_parameter<double>("rosbag_config.max_episode_duration", 0.0);
   this->declare_parameter<int>("rosbag_config.min_disk_space_mb", 2048);
   this->declare_parameter<int>("rosbag_config.expected_sensor_fps", 0);
   this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_topics", std::vector<std::string>{});
@@ -123,6 +125,8 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("rosbag_config.compression_format", "zstd");
   this->declare_parameter<std::string>("rosbag_config.compression_mode", "none");
   this->declare_parameter<std::string>("rosbag_config.rmw_serialization_format", "cdr");
+  min_episode_duration_sec_         = this->get_parameter("rosbag_config.min_episode_duration").as_double();
+  max_episode_duration_sec_         = this->get_parameter("rosbag_config.max_episode_duration").as_double();
   min_disk_space_mb_                = static_cast<uint64_t>(this->get_parameter("rosbag_config.min_disk_space_mb").as_int());
   expected_sensor_fps_              = this->get_parameter("rosbag_config.expected_sensor_fps").as_int();
   rosbag_info_.recording_dir        = this->get_parameter("rosbag_config.record_directory").as_string();
@@ -508,6 +512,19 @@ void RosbagCollection::startRecordingMonitor()
           RCLCPP_WARN(this->get_logger(), "Failed to check disk space: %s", e.what());
         }
       }
+
+      // Max episode duration check — warn and trigger save
+      if (max_episode_duration_sec_ > 0.0) {
+        auto elapsed = std::chrono::steady_clock::now() - recording_start_time_;
+        double duration_sec = std::chrono::duration<double>(elapsed).count();
+        if (duration_sec >= max_episode_duration_sec_) {
+          RCLCPP_WARN(this->get_logger(),
+            "Max episode duration reached (%.1fs >= %.1fs). Auto-saving.",
+            duration_sec, max_episode_duration_sec_);
+          // Trigger save in a separate thread to avoid blocking the timer callback
+          std::thread([this]() { saveRosbag(); }).detach();
+        }
+      }
     });
 
   RCLCPP_INFO(this->get_logger(), "Recording monitor started (fps_topics=%zu, expected_hz=%d, min_disk_mb=%lu).",
@@ -566,6 +583,7 @@ void RosbagCollection::createRosbag()
   current_episode_subtasks_.clear();
 
   // Set the current state to RECORDING
+  recording_start_time_ = std::chrono::steady_clock::now();
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
 
@@ -686,10 +704,25 @@ void RosbagCollection::saveRosbag()
 
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
-  
+
+  // Episode duration validation (steady_clock: monotonic, unaffected by sim_time or NTP)
+  auto elapsed = std::chrono::steady_clock::now() - recording_start_time_;
+  double duration_sec = std::chrono::duration<double>(elapsed).count();
+
+  if (min_episode_duration_sec_ > 0.0 && duration_sec < min_episode_duration_sec_) {
+    RCLCPP_WARN(this->get_logger(),
+      "Episode too short (%.1fs < %.1fs minimum). Discarding bag: %s",
+      duration_sec, min_episode_duration_sec_, current_bag_path_.c_str());
+    if (std::filesystem::exists(current_bag_path_)) {
+      std::filesystem::remove_all(current_bag_path_);
+    }
+    removeEpisodeFromYaml();
+    return;
+  }
+
   updateEpisodeYaml();
 
-  RCLCPP_INFO(this->get_logger(), "Rosbag saved successfully");
+  RCLCPP_INFO(this->get_logger(), "Rosbag saved successfully (duration: %.1fs)", duration_sec);
 }
 
 void RosbagCollection::createRosbagYaml()
