@@ -19,9 +19,8 @@
           - mobile_base
         head:
           is_actionable: true
-          topics:
-            - "/sobit_light/head_joint_controller/controller_state"
-            - "/sobit_light/head_joint_controller/joint_trajectory"
+          command_topic: "/sobit_light/head_joint_controller/joint_trajectory"
+          state_topic: "/sobit_light/head_joint_controller/controller_state"
           actions:
             - "/sobit_light/head_joint_controller/follow_joint_trajectory"
           joint_names:
@@ -29,9 +28,8 @@
             - "head_pitch_joint"
         manipulator:
           is_actionable: true
-          topics:
-            - "/sobit_light/arm_joint_controller/controller_state"
-            - "/sobit_light/arm_joint_controller/joint_trajectory"
+          command_topic: "/sobit_light/arm_joint_controller/joint_trajectory"
+          state_topic: "/sobit_light/arm_joint_controller/controller_state"
           actions:
             - "/sobit_light/arm_joint_controller/follow_joint_trajectory"
           joint_names:
@@ -44,9 +42,8 @@
             - "arm_wrist_roll_joint"
         end_effector:
           is_actionable: true
-          topics:
-            - "/sobit_light/hand_joint_controller/controller_state"
-            - "/sobit_light/hand_joint_controller/joint_trajectory"
+          command_topic: "/sobit_light/hand_joint_controller/joint_trajectory"
+          state_topic: "/sobit_light/hand_joint_controller/controller_state"
           actions:
             - "/sobit_light/hand_joint_controller/follow_joint_trajectory"
           joint_names:

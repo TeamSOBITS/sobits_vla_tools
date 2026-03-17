@@ -62,11 +62,13 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   for (const auto & part : robot_info_.parts) {
     RCLCPP_INFO(this->get_logger(), "Robot part: %s", part.c_str());
     this->declare_parameter<bool>("robot_info.morphology." + part + ".is_actionable", false);
-    this->declare_parameter<std::vector<std::string>>("robot_info.morphology." + part + ".topics", std::vector<std::string>{});
+    this->declare_parameter<std::string>("robot_info.morphology." + part + ".command_topic", "");
+    this->declare_parameter<std::string>("robot_info.morphology." + part + ".state_topic", "");
     this->declare_parameter<std::vector<std::string>>("robot_info.morphology." + part + ".actions", std::vector<std::string>{});
     this->declare_parameter<std::vector<std::string>>("robot_info.morphology." + part + ".joint_names", std::vector<std::string>{});
     robot_info_.is_actionable[part] = this->get_parameter("robot_info.morphology." + part + ".is_actionable").as_bool();
-    robot_info_.part_topics[part] = this->get_parameter("robot_info.morphology." + part + ".topics").as_string_array();
+    robot_info_.part_command_topic[part] = this->get_parameter("robot_info.morphology." + part + ".command_topic").as_string();
+    robot_info_.part_state_topic[part] = this->get_parameter("robot_info.morphology." + part + ".state_topic").as_string();
     robot_info_.part_actions[part] = this->get_parameter("robot_info.morphology." + part + ".actions").as_string_array();
     robot_info_.joint_names[part] = this->get_parameter("robot_info.morphology." + part + ".joint_names").as_string_array();
     
@@ -281,10 +283,11 @@ void RosbagCollection::buildTopicList()
     if (robot_info_.part_odom_topic.count(part) && !robot_info_.part_odom_topic.at(part).empty()) {
       all_topics.push_back(robot_info_.part_odom_topic.at(part));
     }
-    for (const auto & topic : robot_info_.part_topics[part]) {
-      if (!topic.empty()) {
-        all_topics.push_back(topic);
-      }
+    if (!robot_info_.part_command_topic[part].empty()) {
+      all_topics.push_back(robot_info_.part_command_topic[part]);
+    }
+    if (!robot_info_.part_state_topic[part].empty()) {
+      all_topics.push_back(robot_info_.part_state_topic[part]);
     }
   }
 
@@ -482,12 +485,12 @@ void RosbagCollection::createRosbagYaml()
     yaml_node["robot_info"]["morphology"]["parts"].push_back(part);
     yaml_node["robot_info"]["morphology"][part]["is_actionable"] = robot_info_.is_actionable[part];
     
-    // Serialize per-part explicit topics and actions (for non-locomotion parts)
-    if (!robot_info_.part_topics[part].empty()) {
-      yaml_node["robot_info"]["morphology"][part]["topics"] = YAML::Node(YAML::NodeType::Sequence);
-      for (const auto & topic : robot_info_.part_topics[part]) {
-        yaml_node["robot_info"]["morphology"][part]["topics"].push_back(topic);
-      }
+    // Serialize per-part command/state topics and actions (for non-locomotion parts)
+    if (!robot_info_.part_command_topic[part].empty()) {
+      yaml_node["robot_info"]["morphology"][part]["command_topic"] = robot_info_.part_command_topic[part];
+    }
+    if (!robot_info_.part_state_topic[part].empty()) {
+      yaml_node["robot_info"]["morphology"][part]["state_topic"] = robot_info_.part_state_topic[part];
     }
     if (!robot_info_.part_actions[part].empty()) {
       yaml_node["robot_info"]["morphology"][part]["actions"] = YAML::Node(YAML::NodeType::Sequence);

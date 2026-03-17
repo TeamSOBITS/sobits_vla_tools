@@ -130,9 +130,8 @@ class RosbagConversionNode(Node):
         prev_ee_pose = None
 
         # Compute wanted topic set and filter connections
-        # TODO: obtain wanted topics from yaml
         wanted = set(self.camera_topics.values()) | {self.joint_states_topic}
-        wanted |= self.part_command_topics
+        wanted |= self.part_command_topics  # JointTrajectory topics (required for action)
         if self.has_mobile_base and self.cmd_vel_topic:
             wanted.add(self.cmd_vel_topic)
         if self.ee_pose_enabled:
@@ -391,10 +390,9 @@ class RosbagConversionNode(Node):
                                 self.odom_topic = part_info.get("odom_topic", "")
                             else:
                                 self.action_features.extend(part_info.get("joint_names", []))
-                                # Collect part topics (controller_state + joint_trajectory)
-                                # Command topics (JointTrajectory) are identified by msgtype at read time
-                                for topic in part_info.get("topics", []):
-                                    self.part_command_topics.add(topic)
+                                cmd_topic = part_info.get("command_topic", "")
+                                if cmd_topic:
+                                    self.part_command_topics.add(cmd_topic)
 
                     if not self.action_features and not self.has_mobile_base:
                         self.get_logger().warn("No actionable joints and no active mobile base found.")

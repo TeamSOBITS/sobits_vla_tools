@@ -40,7 +40,8 @@ public:
   std::string morphology;
   std::vector<std::string> parts;
   std::map<std::string, bool> is_actionable;
-  std::map<std::string, std::vector<std::string>> part_topics;
+  std::map<std::string, std::string> part_command_topic;  // joint_trajectory topic per part
+  std::map<std::string, std::string> part_state_topic;    // controller_state topic per part
   std::map<std::string, std::vector<std::string>> part_actions;
   std::map<std::string, std::vector<std::string>> joint_names;
   
