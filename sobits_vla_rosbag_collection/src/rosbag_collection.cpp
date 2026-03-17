@@ -257,6 +257,8 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 RosbagCollection::~RosbagCollection()
 {
   RCLCPP_INFO(this->get_logger(), "RosbagCollection destructor called");
+  node_alive_->store(false);  // prevent detached threads from calling back
+  stopRecordingMonitor();     // cancel timer before any further teardown
   if (is_recording_) {
     try {
       saveRosbag();
@@ -561,7 +563,10 @@ void RosbagCollection::startRecordingMonitor()
           RCLCPP_WARN(this->get_logger(),
             "Max episode duration reached (%.1fs >= %.1fs). Auto-saving.",
             duration_sec, max_episode_duration_sec_);
-          std::thread([this]() { saveRosbag(); }).detach();
+          auto alive = node_alive_;
+          std::thread([this, alive]() {
+            if (alive->load()) saveRosbag();
+          }).detach();
         }
       }
     });
@@ -688,11 +693,9 @@ void RosbagCollection::removeRosbag()
     is_recording_ = false;
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
 
+    recorder_node_.reset();
     if (recorder_thread_.joinable()) {
-       recorder_node_.reset(); 
-       if(recorder_thread_.joinable()) {
-           recorder_thread_.join();
-       }
+      recorder_thread_.join();
     }
   }
 
@@ -721,7 +724,7 @@ void RosbagCollection::removeRosbag()
   RCLCPP_INFO(this->get_logger(), "Rosbag removed successfully");
 }
 
-void RosbagCollection::saveRosbag()
+bool RosbagCollection::saveRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Saving rosbag...");
   stopRecordingMonitor();
@@ -732,13 +735,13 @@ void RosbagCollection::saveRosbag()
     RCLCPP_WARN(this->get_logger(), "No rosbag process to terminate");
     previous_state_ = current_state_;
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
-    return;
+    return false;
   }
 
   RCLCPP_INFO(this->get_logger(), "Stopping recorder for saving...");
   is_recording_ = false;
 
-  recorder_node_.reset(); 
+  recorder_node_.reset();
 
   if (recorder_thread_.joinable()) {
        recorder_thread_.join();
@@ -759,7 +762,7 @@ void RosbagCollection::saveRosbag()
       std::filesystem::remove_all(current_bag_path_);
     }
     removeEpisodeFromYaml();
-    return;
+    return false;
   }
 
   // Bag integrity check
@@ -770,12 +773,13 @@ void RosbagCollection::saveRosbag()
       std::filesystem::remove_all(current_bag_path_);
     }
     removeEpisodeFromYaml();
-    return;
+    return false;
   }
 
   updateEpisodeYaml();
 
   RCLCPP_INFO(this->get_logger(), "Rosbag saved successfully (duration: %.1fs)", duration_sec);
+  return true;
 }
 
 bool RosbagCollection::verifyBagIntegrity(const std::string & bag_path)
@@ -919,6 +923,9 @@ void RosbagCollection::createRosbagYaml()
     }
     for (const auto & sensor_topic : robot_info_.sensor_topics[sensor_type]) {
       yaml_node["robot_info"]["sensors"][sensor_type]["topics"].push_back(sensor_topic);
+    }
+    for (const auto & info_topic : robot_info_.sensor_info_topics[sensor_type]) {
+      yaml_node["robot_info"]["sensors"][sensor_type]["info_topics"].push_back(info_topic);
     }
     for (const auto & compressed_topic : robot_info_.sensor_compressed_topics[sensor_type]) {
       yaml_node["robot_info"]["sensors"][sensor_type]["compressed_topics"].push_back(compressed_topic);
@@ -1064,6 +1071,12 @@ void RosbagCollection::updateEpisodeYaml()
     }
 
     yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes"][current_bag_name_] = episode_node;
+  } else {
+    RCLCPP_ERROR(this->get_logger(),
+      "Task '%s' not found in YAML metadata. Episode '%s' will not be saved to metadata. "
+      "Was updateRosbagYaml() called after setting the task?",
+      current_task_label.c_str(), current_bag_name_.c_str());
+    return;
   }
 
   // Save the updated YAML node to the file
@@ -1231,10 +1244,15 @@ void RosbagCollection::execute(
       goal_handle->abort(result);
       return;
     }
-    saveRosbag();
-    result->status = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
-    goal_handle->succeed(result);
-    RCLCPP_INFO(this->get_logger(), "Recording saved successfully");
+    if (saveRosbag()) {
+      result->status = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
+      goal_handle->succeed(result);
+      RCLCPP_INFO(this->get_logger(), "Recording saved successfully");
+    } else {
+      result->status = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
+      goal_handle->abort(result);
+      RCLCPP_WARN(this->get_logger(), "Recording was discarded (too short or integrity failed)");
+    }
   } else if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::DELETE) {
     removeRosbag();
     result->status = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
