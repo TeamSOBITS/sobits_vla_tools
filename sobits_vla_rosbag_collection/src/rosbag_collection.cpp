@@ -857,8 +857,136 @@ bool RosbagCollection::verifyBagIntegrity(const std::string & bag_path)
 
 void RosbagCollection::createRosbagYaml()
 {
-  RCLCPP_INFO(this->get_logger(), "Creating rosbag YAML file...");
-  // Create the YAML node structure
+  std::string yaml_file_path = rosbag_info_.recording_dir + "/recorded_bags_meta.yaml";
+
+  // If the file already exists, validate config consistency instead of overwriting
+  if (std::filesystem::exists(yaml_file_path)) {
+    RCLCPP_INFO(this->get_logger(), "Found existing metadata: %s — validating config consistency...", yaml_file_path.c_str());
+    try {
+      YAML::Node existing = YAML::LoadFile(yaml_file_path);
+      auto existing_robot = existing["robot_info"];
+
+      // Compare critical fields that must match for a consistent dataset
+      std::vector<std::string> mismatches;
+
+      if (existing_robot["name"].as<std::string>("") != robot_info_.name) {
+        mismatches.push_back("robot_info.name: '" + existing_robot["name"].as<std::string>("") + "' vs '" + robot_info_.name + "'");
+      }
+      if (existing_robot["version"].as<std::string>("") != robot_info_.version) {
+        mismatches.push_back("robot_info.version: '" + existing_robot["version"].as<std::string>("") + "' vs '" + robot_info_.version + "'");
+      }
+
+      auto existing_morph = existing_robot["morphology"];
+      if (existing_morph["type"].as<std::string>("") != robot_info_.morphology) {
+        mismatches.push_back("morphology.type: '" + existing_morph["type"].as<std::string>("") + "' vs '" + robot_info_.morphology + "'");
+      }
+      if (existing_morph["joint_states_topic"].as<std::string>("") != robot_info_.joint_states_topic) {
+        mismatches.push_back("joint_states_topic: '" + existing_morph["joint_states_topic"].as<std::string>("") + "' vs '" + robot_info_.joint_states_topic + "'");
+      }
+
+      // Compare parts list
+      std::vector<std::string> existing_parts;
+      if (existing_morph["parts"].IsDefined()) {
+        for (const auto & p : existing_morph["parts"]) {
+          existing_parts.push_back(p.as<std::string>());
+        }
+      }
+      if (existing_parts != robot_info_.parts) {
+        mismatches.push_back("morphology.parts differ");
+      }
+
+      // Compare per-part joint_names and actionable flags
+      for (const auto & part : robot_info_.parts) {
+        if (!existing_morph[part].IsDefined()) {
+          mismatches.push_back("part '" + part + "' missing from existing metadata");
+          continue;
+        }
+        if (existing_morph[part]["is_actionable"].as<bool>(false) != robot_info_.is_actionable[part]) {
+          mismatches.push_back("part '" + part + "' is_actionable mismatch");
+        }
+        std::vector<std::string> existing_joints;
+        if (existing_morph[part]["joint_names"].IsDefined()) {
+          for (const auto & j : existing_morph[part]["joint_names"]) {
+            existing_joints.push_back(j.as<std::string>());
+          }
+        }
+        if (existing_joints != robot_info_.joint_names[part]) {
+          mismatches.push_back("part '" + part + "' joint_names differ");
+        }
+      }
+
+      // Compare sensors
+      auto existing_sensors = existing_robot["sensors"];
+      std::vector<std::string> existing_sensor_types;
+      if (existing_sensors["types"].IsDefined()) {
+        for (const auto & st : existing_sensors["types"]) {
+          existing_sensor_types.push_back(st.as<std::string>());
+        }
+      }
+      if (existing_sensor_types != robot_info_.sensor_types) {
+        mismatches.push_back("sensors.types differ");
+      }
+      for (const auto & stype : robot_info_.sensor_types) {
+        if (!existing_sensors[stype].IsDefined()) {
+          mismatches.push_back("sensor type '" + stype + "' missing from existing metadata");
+          continue;
+        }
+        // Compare sensor names
+        std::vector<std::string> existing_names;
+        if (existing_sensors[stype]["names"].IsDefined()) {
+          for (const auto & n : existing_sensors[stype]["names"]) {
+            existing_names.push_back(n.as<std::string>());
+          }
+        }
+        if (existing_names != robot_info_.sensor_names[stype]) {
+          mismatches.push_back("sensor '" + stype + "' names differ");
+        }
+        // Compare sensor topics
+        std::vector<std::string> existing_topics;
+        if (existing_sensors[stype]["topics"].IsDefined()) {
+          for (const auto & t : existing_sensors[stype]["topics"]) {
+            existing_topics.push_back(t.as<std::string>());
+          }
+        }
+        if (existing_topics != robot_info_.sensor_topics[stype]) {
+          mismatches.push_back("sensor '" + stype + "' topics differ");
+        }
+      }
+
+      // Compare user info
+      auto existing_user = existing["user_info"];
+      if (existing_user["name"].as<std::string>("") != user_info_.name) {
+        mismatches.push_back("user_info.name: '" + existing_user["name"].as<std::string>("") + "' vs '" + user_info_.name + "'");
+      }
+      if (existing_user["email"].as<std::string>("") != user_info_.email) {
+        mismatches.push_back("user_info.email: '" + existing_user["email"].as<std::string>("") + "' vs '" + user_info_.email + "'");
+      }
+      if (existing_user["location"].as<std::string>("") != user_info_.location) {
+        mismatches.push_back("user_info.location: '" + existing_user["location"].as<std::string>("") + "' vs '" + user_info_.location + "'");
+      }
+
+      if (!mismatches.empty()) {
+        RCLCPP_ERROR(this->get_logger(),
+          "Config mismatch with existing metadata! %zu difference(s) found:", mismatches.size());
+        for (const auto & m : mismatches) {
+          RCLCPP_ERROR(this->get_logger(), "  - %s", m.c_str());
+        }
+        RCLCPP_ERROR(this->get_logger(),
+          "Cannot resume recording with different robot config. "
+          "Either use the same config or record to a different directory.");
+        throw std::runtime_error("Config mismatch with existing recorded_bags_meta.yaml");
+      }
+
+      RCLCPP_INFO(this->get_logger(), "Config validation passed — resuming with existing metadata.");
+      return;  // keep the existing file intact
+    } catch (const YAML::Exception & e) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to parse existing metadata: %s. Cannot resume safely.", e.what());
+      throw std::runtime_error("Failed to parse existing recorded_bags_meta.yaml");
+    }
+  }
+
+  // File doesn't exist — create fresh
+  RCLCPP_INFO(this->get_logger(), "Creating new rosbag YAML file...");
   YAML::Node yaml_node;
 
   // (1) Add robot info
