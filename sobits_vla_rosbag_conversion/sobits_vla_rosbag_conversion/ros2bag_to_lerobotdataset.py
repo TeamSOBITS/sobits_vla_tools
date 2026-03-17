@@ -121,7 +121,9 @@ class RosbagConversionNode(Node):
         latest_joint_time = 0.0
         latest_cmd_vel = [0.0, 0.0, 0.0] if self.has_cmd_vel_y else ([0.0, 0.0] if self.has_mobile_base else None)
         latest_cmd_vel_time = 0.0
-        action_initialized = False  # True once a real command is received
+        # Per-joint commanded positions and timestamps (from JointTrajectory messages)
+        commanded_joints = {}       # {joint_name: position}
+        commanded_joints_time = {}  # {joint_name: timestamp}
 
         # EE pose tracking
         tf_tree = OfflineTFTree() if self.ee_pose_enabled else None
@@ -130,6 +132,7 @@ class RosbagConversionNode(Node):
         # Compute wanted topic set and filter connections
         # TODO: obtain wanted topics from yaml
         wanted = set(self.camera_topics.values()) | {self.joint_states_topic}
+        wanted |= self.part_command_topics
         if self.has_mobile_base and self.cmd_vel_topic:
             wanted.add(self.cmd_vel_topic)
         if self.ee_pose_enabled:
@@ -167,6 +170,16 @@ class RosbagConversionNode(Node):
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     tf_tree.ingest(msg, is_static=(topic == "/tf_static"))
 
+                elif topic in self.part_command_topics:
+                    msg = reader.deserialize(rawdata, connection.msgtype)
+                    # JointTrajectory messages carry commanded positions
+                    if hasattr(msg, 'joint_names') and hasattr(msg, 'points') and msg.points:
+                        target_point = msg.points[-1]  # final waypoint = target
+                        t_cmd = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') and msg.header.stamp.sec > 0 else t_bag
+                        for jn, pos in zip(msg.joint_names, target_point.positions):
+                            commanded_joints[jn] = pos
+                            commanded_joints_time[jn] = t_cmd
+
                 elif topic == self.cmd_vel_topic and self.has_mobile_base:
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') else t_bag
@@ -179,7 +192,6 @@ class RosbagConversionNode(Node):
                     else:
                         latest_cmd_vel = [msg.linear.x, msg.angular.z]
                     latest_cmd_vel_time = t_sec
-                    action_initialized = True
 
                 elif topic in self.topic_to_cam:
                     cam_name = self.topic_to_cam[topic]
@@ -219,11 +231,12 @@ class RosbagConversionNode(Node):
                                 continue
 
                         state = latest_joint_state + (latest_cmd_vel if self.has_mobile_base else [])
-                        # Action: use current state as action if no command received yet
-                        if not action_initialized and self.has_mobile_base:
-                            action = latest_joint_state + ([0.0] * len(latest_cmd_vel))
-                        else:
-                            action = state[:]
+                        # Action: use commanded position per joint, fall back to state if not yet received
+                        action_joints = [
+                            commanded_joints.get(feat, latest_joint_state[i])
+                            for i, feat in enumerate(self.action_features)
+                        ]
+                        action = action_joints + (latest_cmd_vel if self.has_mobile_base else [])
                         frame = {
                             "action": torch.tensor(action, dtype=torch.float32),
                             "observation.state": torch.tensor(state, dtype=torch.float32),
@@ -236,20 +249,26 @@ class RosbagConversionNode(Node):
                             (len(state),), state_fresh, dtype=torch.bool
                         )
 
-                        action_joint_fresh = state_fresh and action_initialized
+                        # Per-joint action freshness based on individual command timestamps
                         cmd_vel_fresh = latest_cmd_vel_time > last_frame_time if self.has_mobile_base else False
-                        action_freshness = [action_joint_fresh] * joint_dim
+                        action_freshness = [
+                            commanded_joints_time.get(feat, 0.0) > last_frame_time
+                            for feat in self.action_features
+                        ]
                         if self.has_mobile_base:
                             action_freshness += [cmd_vel_fresh] * len(latest_cmd_vel)
                         frame["action.is_fresh"] = torch.tensor(action_freshness, dtype=torch.bool)
 
-                        # Delta action: joint delta = action - state, base velocity is already relative
+                        # Delta action: joint delta = commanded - measured, base vel is already relative
                         delta = [action[i] - state[i] for i in range(joint_dim)]
                         if self.has_mobile_base:
                             delta += list(latest_cmd_vel)  # base vel is inherently delta
                         frame["action.delta"] = torch.tensor(delta, dtype=torch.float32)
-                        # Delta freshness requires both action and state to be fresh
-                        delta_freshness = [action_joint_fresh and state_fresh] * joint_dim
+                        # Delta freshness requires both command and state to be fresh
+                        delta_freshness = [
+                            action_freshness[i] and state_fresh
+                            for i in range(joint_dim)
+                        ]
                         if self.has_mobile_base:
                             delta_freshness += [cmd_vel_fresh] * len(latest_cmd_vel)
                         frame["action.delta.is_fresh"] = torch.tensor(delta_freshness, dtype=torch.bool)
@@ -355,6 +374,7 @@ class RosbagConversionNode(Node):
                     parts = morphology.get("parts", [])
 
                     self.action_features = []
+                    self.part_command_topics = set()  # topics carrying joint commands
                     for part in parts:
                         part_info = morphology.get(part, {})
                         if part_info.get("is_actionable", False):
@@ -365,6 +385,11 @@ class RosbagConversionNode(Node):
                                 self.has_cmd_vel_z = part_info.get("has_cmd_vel_z", False)
                                 self.cmd_vel_topic = part_info.get("cmd_vel_topic", "/cmd_vel")
                                 self.odom_topic = part_info.get("odom_topic", "")
+                            else:
+                                # Collect part topics (controller_state + joint_trajectory)
+                                # Command topics (JointTrajectory) are identified by msgtype at read time
+                                for topic in part_info.get("topics", []):
+                                    self.part_command_topics.add(topic)
 
                     if not self.action_features and not self.has_mobile_base:
                         self.get_logger().warn("No actionable joints and no active mobile base found.")
