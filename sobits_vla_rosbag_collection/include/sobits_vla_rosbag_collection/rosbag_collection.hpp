@@ -160,6 +160,11 @@ private:
   std::map<std::string, std::atomic<uint64_t>> monitor_counts_;
   std::map<std::string, uint64_t> monitor_prev_counts_;
   rclcpp::TimerBase::SharedPtr fps_monitor_timer_;
+  // Timestamp jump detection
+  double timestamp_jump_threshold_sec_{1.0};  // max drift between ROS clock and wall clock per check
+  rclcpp::Time prev_ros_time_;
+  std::chrono::steady_clock::time_point prev_wall_time_;
+  bool timestamp_monitor_initialized_{false};
 
   // Parameters
   RobotInfo robot_info_;

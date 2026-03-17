@@ -118,6 +118,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("rosbag_config.record_directory", "");
   this->declare_parameter<double>("rosbag_config.min_episode_duration", 1.0);
   this->declare_parameter<double>("rosbag_config.max_episode_duration", 0.0);
+  this->declare_parameter<double>("rosbag_config.timestamp_jump_threshold", 1.0);
   this->declare_parameter<int>("rosbag_config.min_disk_space_mb", 2048);
   this->declare_parameter<int>("rosbag_config.expected_sensor_fps", 0);
   this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_topics", std::vector<std::string>{});
@@ -129,6 +130,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("rosbag_config.rmw_serialization_format", "cdr");
   min_episode_duration_sec_         = this->get_parameter("rosbag_config.min_episode_duration").as_double();
   max_episode_duration_sec_         = this->get_parameter("rosbag_config.max_episode_duration").as_double();
+  timestamp_jump_threshold_sec_     = this->get_parameter("rosbag_config.timestamp_jump_threshold").as_double();
   min_disk_space_mb_                = static_cast<uint64_t>(this->get_parameter("rosbag_config.min_disk_space_mb").as_int());
   expected_sensor_fps_              = this->get_parameter("rosbag_config.expected_sensor_fps").as_int();
   rosbag_info_.recording_dir        = this->get_parameter("rosbag_config.record_directory").as_string();
@@ -515,6 +517,29 @@ void RosbagCollection::startRecordingMonitor()
         }
       }
 
+      // Timestamp jump detection: compare ROS clock vs wall clock progression
+      if (timestamp_jump_threshold_sec_ > 0.0) {
+        auto now_wall = std::chrono::steady_clock::now();
+        rclcpp::Time now_ros = this->get_clock()->now();
+
+        if (timestamp_monitor_initialized_) {
+          double wall_delta = std::chrono::duration<double>(now_wall - prev_wall_time_).count();
+          double ros_delta = (now_ros - prev_ros_time_).seconds();
+          double drift = std::abs(ros_delta - wall_delta);
+
+          if (drift > timestamp_jump_threshold_sec_) {
+            RCLCPP_ERROR(this->get_logger(),
+              "TIMESTAMP JUMP: ROS clock drifted %.2fs from wall clock in %.1fs interval "
+              "(ros_delta=%.2fs, wall_delta=%.2fs). Bag timestamps may be inconsistent!",
+              drift, wall_delta, ros_delta, wall_delta);
+          }
+        } else {
+          timestamp_monitor_initialized_ = true;
+        }
+        prev_wall_time_ = now_wall;
+        prev_ros_time_ = now_ros;
+      }
+
       // Max episode duration check — warn and trigger save
       if (max_episode_duration_sec_ > 0.0) {
         auto elapsed = std::chrono::steady_clock::now() - recording_start_time_;
@@ -542,6 +567,7 @@ void RosbagCollection::stopRecordingMonitor()
   monitor_subs_.clear();
   monitor_counts_.clear();
   monitor_prev_counts_.clear();
+  timestamp_monitor_initialized_ = false;
 }
 
 void RosbagCollection::createRosbag()

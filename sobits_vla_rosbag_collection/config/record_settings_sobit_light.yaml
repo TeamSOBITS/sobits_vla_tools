@@ -118,6 +118,10 @@
       # Maximum episode duration in seconds. Recording is auto-stopped when
       # exceeded (prevents runaway recordings). Set to 0 to disable.
       max_episode_duration: 0.0
+      # Maximum acceptable drift (seconds) between the ROS clock and wall clock
+      # per monitor interval. Detects sim_time jumps or NTP corrections.
+      # Set to 0.0 to disable. Default 1.0s.
+      timestamp_jump_threshold: 1.0
       # Minimum free disk space (MB) before warning/stopping recording.
       # Default 2048 MB (2 GB). Set to 0 to disable.
       min_disk_space_mb: 2048
