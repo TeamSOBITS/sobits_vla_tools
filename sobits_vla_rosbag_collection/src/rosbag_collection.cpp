@@ -39,12 +39,14 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   // Initialize Service Server for Tasks
   task_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
     this->get_name() + std::string("/vla_task_update"),
-    std::bind(&RosbagCollection::taskUpdateCallback, this, std::placeholders::_1, std::placeholders::_2));
+    std::bind(&RosbagCollection::taskUpdateCallback, this, std::placeholders::_1,
+      std::placeholders::_2));
 
   // Initialize Service Server for Subtasks (long-horizon)
   subtask_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
     this->get_name() + std::string("/vla_subtask_update"),
-    std::bind(&RosbagCollection::subtaskUpdateCallback, this, std::placeholders::_1, std::placeholders::_2));
+    std::bind(&RosbagCollection::subtaskUpdateCallback, this, std::placeholders::_1,
+      std::placeholders::_2));
 
   // Declare and get parameters
   // (1) Robot info parameters
@@ -52,13 +54,15 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("robot_info.version", "1.0.0");
   this->declare_parameter<std::string>("robot_info.morphology.type", "mobile_manipulator");
   this->declare_parameter<std::string>("robot_info.morphology.joint_states_topic", "/joint_states");
-  this->declare_parameter<std::vector<std::string>>("robot_info.morphology.parts", std::vector<std::string>{"base", "arm", "gripper"});
-  
+  this->declare_parameter<std::vector<std::string>>("robot_info.morphology.parts",
+      std::vector<std::string>{"base", "arm", "gripper"});
+
   robot_info_.name = this->get_parameter("robot_info.name").as_string();
   robot_info_.version = this->get_parameter("robot_info.version").as_string();
   robot_info_.morphology = this->get_parameter("robot_info.morphology.type").as_string();
-  robot_info_.joint_states_topic = this->get_parameter("robot_info.morphology.joint_states_topic").as_string();
-  
+  robot_info_.joint_states_topic =
+    this->get_parameter("robot_info.morphology.joint_states_topic").as_string();
+
   robot_info_.parts = this->get_parameter("robot_info.morphology.parts").as_string_array();
   robot_info_.joint_names.clear();
   for (const auto & part : robot_info_.parts) {
@@ -66,44 +70,67 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     this->declare_parameter<bool>("robot_info.morphology." + part + ".is_actionable", false);
     this->declare_parameter<std::string>("robot_info.morphology." + part + ".command_topic", "");
     this->declare_parameter<std::string>("robot_info.morphology." + part + ".state_topic", "");
-    this->declare_parameter<std::vector<std::string>>("robot_info.morphology." + part + ".actions", std::vector<std::string>{});
-    this->declare_parameter<std::vector<std::string>>("robot_info.morphology." + part + ".joint_names", std::vector<std::string>{});
-    robot_info_.is_actionable[part] = this->get_parameter("robot_info.morphology." + part + ".is_actionable").as_bool();
-    robot_info_.part_command_topic[part] = this->get_parameter("robot_info.morphology." + part + ".command_topic").as_string();
-    robot_info_.part_state_topic[part] = this->get_parameter("robot_info.morphology." + part + ".state_topic").as_string();
-    robot_info_.part_actions[part] = this->get_parameter("robot_info.morphology." + part + ".actions").as_string_array();
-    robot_info_.joint_names[part] = this->get_parameter("robot_info.morphology." + part + ".joint_names").as_string_array();
-    
+    this->declare_parameter<std::vector<std::string>>("robot_info.morphology." + part + ".actions",
+        std::vector<std::string>{});
+    this->declare_parameter<std::vector<std::string>>("robot_info.morphology." + part +
+        ".joint_names", std::vector<std::string>{});
+    robot_info_.is_actionable[part] = this->get_parameter("robot_info.morphology." + part +
+        ".is_actionable").as_bool();
+    robot_info_.part_command_topic[part] = this->get_parameter("robot_info.morphology." + part +
+        ".command_topic").as_string();
+    robot_info_.part_state_topic[part] = this->get_parameter("robot_info.morphology." + part +
+        ".state_topic").as_string();
+    robot_info_.part_actions[part] = this->get_parameter("robot_info.morphology." + part +
+        ".actions").as_string_array();
+    robot_info_.joint_names[part] = this->get_parameter("robot_info.morphology." + part +
+        ".joint_names").as_string_array();
+
     // Only fetch mobile_base/legs specific properties if it is the target part
     if (part == "mobile_base" || part == "legs") {
-        this->declare_parameter<bool>("robot_info.morphology." + part + ".has_cmd_vel_y", false);
-        this->declare_parameter<bool>("robot_info.morphology." + part + ".has_cmd_vel_z", false);
-        this->declare_parameter<std::string>("robot_info.morphology." + part + ".cmd_vel_topic", "/cmd_vel");
-        this->declare_parameter<std::string>("robot_info.morphology." + part + ".odom_topic", "");
-        
-        robot_info_.part_has_cmd_vel_y[part] = this->get_parameter("robot_info.morphology." + part + ".has_cmd_vel_y").as_bool();
-        robot_info_.part_has_cmd_vel_z[part] = this->get_parameter("robot_info.morphology." + part + ".has_cmd_vel_z").as_bool();
-        robot_info_.part_cmd_vel_topic[part] = this->get_parameter("robot_info.morphology." + part + ".cmd_vel_topic").as_string();
-        robot_info_.part_odom_topic[part] = this->get_parameter("robot_info.morphology." + part + ".odom_topic").as_string();
+      this->declare_parameter<bool>("robot_info.morphology." + part + ".has_cmd_vel_y", false);
+      this->declare_parameter<bool>("robot_info.morphology." + part + ".has_cmd_vel_z", false);
+      this->declare_parameter<std::string>("robot_info.morphology." + part + ".cmd_vel_topic",
+          "/cmd_vel");
+      this->declare_parameter<std::string>("robot_info.morphology." + part + ".odom_topic", "");
+
+      robot_info_.part_has_cmd_vel_y[part] = this->get_parameter("robot_info.morphology." + part +
+          ".has_cmd_vel_y").as_bool();
+      robot_info_.part_has_cmd_vel_z[part] = this->get_parameter("robot_info.morphology." + part +
+          ".has_cmd_vel_z").as_bool();
+      robot_info_.part_cmd_vel_topic[part] = this->get_parameter("robot_info.morphology." + part +
+          ".cmd_vel_topic").as_string();
+      robot_info_.part_odom_topic[part] = this->get_parameter("robot_info.morphology." + part +
+          ".odom_topic").as_string();
     }
   }
-  this->declare_parameter<std::vector<std::string>>("robot_info.sensors.types", std::vector<std::string>{"camera", "lidar", "imu"});
+  this->declare_parameter<std::vector<std::string>>("robot_info.sensors.types",
+      std::vector<std::string>{"camera", "lidar", "imu"});
   robot_info_.sensor_types = this->get_parameter("robot_info.sensors.types").as_string_array();
-    robot_info_.sensor_names.clear();
+  robot_info_.sensor_names.clear();
   robot_info_.sensor_models.clear();
   robot_info_.sensor_topics.clear();
   for (const auto & sensor_type : robot_info_.sensor_types) {
     RCLCPP_INFO(this->get_logger(), "Robot sensor: %s", sensor_type.c_str());
-    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".names", std::vector<std::string>{});
-    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".models", std::vector<std::string>{});
-    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".topics", std::vector<std::string>{});
-    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".info_topics", std::vector<std::string>{});
-    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type + ".compressed_topics", std::vector<std::string>{});
-    robot_info_.sensor_names[sensor_type]             = this->get_parameter("robot_info.sensors." + sensor_type + ".names").as_string_array();
-    robot_info_.sensor_models[sensor_type]            = this->get_parameter("robot_info.sensors." + sensor_type + ".models").as_string_array();
-    robot_info_.sensor_topics[sensor_type]            = this->get_parameter("robot_info.sensors." + sensor_type + ".topics").as_string_array();
-    robot_info_.sensor_info_topics[sensor_type]       = this->get_parameter("robot_info.sensors." + sensor_type + ".info_topics").as_string_array();
-    robot_info_.sensor_compressed_topics[sensor_type] = this->get_parameter("robot_info.sensors." + sensor_type + ".compressed_topics").as_string_array();
+    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type +
+        ".names", std::vector<std::string>{});
+    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type +
+        ".models", std::vector<std::string>{});
+    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type +
+        ".topics", std::vector<std::string>{});
+    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type +
+        ".info_topics", std::vector<std::string>{});
+    this->declare_parameter<std::vector<std::string>>("robot_info.sensors." + sensor_type +
+        ".compressed_topics", std::vector<std::string>{});
+    robot_info_.sensor_names[sensor_type] = this->get_parameter("robot_info.sensors." +
+        sensor_type + ".names").as_string_array();
+    robot_info_.sensor_models[sensor_type] = this->get_parameter("robot_info.sensors." +
+        sensor_type + ".models").as_string_array();
+    robot_info_.sensor_topics[sensor_type] = this->get_parameter("robot_info.sensors." +
+        sensor_type + ".topics").as_string_array();
+    robot_info_.sensor_info_topics[sensor_type] = this->get_parameter("robot_info.sensors." +
+        sensor_type + ".info_topics").as_string_array();
+    robot_info_.sensor_compressed_topics[sensor_type] = this->get_parameter("robot_info.sensors." +
+        sensor_type + ".compressed_topics").as_string_array();
   }
 
   // (2) User info parameters
@@ -121,26 +148,37 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   this->declare_parameter<double>("rosbag_config.timestamp_jump_threshold", 1.0);
   this->declare_parameter<int>("rosbag_config.min_disk_space_mb", 2048);
   this->declare_parameter<int>("rosbag_config.expected_sensor_fps", 0);
-  this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_topics", std::vector<std::string>{});
-  this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_services", std::vector<std::string>{});
-  this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_actions", std::vector<std::string>{});
+  this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_topics",
+      std::vector<std::string>{});
+  this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_services",
+      std::vector<std::string>{});
+  this->declare_parameter<std::vector<std::string>>("rosbag_config.additional_actions",
+      std::vector<std::string>{});
   this->declare_parameter<std::string>("rosbag_config.conversion_format", "mcap");
   this->declare_parameter<std::string>("rosbag_config.compression_format", "zstd");
   this->declare_parameter<std::string>("rosbag_config.compression_mode", "none");
   this->declare_parameter<std::string>("rosbag_config.rmw_serialization_format", "cdr");
-  min_episode_duration_sec_         = this->get_parameter("rosbag_config.min_episode_duration").as_double();
-  max_episode_duration_sec_         = this->get_parameter("rosbag_config.max_episode_duration").as_double();
-  timestamp_jump_threshold_sec_     = this->get_parameter("rosbag_config.timestamp_jump_threshold").as_double();
-  min_disk_space_mb_                = static_cast<uint64_t>(this->get_parameter("rosbag_config.min_disk_space_mb").as_int());
-  expected_sensor_fps_              = this->get_parameter("rosbag_config.expected_sensor_fps").as_int();
-  rosbag_info_.recording_dir        = this->get_parameter("rosbag_config.record_directory").as_string();
-  rosbag_info_.additional_topics    = this->get_parameter("rosbag_config.additional_topics").as_string_array();
-  rosbag_info_.additional_services  = this->get_parameter("rosbag_config.additional_services").as_string_array();
-  rosbag_info_.additional_actions   = this->get_parameter("rosbag_config.additional_actions").as_string_array();
-  rosbag_info_.conversion_format    = this->get_parameter("rosbag_config.conversion_format").as_string();
-  rosbag_info_.compression_format   = this->get_parameter("rosbag_config.compression_format").as_string();
-  rosbag_info_.compression_mode     = this->get_parameter("rosbag_config.compression_mode").as_string();
-  rosbag_info_.rmw_serialization_format = this->get_parameter("rosbag_config.rmw_serialization_format").as_string();
+  min_episode_duration_sec_ = this->get_parameter("rosbag_config.min_episode_duration").as_double();
+  max_episode_duration_sec_ = this->get_parameter("rosbag_config.max_episode_duration").as_double();
+  timestamp_jump_threshold_sec_ =
+    this->get_parameter("rosbag_config.timestamp_jump_threshold").as_double();
+  min_disk_space_mb_ =
+    static_cast<uint64_t>(this->get_parameter("rosbag_config.min_disk_space_mb").as_int());
+  expected_sensor_fps_ = this->get_parameter("rosbag_config.expected_sensor_fps").as_int();
+  rosbag_info_.recording_dir = this->get_parameter("rosbag_config.record_directory").as_string();
+  rosbag_info_.additional_topics =
+    this->get_parameter("rosbag_config.additional_topics").as_string_array();
+  rosbag_info_.additional_services =
+    this->get_parameter("rosbag_config.additional_services").as_string_array();
+  rosbag_info_.additional_actions =
+    this->get_parameter("rosbag_config.additional_actions").as_string_array();
+  rosbag_info_.conversion_format =
+    this->get_parameter("rosbag_config.conversion_format").as_string();
+  rosbag_info_.compression_format =
+    this->get_parameter("rosbag_config.compression_format").as_string();
+  rosbag_info_.compression_mode = this->get_parameter("rosbag_config.compression_mode").as_string();
+  rosbag_info_.rmw_serialization_format =
+    this->get_parameter("rosbag_config.rmw_serialization_format").as_string();
 
   // (4) Gamepad parameters
   this->declare_parameter<std::string>("gamepad_config.name", "default_gamepad");
@@ -150,61 +188,67 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   for (const auto & sensor_type : robot_info_.sensor_types) {
     const auto & info_topics = robot_info_.sensor_info_topics[sensor_type];
     for (const auto & cam_info_topic : info_topics) {
-      if (cam_info_topic.empty()) continue;
-      RCLCPP_INFO(this->get_logger(), "Subscribing to sniff dimensions: %s", cam_info_topic.c_str());
+      if (cam_info_topic.empty()) {continue;}
+      RCLCPP_INFO(this->get_logger(), "Subscribing to sniff dimensions: %s",
+          cam_info_topic.c_str());
       camera_info_subs_[cam_info_topic] = this->create_subscription<sensor_msgs::msg::CameraInfo>(
           cam_info_topic,
           rclcpp::QoS(1).best_effort(),
-          [this, cam_info_topic](const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
-              this->cameraInfoCallback(msg, cam_info_topic);
+        [this, cam_info_topic](const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+          this->cameraInfoCallback(msg, cam_info_topic);
           }
       );
     }
   }
 
   // Init values
-  current_state_      = sobits_interfaces::action::VlaRecordState_Result::STOPPED; // PAUSED, RECORDING, STOPPED, ERROR
-  previous_state_     = current_state_;
+  current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;      // PAUSED, RECORDING, STOPPED, ERROR
+  previous_state_ = current_state_;
 
-  current_task_name_  = "default task";
+  current_task_name_ = "default task";
   previous_task_name_ = current_task_name_;
-  
+
   current_task_dir_name_ = current_task_name_ + "_" + getTimestampString();
   std::replace(current_task_dir_name_.begin(), current_task_dir_name_.end(), ' ', '_');
-  std::transform(current_task_dir_name_.begin(), current_task_dir_name_.end(), current_task_dir_name_.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-                 
-  current_task_path_  = rosbag_info_.recording_dir + "/" + current_task_dir_name_;
+  std::transform(current_task_dir_name_.begin(), current_task_dir_name_.end(),
+      current_task_dir_name_.begin(),
+    [](unsigned char c) {return std::tolower(c);});
+
+  current_task_path_ = rosbag_info_.recording_dir + "/" + current_task_dir_name_;
   previous_task_path_ = current_task_path_;
 
-  current_bag_name_   = "episode_" + getTimestampString();
-  previous_bag_name_  = current_bag_name_;
-  current_bag_path_   = current_task_path_ + "/" + current_bag_name_;
-  previous_bag_path_  = current_bag_path_;
+  current_bag_name_ = "episode_" + getTimestampString();
+  previous_bag_name_ = current_bag_name_;
+  current_bag_path_ = current_task_path_ + "/" + current_bag_name_;
+  previous_bag_path_ = current_bag_path_;
 
   // (5) Internal State
   current_subtask_name_ = "";
   current_episode_subtasks_.clear();
-  
+
   rosbag_info_.rosbag_options = "";
-  
+
   // Prepare the rosbag configuration (for record options)
   if (rosbag_info_.conversion_format.empty()) {
     RCLCPP_WARN(this->get_logger(), "No conversion format specified, using default 'sqlite3'");
     rosbag_info_.conversion_format = "sqlite3";
   } else {
-    RCLCPP_INFO(this->get_logger(), "Using conversion format: %s", rosbag_info_.conversion_format.c_str());
+    RCLCPP_INFO(this->get_logger(), "Using conversion format: %s",
+        rosbag_info_.conversion_format.c_str());
   }
   if (rosbag_info_.compression_mode == "none" || rosbag_info_.compression_mode.empty()) {
     RCLCPP_INFO(this->get_logger(), "Output compression is disabled");
     rosbag_info_.compression_mode = "";
   } else {
-    RCLCPP_INFO(this->get_logger(), "Output compression is enabled with mode: %s", rosbag_info_.compression_mode.c_str());
-    RCLCPP_INFO(this->get_logger(), "Using compression format: %s", rosbag_info_.compression_format.c_str());
+    RCLCPP_INFO(this->get_logger(), "Output compression is enabled with mode: %s",
+        rosbag_info_.compression_mode.c_str());
+    RCLCPP_INFO(this->get_logger(), "Using compression format: %s",
+        rosbag_info_.compression_format.c_str());
   }
-  
+
   if (rosbag_info_.topics_to_record.empty()) {
-    RCLCPP_WARN(this->get_logger(), "No topics to record specified in the rosbag configuration. Using all topics.");
+    RCLCPP_WARN(this->get_logger(),
+        "No topics to record specified in the rosbag configuration. Using all topics.");
   } else {
     RCLCPP_DEBUG(this->get_logger(), "Specific topics to record provided.");
   }
@@ -225,9 +269,9 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   if (!std::filesystem::exists(rosbag_info_.recording_dir)) {
     try {
       std::filesystem::create_directories(rosbag_info_.recording_dir);
-      RCLCPP_INFO(this->get_logger(), "Created recording directory: %s", rosbag_info_.recording_dir.c_str());
-    } catch (const std::filesystem::filesystem_error & e)
-    {
+      RCLCPP_INFO(this->get_logger(), "Created recording directory: %s",
+          rosbag_info_.recording_dir.c_str());
+    } catch (const std::filesystem::filesystem_error & e) {
       RCLCPP_ERROR(this->get_logger(), "Failed to create recording directory: %s", e.what());
       throw std::runtime_error("Failed to create recording directory");
     }
@@ -238,7 +282,8 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     try {
       auto space = std::filesystem::space(rosbag_info_.recording_dir);
       uint64_t free_mb = space.available / (1024 * 1024);
-      RCLCPP_INFO(this->get_logger(), "Disk space: %lu MB free (minimum: %lu MB)", free_mb, min_disk_space_mb_);
+      RCLCPP_INFO(this->get_logger(), "Disk space: %lu MB free (minimum: %lu MB)", free_mb,
+          min_disk_space_mb_);
       if (free_mb < min_disk_space_mb_) {
         RCLCPP_ERROR(this->get_logger(),
           "LOW DISK SPACE at startup! Free up space before recording.");
@@ -262,7 +307,7 @@ RosbagCollection::~RosbagCollection()
   if (is_recording_) {
     try {
       saveRosbag();
-    } catch (const std::exception& e) {
+    } catch (const std::exception & e) {
       RCLCPP_ERROR(this->get_logger(), "Error stopping recording in destructor: %s", e.what());
     }
   }
@@ -305,7 +350,9 @@ void RosbagCollection::buildTopicList()
     all_topics.push_back(robot_info_.joint_states_topic);
   }
   for (const auto & part : robot_info_.parts) {
-    if (robot_info_.part_cmd_vel_topic.count(part) && !robot_info_.part_cmd_vel_topic.at(part).empty()) {
+    if (robot_info_.part_cmd_vel_topic.count(part) &&
+      !robot_info_.part_cmd_vel_topic.at(part).empty())
+    {
       all_topics.push_back(robot_info_.part_cmd_vel_topic.at(part));
     }
     if (robot_info_.part_odom_topic.count(part) && !robot_info_.part_odom_topic.at(part).empty()) {
@@ -336,7 +383,8 @@ void RosbagCollection::buildTopicList()
   }
 
   rosbag_info_.topics_to_record = std::move(deduped);
-  RCLCPP_INFO(this->get_logger(), "Cached %zu topics to record.", rosbag_info_.topics_to_record.size());
+  RCLCPP_INFO(this->get_logger(), "Cached %zu topics to record.",
+      rosbag_info_.topics_to_record.size());
 }
 
 bool RosbagCollection::validateTopics()
@@ -355,13 +403,20 @@ bool RosbagCollection::validateTopics()
     if (!robot_info_.part_command_topic[part].empty()) {
       critical.insert(robot_info_.part_command_topic[part]);
     }
-    if (robot_info_.part_cmd_vel_topic.count(part) && !robot_info_.part_cmd_vel_topic.at(part).empty()) {
+    if (robot_info_.part_cmd_vel_topic.count(part) &&
+      !robot_info_.part_cmd_vel_topic.at(part).empty())
+    {
       critical.insert(robot_info_.part_cmd_vel_topic.at(part));
     }
   }
   // Primary camera topics
   for (const auto & sensor_type : robot_info_.sensor_types) {
     for (const auto & topic : robot_info_.sensor_topics[sensor_type]) {
+      if (!topic.empty()) {
+        critical.insert(topic);
+      }
+    }
+    for (const auto & topic : robot_info_.sensor_compressed_topics[sensor_type]) {
       if (!topic.empty()) {
         critical.insert(topic);
       }
@@ -394,11 +449,15 @@ bool RosbagCollection::validateTopics()
         role = "joint state observation";
       } else {
         for (const auto & part : robot_info_.parts) {
-          if (robot_info_.part_command_topic.count(part) && robot_info_.part_command_topic.at(part) == t) {
+          if (robot_info_.part_command_topic.count(part) &&
+            robot_info_.part_command_topic.at(part) == t)
+          {
             role = "joint command (" + part + ")";
             break;
           }
-          if (robot_info_.part_cmd_vel_topic.count(part) && robot_info_.part_cmd_vel_topic.at(part) == t) {
+          if (robot_info_.part_cmd_vel_topic.count(part) &&
+            robot_info_.part_cmd_vel_topic.at(part) == t)
+          {
             role = "base velocity command";
             break;
           }
@@ -407,9 +466,18 @@ bool RosbagCollection::validateTopics()
           for (const auto & stype : robot_info_.sensor_types) {
             for (size_t i = 0; i < robot_info_.sensor_topics[stype].size(); ++i) {
               if (robot_info_.sensor_topics[stype][i] == t) {
-                role = "camera (" + (i < robot_info_.sensor_names[stype].size()
-                  ? robot_info_.sensor_names[stype][i] : "?") + ")";
+                role = "camera (" + (i < robot_info_.sensor_names[stype].size() ?
+                  robot_info_.sensor_names[stype][i] : "?") + ")";
                 break;
+              }
+            }
+            if (role == "unknown") {
+              for (size_t i = 0; i < robot_info_.sensor_compressed_topics[stype].size(); ++i) {
+                if (robot_info_.sensor_compressed_topics[stype][i] == t) {
+                  role = "camera compressed (" + (i < robot_info_.sensor_names[stype].size() ?
+                    robot_info_.sensor_names[stype][i] : "?") + ")";
+                  break;
+                }
               }
             }
           }
@@ -441,51 +509,54 @@ void RosbagCollection::startRecordingMonitor()
   bool need_disk = min_disk_space_mb_ > 0;
   bool need_timestamp = timestamp_jump_threshold_sec_ > 0.0;
   bool need_max_duration = max_episode_duration_sec_ > 0.0;
-  if (!need_fps && !need_disk && !need_timestamp && !need_max_duration) return;
+  if (!need_fps && !need_disk && !need_timestamp && !need_max_duration) {return;}
 
   // FPS topic subscriptions (only if fps monitoring is enabled)
   if (expected_sensor_fps_ > 0) {
 
   // Collect topics to monitor: cameras + joint_states + command topics
-  std::set<std::string> monitor_topics;
-  monitor_topics.insert(robot_info_.joint_states_topic);
-  for (const auto & stype : robot_info_.sensor_types) {
-    for (const auto & topic : robot_info_.sensor_topics[stype]) {
-      if (!topic.empty()) monitor_topics.insert(topic);
+    std::set<std::string> monitor_topics;
+    monitor_topics.insert(robot_info_.joint_states_topic);
+    for (const auto & stype : robot_info_.sensor_types) {
+      for (const auto & topic : robot_info_.sensor_topics[stype]) {
+        if (!topic.empty()) {monitor_topics.insert(topic);}
+      }
+      for (const auto & topic : robot_info_.sensor_compressed_topics[stype]) {
+        if (!topic.empty()) {monitor_topics.insert(topic);}
+      }
     }
-  }
-  for (const auto & part : robot_info_.parts) {
-    if (!robot_info_.part_command_topic[part].empty()) {
-      monitor_topics.insert(robot_info_.part_command_topic[part]);
+    for (const auto & part : robot_info_.parts) {
+      if (!robot_info_.part_command_topic[part].empty()) {
+        monitor_topics.insert(robot_info_.part_command_topic[part]);
+      }
     }
-  }
 
   // Discover topic types from the ROS graph
-  auto graph_topics = this->get_topic_names_and_types();
+    auto graph_topics = this->get_topic_names_and_types();
 
   // Create a generic subscription per topic (count only, no deserialization)
-  for (const auto & topic : monitor_topics) {
-    auto it = graph_topics.find(topic);
-    if (it == graph_topics.end() || it->second.empty()) continue;
+    for (const auto & topic : monitor_topics) {
+      auto it = graph_topics.find(topic);
+      if (it == graph_topics.end() || it->second.empty()) {continue;}
 
-    const std::string & topic_type = it->second[0];
-    monitor_counts_[topic] = 0;
-    monitor_prev_counts_[topic] = 0;
+      const std::string & topic_type = it->second[0];
+      monitor_counts_[topic] = 0;
+      monitor_prev_counts_[topic] = 0;
 
-    auto sub = this->create_generic_subscription(
+      auto sub = this->create_generic_subscription(
       topic, topic_type, rclcpp::SensorDataQoS(),
-      [this, topic](std::shared_ptr<rclcpp::SerializedMessage>) {
-        monitor_counts_[topic]++;
+        [this, topic](std::shared_ptr<rclcpp::SerializedMessage>) {
+          monitor_counts_[topic]++;
       });
-    monitor_subs_.push_back(sub);
-  }
+      monitor_subs_.push_back(sub);
+    }
   } // end if (expected_sensor_fps_ > 0)
 
   // Timer: check rates and disk space every 2 seconds
   fps_monitor_timer_ = this->create_wall_timer(
     std::chrono::seconds(2),
     [this]() {
-      if (!is_recording_) return;
+      if (!is_recording_) {return;}
 
       // FPS checks (skip first tick — topics may still be warming up)
       if (expected_sensor_fps_ > 0) {
@@ -565,13 +636,14 @@ void RosbagCollection::startRecordingMonitor()
             duration_sec, max_episode_duration_sec_);
           auto alive = node_alive_;
           std::thread([this, alive]() {
-            if (alive->load()) saveRosbag();
+            if (alive->load()) {saveRosbag();}
           }).detach();
         }
       }
     });
 
-  RCLCPP_INFO(this->get_logger(), "Recording monitor started (fps_topics=%zu, expected_hz=%d, min_disk_mb=%lu).",
+  RCLCPP_INFO(this->get_logger(),
+      "Recording monitor started (fps_topics=%zu, expected_hz=%d, min_disk_mb=%lu).",
     monitor_subs_.size(), expected_sensor_fps_, min_disk_space_mb_);
 }
 
@@ -620,7 +692,8 @@ void RosbagCollection::createRosbag()
       std::filesystem::create_directories(current_task_path_);
       RCLCPP_INFO(this->get_logger(), "Created bag directory: %s", current_bag_path_.c_str());
     } catch (const std::filesystem::filesystem_error & e) {
-      RCLCPP_DEBUG(this->get_logger(), "The directory %s already exists, skipping creation: %s", current_task_path_.c_str(), e.what());
+      RCLCPP_DEBUG(this->get_logger(), "The directory %s already exists, skipping creation: %s",
+          current_task_path_.c_str(), e.what());
     }
   }
 
@@ -638,17 +711,17 @@ void RosbagCollection::createRosbag()
   rosbag2_storage::StorageOptions storage_options;
   storage_options.uri = current_bag_path_;
   storage_options.storage_id = rosbag_info_.conversion_format;
-  
+
   rosbag2_transport::RecordOptions record_options;
-  
-  if (rosbag_info_.topics_to_record.empty()) {
-    record_options.all_topics = true;
-  } else {
+
+  if (!rosbag_info_.topics_to_record.empty()) {
     record_options.topics = rosbag_info_.topics_to_record;
+  } else {
+    record_options.all_topics = true;
   }
   record_options.use_sim_time = this->get_parameter("use_sim_time").as_bool();
   record_options.rmw_serialization_format = rosbag_info_.rmw_serialization_format;
-  
+
   if (!rosbag_info_.compression_mode.empty()) {
     record_options.compression_mode = rosbag_info_.compression_mode;
     record_options.compression_format = rosbag_info_.compression_format;
@@ -666,14 +739,18 @@ void RosbagCollection::createRosbag()
     rclcpp::NodeOptions()
   );
 
+  recorder_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+  recorder_executor_->add_node(recorder_node_);
+
   is_recording_ = true;
   recorder_thread_ = std::thread([this]() {
-    try {
-      recorder_node_->record();
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(this->get_logger(), "Error during bag recording: %s", e.what());
-      current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-    }
+        try {
+          recorder_node_->record();   // opens writer + sets up subs, returns immediately
+          recorder_executor_->spin(); // processes subscription callbacks until cancel()
+        } catch (const std::exception & e) {
+          RCLCPP_ERROR(this->get_logger(), "Error during bag recording: %s", e.what());
+          current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+        }
   });
 
   RCLCPP_INFO(this->get_logger(), "Rosbag recording started successfully");
@@ -693,10 +770,17 @@ void RosbagCollection::removeRosbag()
     is_recording_ = false;
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
 
-    recorder_node_.reset();
+    if (recorder_node_) {
+      recorder_node_->stop();
+    }
+    if (recorder_executor_) {
+      recorder_executor_->cancel();
+    }
     if (recorder_thread_.joinable()) {
       recorder_thread_.join();
     }
+    recorder_executor_.reset();
+    recorder_node_.reset();
   }
 
   // Remove the current bag directory
@@ -705,13 +789,14 @@ void RosbagCollection::removeRosbag()
       std::filesystem::remove_all(current_bag_path_);
       RCLCPP_INFO(this->get_logger(), "Removed bag directory: %s", current_bag_path_.c_str());
     } catch (const std::filesystem::filesystem_error & e) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to remove bag directory '%s': %s", current_bag_path_.c_str(), e.what());
+      RCLCPP_ERROR(this->get_logger(), "Failed to remove bag directory '%s': %s",
+          current_bag_path_.c_str(), e.what());
       previous_state_ = current_state_;
       current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
       throw std::runtime_error("Failed to remove bag directory");
     }
   }
-  
+
   // Wipe from metadata BEFORE rolling back names
   removeEpisodeFromYaml();
 
@@ -741,11 +826,19 @@ bool RosbagCollection::saveRosbag()
   RCLCPP_INFO(this->get_logger(), "Stopping recorder for saving...");
   is_recording_ = false;
 
-  recorder_node_.reset();
-
-  if (recorder_thread_.joinable()) {
-       recorder_thread_.join();
+  // Order: stop() flushes MCAP, cancel() unblocks spin(), join() waits for thread exit,
+  // then reset() — executor must outlive the thread that calls spin().
+  if (recorder_node_) {
+    recorder_node_->stop();
   }
+  if (recorder_executor_) {
+    recorder_executor_->cancel();
+  }
+  if (recorder_thread_.joinable()) {
+    recorder_thread_.join();
+  }
+  recorder_executor_.reset();
+  recorder_node_.reset();
 
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
@@ -861,7 +954,8 @@ void RosbagCollection::createRosbagYaml()
 
   // If the file already exists, validate config consistency instead of overwriting
   if (std::filesystem::exists(yaml_file_path)) {
-    RCLCPP_INFO(this->get_logger(), "Found existing metadata: %s — validating config consistency...", yaml_file_path.c_str());
+    RCLCPP_INFO(this->get_logger(),
+        "Found existing metadata: %s — validating config consistency...", yaml_file_path.c_str());
     try {
       YAML::Node existing = YAML::LoadFile(yaml_file_path);
       auto existing_robot = existing["robot_info"];
@@ -870,18 +964,25 @@ void RosbagCollection::createRosbagYaml()
       std::vector<std::string> mismatches;
 
       if (existing_robot["name"].as<std::string>("") != robot_info_.name) {
-        mismatches.push_back("robot_info.name: '" + existing_robot["name"].as<std::string>("") + "' vs '" + robot_info_.name + "'");
+        mismatches.push_back("robot_info.name: '" + existing_robot["name"].as<std::string>("") +
+            "' vs '" + robot_info_.name + "'");
       }
       if (existing_robot["version"].as<std::string>("") != robot_info_.version) {
-        mismatches.push_back("robot_info.version: '" + existing_robot["version"].as<std::string>("") + "' vs '" + robot_info_.version + "'");
+        mismatches.push_back("robot_info.version: '" +
+            existing_robot["version"].as<std::string>("") + "' vs '" + robot_info_.version + "'");
       }
 
       auto existing_morph = existing_robot["morphology"];
       if (existing_morph["type"].as<std::string>("") != robot_info_.morphology) {
-        mismatches.push_back("morphology.type: '" + existing_morph["type"].as<std::string>("") + "' vs '" + robot_info_.morphology + "'");
+        mismatches.push_back("morphology.type: '" + existing_morph["type"].as<std::string>("") +
+            "' vs '" + robot_info_.morphology + "'");
       }
-      if (existing_morph["joint_states_topic"].as<std::string>("") != robot_info_.joint_states_topic) {
-        mismatches.push_back("joint_states_topic: '" + existing_morph["joint_states_topic"].as<std::string>("") + "' vs '" + robot_info_.joint_states_topic + "'");
+      if (existing_morph["joint_states_topic"].as<std::string>("") !=
+        robot_info_.joint_states_topic)
+      {
+        mismatches.push_back("joint_states_topic: '" +
+            existing_morph["joint_states_topic"].as<std::string>("") + "' vs '" +
+            robot_info_.joint_states_topic + "'");
       }
 
       // Compare parts list
@@ -901,7 +1002,9 @@ void RosbagCollection::createRosbagYaml()
           mismatches.push_back("part '" + part + "' missing from existing metadata");
           continue;
         }
-        if (existing_morph[part]["is_actionable"].as<bool>(false) != robot_info_.is_actionable[part]) {
+        if (existing_morph[part]["is_actionable"].as<bool>(false) !=
+          robot_info_.is_actionable[part])
+        {
           mismatches.push_back("part '" + part + "' is_actionable mismatch");
         }
         std::vector<std::string> existing_joints;
@@ -956,13 +1059,16 @@ void RosbagCollection::createRosbagYaml()
       // Compare user info
       auto existing_user = existing["user_info"];
       if (existing_user["name"].as<std::string>("") != user_info_.name) {
-        mismatches.push_back("user_info.name: '" + existing_user["name"].as<std::string>("") + "' vs '" + user_info_.name + "'");
+        mismatches.push_back("user_info.name: '" + existing_user["name"].as<std::string>("") +
+            "' vs '" + user_info_.name + "'");
       }
       if (existing_user["email"].as<std::string>("") != user_info_.email) {
-        mismatches.push_back("user_info.email: '" + existing_user["email"].as<std::string>("") + "' vs '" + user_info_.email + "'");
+        mismatches.push_back("user_info.email: '" + existing_user["email"].as<std::string>("") +
+            "' vs '" + user_info_.email + "'");
       }
       if (existing_user["location"].as<std::string>("") != user_info_.location) {
-        mismatches.push_back("user_info.location: '" + existing_user["location"].as<std::string>("") + "' vs '" + user_info_.location + "'");
+        mismatches.push_back("user_info.location: '" +
+            existing_user["location"].as<std::string>("") + "' vs '" + user_info_.location + "'");
       }
 
       if (!mismatches.empty()) {
@@ -977,10 +1083,12 @@ void RosbagCollection::createRosbagYaml()
         throw std::runtime_error("Config mismatch with existing recorded_bags_meta.yaml");
       }
 
-      RCLCPP_INFO(this->get_logger(), "Config validation passed — resuming with existing metadata.");
+      RCLCPP_INFO(this->get_logger(),
+          "Config validation passed — resuming with existing metadata.");
       return;  // keep the existing file intact
     } catch (const YAML::Exception & e) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to parse existing metadata: %s. Cannot resume safely.", e.what());
+      RCLCPP_ERROR(this->get_logger(),
+          "Failed to parse existing metadata: %s. Cannot resume safely.", e.what());
       throw std::runtime_error("Failed to parse existing recorded_bags_meta.yaml");
     }
   }
@@ -998,13 +1106,15 @@ void RosbagCollection::createRosbagYaml()
   for (const auto & part : robot_info_.parts) {
     yaml_node["robot_info"]["morphology"]["parts"].push_back(part);
     yaml_node["robot_info"]["morphology"][part]["is_actionable"] = robot_info_.is_actionable[part];
-    
+
     // Serialize per-part command/state topics and actions (for non-locomotion parts)
     if (!robot_info_.part_command_topic[part].empty()) {
-      yaml_node["robot_info"]["morphology"][part]["command_topic"] = robot_info_.part_command_topic[part];
+      yaml_node["robot_info"]["morphology"][part]["command_topic"] =
+        robot_info_.part_command_topic[part];
     }
     if (!robot_info_.part_state_topic[part].empty()) {
-      yaml_node["robot_info"]["morphology"][part]["state_topic"] = robot_info_.part_state_topic[part];
+      yaml_node["robot_info"]["morphology"][part]["state_topic"] =
+        robot_info_.part_state_topic[part];
     }
     if (!robot_info_.part_actions[part].empty()) {
       yaml_node["robot_info"]["morphology"][part]["actions"] = YAML::Node(YAML::NodeType::Sequence);
@@ -1012,15 +1122,19 @@ void RosbagCollection::createRosbagYaml()
         yaml_node["robot_info"]["morphology"][part]["actions"].push_back(action);
       }
     }
-    
+
     if (part == "mobile_base" || part == "legs") {
-        yaml_node["robot_info"]["morphology"][part]["has_cmd_vel_y"] = robot_info_.part_has_cmd_vel_y[part];
-        yaml_node["robot_info"]["morphology"][part]["has_cmd_vel_z"] = robot_info_.part_has_cmd_vel_z[part];
-        yaml_node["robot_info"]["morphology"][part]["cmd_vel_topic"] = robot_info_.part_cmd_vel_topic[part];
-        yaml_node["robot_info"]["morphology"][part]["odom_topic"] = robot_info_.part_odom_topic[part];
+      yaml_node["robot_info"]["morphology"][part]["has_cmd_vel_y"] =
+        robot_info_.part_has_cmd_vel_y[part];
+      yaml_node["robot_info"]["morphology"][part]["has_cmd_vel_z"] =
+        robot_info_.part_has_cmd_vel_z[part];
+      yaml_node["robot_info"]["morphology"][part]["cmd_vel_topic"] =
+        robot_info_.part_cmd_vel_topic[part];
+      yaml_node["robot_info"]["morphology"][part]["odom_topic"] = robot_info_.part_odom_topic[part];
     }
-    
-    yaml_node["robot_info"]["morphology"][part]["joint_names"] = YAML::Node(YAML::NodeType::Sequence);
+
+    yaml_node["robot_info"]["morphology"][part]["joint_names"] =
+      YAML::Node(YAML::NodeType::Sequence);
     for (const auto & joint_name : robot_info_.joint_names[part]) {
       yaml_node["robot_info"]["morphology"][part]["joint_names"].push_back(joint_name);
     }
@@ -1029,20 +1143,28 @@ void RosbagCollection::createRosbagYaml()
   for (const auto & sensor_type : robot_info_.sensor_types) {
     yaml_node["robot_info"]["sensors"]["types"].push_back(sensor_type);
     yaml_node["robot_info"]["sensors"][sensor_type]["names"] = YAML::Node(YAML::NodeType::Sequence);
-    yaml_node["robot_info"]["sensors"][sensor_type]["models"] = YAML::Node(YAML::NodeType::Sequence);
-    yaml_node["robot_info"]["sensors"][sensor_type]["topics"] = YAML::Node(YAML::NodeType::Sequence);
-    
-    for (const auto & sensor_name : robot_info_.sensor_names[sensor_type]) {
+    yaml_node["robot_info"]["sensors"][sensor_type]["models"] =
+      YAML::Node(YAML::NodeType::Sequence);
+    yaml_node["robot_info"]["sensors"][sensor_type]["topics"] =
+      YAML::Node(YAML::NodeType::Sequence);
+
+    const auto & sensor_names = robot_info_.sensor_names[sensor_type];
+    const auto & info_topics = robot_info_.sensor_info_topics[sensor_type];
+    for (size_t i = 0; i < sensor_names.size(); ++i) {
+      const auto & sensor_name = sensor_names[i];
       yaml_node["robot_info"]["sensors"][sensor_type]["names"].push_back(sensor_name);
-      
-      // Inject inferred dimensions from the sniffed camera_info topics if present
-      // Try to find the matching camera_info topic name. e.g "head_camera" -> "/head_camera/.../camera_info"
-      for (const auto& pair : camera_dimensions_) {
-        if (pair.first.find(sensor_name) != std::string::npos) {
-          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["width"] = pair.second.first;
-          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["height"] = pair.second.second;
-          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["topic"] = pair.first;
-          break; // Use the first match
+
+      // Inject inferred dimensions from the corresponding camera_info topic when available.
+      std::string matched_info_topic = (i < info_topics.size()) ? info_topics[i] : "";
+      if (!matched_info_topic.empty()) {
+        auto it = camera_dimensions_.find(matched_info_topic);
+        if (it != camera_dimensions_.end()) {
+          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["width"] =
+            it->second.first;
+          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["height"] =
+            it->second.second;
+          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["topic"] =
+            matched_info_topic;
         }
       }
     }
@@ -1056,7 +1178,8 @@ void RosbagCollection::createRosbagYaml()
       yaml_node["robot_info"]["sensors"][sensor_type]["info_topics"].push_back(info_topic);
     }
     for (const auto & compressed_topic : robot_info_.sensor_compressed_topics[sensor_type]) {
-      yaml_node["robot_info"]["sensors"][sensor_type]["compressed_topics"].push_back(compressed_topic);
+      yaml_node["robot_info"]["sensors"][sensor_type]["compressed_topics"].push_back(
+          compressed_topic);
     }
   }
 
@@ -1070,7 +1193,8 @@ void RosbagCollection::createRosbagYaml()
   try {
     std::ofstream yaml_file(yaml_file_path);
     if (!yaml_file.is_open()) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to open YAML file for writing: %s", yaml_file_path.c_str());
+      RCLCPP_ERROR(this->get_logger(), "Failed to open YAML file for writing: %s",
+          yaml_file_path.c_str());
       throw std::runtime_error("Failed to open YAML file for writing");
     }
     yaml_file << yaml_node;
@@ -1106,11 +1230,35 @@ void RosbagCollection::updateRosbagYaml()
   yaml_node["recorded_bags"]["tasks"][current_task_label]["bag_dir"] = current_task_path_;
   yaml_node["recorded_bags"]["tasks"][current_task_label]["gamepad"] = gamepad_name_;
 
+  // Backfill sensor properties from sniffed camera info if missing in existing metadata.
+  for (const auto & sensor_type : robot_info_.sensor_types) {
+    const auto & sensor_names = robot_info_.sensor_names[sensor_type];
+    const auto & info_topics = robot_info_.sensor_info_topics[sensor_type];
+    for (size_t i = 0; i < sensor_names.size(); ++i) {
+      const auto & sensor_name = sensor_names[i];
+      std::string matched_info_topic = (i < info_topics.size()) ? info_topics[i] : "";
+      if (matched_info_topic.empty()) {
+        continue;
+      }
+      auto it = camera_dimensions_.find(matched_info_topic);
+      if (it == camera_dimensions_.end()) {
+        continue;
+      }
+      yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["width"] =
+        it->second.first;
+      yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["height"] =
+        it->second.second;
+      yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["topic"] =
+        matched_info_topic;
+    }
+  }
+
   // Save the updated YAML node to the file
   try {
     std::ofstream yaml_file(yaml_file_path);
     if (!yaml_file.is_open()) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to open YAML file for writing: %s", yaml_file_path.c_str());
+      RCLCPP_ERROR(this->get_logger(), "Failed to open YAML file for writing: %s",
+          yaml_file_path.c_str());
       throw std::runtime_error("Failed to open YAML file for writing");
     }
     yaml_file << yaml_node;
@@ -1153,29 +1301,36 @@ void RosbagCollection::updateEpisodeYaml()
 
   // Ensure task exists
   if (yaml_node["recorded_bags"]["tasks"][current_task_label].IsDefined()) {
-    
+
     // 1. episodes_list
     if (!yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].IsDefined()) {
-      yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"] = YAML::Node(YAML::NodeType::Sequence);
+      yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"] =
+        YAML::Node(YAML::NodeType::Sequence);
     }
     // Push if not already in list (for safety, though episode names are unique)
     bool episode_in_list = false;
-    for (YAML::const_iterator it = yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].begin(); it != yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].end(); ++it) {
-      if (it->as<std::string>() == current_bag_name_) { episode_in_list = true; break; }
+    for (YAML::const_iterator it =
+      yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].begin();
+      it != yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].end();
+      ++it)
+    {
+      if (it->as<std::string>() == current_bag_name_) {episode_in_list = true; break;}
     }
     if (!episode_in_list) {
-      yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].push_back(current_bag_name_);
+      yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].push_back(
+          current_bag_name_);
     }
 
     // 2. episodes map
     if (!yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes"].IsDefined()) {
-       yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes"] = YAML::Node(YAML::NodeType::Map);
+      yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes"] =
+        YAML::Node(YAML::NodeType::Map);
     }
-    
+
     // Create/Update the specific episode
     YAML::Node episode_node = YAML::Node(YAML::NodeType::Map);
     episode_node["bag_path"] = current_bag_path_;
-    
+
     // 3. Subtasks logic
     if (!current_episode_subtasks_.empty()) {
       YAML::Node subtasks_list = YAML::Node(YAML::NodeType::Sequence);
@@ -1189,7 +1344,7 @@ void RosbagCollection::updateEpisodeYaml()
         single_subtask["label"] = current_episode_subtasks_[i].label;
         single_subtask["start_timestamp"] = current_episode_subtasks_[i].start_timestamp;
         single_subtask["end_timestamp"] = current_episode_subtasks_[i].end_timestamp;
-        
+
         subtasks_map[subtask_key] = single_subtask;
       }
 
@@ -1197,7 +1352,8 @@ void RosbagCollection::updateEpisodeYaml()
       episode_node["subtasks"] = subtasks_map;
     }
 
-    yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes"][current_bag_name_] = episode_node;
+    yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes"][current_bag_name_] =
+      episode_node;
   } else {
     RCLCPP_ERROR(this->get_logger(),
       "Task '%s' not found in YAML metadata. Episode '%s' will not be saved to metadata. "
@@ -1218,7 +1374,8 @@ void RosbagCollection::updateEpisodeYaml()
 
 void RosbagCollection::removeEpisodeFromYaml()
 {
-  RCLCPP_INFO(this->get_logger(), "Removing episode from rosbag YAML file: %s", current_bag_name_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Removing episode from rosbag YAML file: %s",
+      current_bag_name_.c_str());
 
   std::string yaml_file_path = rosbag_info_.recording_dir + "/recorded_bags_meta.yaml";
   if (!std::filesystem::exists(yaml_file_path)) {
@@ -1236,12 +1393,13 @@ void RosbagCollection::removeEpisodeFromYaml()
   std::string current_task_label = current_task_dir_name_;
 
   if (yaml_node["recorded_bags"]["tasks"][current_task_label].IsDefined()) {
-    
+
     // Remove from episodes_list
     if (yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"].IsDefined()) {
-      YAML::Node old_list = yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"];
+      YAML::Node old_list =
+        yaml_node["recorded_bags"]["tasks"][current_task_label]["episodes_list"];
       YAML::Node new_list = YAML::Node(YAML::NodeType::Sequence);
-      
+
       for (YAML::const_iterator it = old_list.begin(); it != old_list.end(); ++it) {
         if (it->as<std::string>() != current_bag_name_) {
           new_list.push_back(it->as<std::string>());
@@ -1277,7 +1435,8 @@ rclcpp_action::GoalResponse RosbagCollection::handleGoal(
 }
 
 rclcpp_action::CancelResponse RosbagCollection::handleCancel(
-  const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>> goal_handle)
+  const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
+  goal_handle)
 {
   RCLCPP_INFO(this->get_logger(), "Received cancel request");
   // Accept the cancel request
@@ -1285,21 +1444,25 @@ rclcpp_action::CancelResponse RosbagCollection::handleCancel(
 }
 
 void RosbagCollection::handleAccepted(
-  const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>> goal_handle)
+  const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
+  goal_handle)
 {
   RCLCPP_INFO(this->get_logger(), "Goal accepted, executing...");
-  // Execute the goal
-  this->execute(goal_handle);
+  std::thread{[this, goal_handle]() {
+      this->execute(goal_handle);
+    }}.detach();
 }
 
 void RosbagCollection::execute(
-  const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>> goal_handle)
+  const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
+  goal_handle)
 {
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<sobits_interfaces::action::VlaRecordState::Result>();
 
   if (!task_has_been_set_) {
-    RCLCPP_WARN(this->get_logger(), "Please set a task name via the vla_task_update service before starting a recording.");
+    RCLCPP_WARN(this->get_logger(),
+        "Please set a task name via the vla_task_update service before starting a recording.");
     result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
     goal_handle->abort(result);
     return;
@@ -1313,13 +1476,16 @@ void RosbagCollection::execute(
   }
 
   if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::RECORD) {
-    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED && current_state_ != sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
-      RCLCPP_WARN(this->get_logger(), "Cannot start/resume recording while already in state: %d", current_state_);
+    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED &&
+      current_state_ != sobits_interfaces::action::VlaRecordState_Result::PAUSED)
+    {
+      RCLCPP_WARN(this->get_logger(), "Cannot start/resume recording while already in state: %d",
+          current_state_);
       result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
       goal_handle->abort(result);
       return;
     }
-    
+
     if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
       createRosbag();
       result->status = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
@@ -1341,7 +1507,7 @@ void RosbagCollection::execute(
       goal_handle->abort(result);
       return;
     }
-    
+
     if (recorder_node_) {
       recorder_node_->pause();
       current_state_ = sobits_interfaces::action::VlaRecordState_Result::PAUSED;
@@ -1356,7 +1522,7 @@ void RosbagCollection::execute(
       goal_handle->abort(result);
       return;
     }
-    
+
     if (recorder_node_) {
       recorder_node_->resume();
       current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
@@ -1366,7 +1532,8 @@ void RosbagCollection::execute(
     }
   } else if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::SAVE) {
     if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
-      RCLCPP_WARN(this->get_logger(), "Cannot save recording while not in RECORDING or PAUSED state");
+      RCLCPP_WARN(this->get_logger(),
+          "Cannot save recording while not in RECORDING or PAUSED state");
       result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
       goal_handle->abort(result);
       return;
@@ -1398,7 +1565,7 @@ void RosbagCollection::taskUpdateCallback(
   std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Response> response)
 {
   RCLCPP_INFO(this->get_logger(), "Received task update request: %s", request->label.c_str());
-  
+
   // Update the task name
   if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
     RCLCPP_WARN(this->get_logger(), "Cannot update task name while recording is in progress");
@@ -1413,12 +1580,14 @@ void RosbagCollection::taskUpdateCallback(
 
     current_task_dir_name_ = current_task_name_ + "_" + getTimestampString();
     std::replace(current_task_dir_name_.begin(), current_task_dir_name_.end(), ' ', '_');
-    std::transform(current_task_dir_name_.begin(), current_task_dir_name_.end(), current_task_dir_name_.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
+    std::transform(current_task_dir_name_.begin(), current_task_dir_name_.end(),
+        current_task_dir_name_.begin(),
+      [](unsigned char c) {return std::tolower(c);});
 
     previous_task_path_ = current_task_path_;
     current_task_path_ = rosbag_info_.recording_dir + "/" + current_task_dir_name_;
-    RCLCPP_INFO(this->get_logger(), "Updated task name from '%s' to '%s'", previous_task_name_.c_str(), current_task_dir_name_.c_str());
+    RCLCPP_INFO(this->get_logger(), "Updated task name from '%s' to '%s'",
+        previous_task_name_.c_str(), current_task_dir_name_.c_str());
 
     previous_bag_name_ = current_bag_name_;
     current_bag_name_ = "episode_" + getTimestampString();
@@ -1428,13 +1597,15 @@ void RosbagCollection::taskUpdateCallback(
     // Update the rosbag YAML file
     updateRosbagYaml();
   } else {
-    RCLCPP_WARN(this->get_logger(), "Task name '%s' is already the current task name", request->label.c_str());
+    RCLCPP_WARN(this->get_logger(), "Task name '%s' is already the current task name",
+        request->label.c_str());
     response->success = false;
     response->message = "Task name is already the current task name";
     return;
   }
 
-  RCLCPP_INFO(this->get_logger(), "Task name updated successfully to '%s'", current_task_name_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Task name updated successfully to '%s'",
+      current_task_name_.c_str());
   response->success = true;
   response->message = "Task name updated successfully and rosbag YAML file updated";
   task_has_been_set_ = true;
@@ -1445,7 +1616,7 @@ void RosbagCollection::subtaskUpdateCallback(
   std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Response> response)
 {
   RCLCPP_INFO(this->get_logger(), "Received subtask update request: %s", request->label.c_str());
-  
+
   if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
     RCLCPP_WARN(this->get_logger(), "Cannot update subtask while not recording.");
     response->success = false;
@@ -1461,25 +1632,29 @@ void RosbagCollection::subtaskUpdateCallback(
   }
 
   current_subtask_name_ = request->label;
-  
+
   SubtaskInfo new_subtask;
   new_subtask.key = "subtask_" + getTimestampString();
   new_subtask.label = current_subtask_name_;
   new_subtask.start_timestamp = current_time_sec;
   new_subtask.end_timestamp = 0.0; // Will be updated on the next subtask or bag save
-  
+
   current_episode_subtasks_.push_back(new_subtask);
 
-  RCLCPP_INFO(this->get_logger(), "Subtask name updated successfully to '%s'", current_subtask_name_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Subtask name updated successfully to '%s'",
+      current_subtask_name_.c_str());
   response->success = true;
   response->message = "Subtask name updated successfully";
 }
 
-void RosbagCollection::cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg, const std::string topic_name)
+void RosbagCollection::cameraInfoCallback(
+  const sensor_msgs::msg::CameraInfo::SharedPtr msg,
+  const std::string topic_name)
 {
   if (camera_dimensions_.find(topic_name) == camera_dimensions_.end()) {
     camera_dimensions_[topic_name] = {msg->width, msg->height};
-    RCLCPP_INFO(this->get_logger(), "Captured dimensions for %s: %dx%d", topic_name.c_str(), msg->width, msg->height);
+    RCLCPP_INFO(this->get_logger(), "Captured dimensions for %s: %dx%d", topic_name.c_str(),
+        msg->width, msg->height);
     // Unsubscribe after getting the info once
     camera_info_subs_.erase(topic_name);
   }

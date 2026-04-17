@@ -3,9 +3,10 @@
 #include <sobits_interfaces/action/vla_record_state.hpp>
 
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/executors/single_threaded_executor.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 
-#include <filesystem> 
+#include <filesystem>
 #include <fstream>
 #include <yaml-cpp/yaml.h>
 
@@ -44,7 +45,7 @@ public:
   std::map<std::string, std::string> part_state_topic;    // controller_state topic per part
   std::map<std::string, std::vector<std::string>> part_actions;
   std::map<std::string, std::vector<std::string>> joint_names;
-  
+
   // Custom properties for specific parts like mobile_base/legs
   std::map<std::string, bool> part_has_cmd_vel_y;
   std::map<std::string, bool> part_has_cmd_vel_z;
@@ -120,28 +121,34 @@ private:
   void taskUpdateCallback(
     const std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Request> request,
     std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Response> response);
-  
+
   void subtaskUpdateCallback(
     const std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Request> request,
     std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Response> response);
 
-  void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg, const std::string topic_name);
+  void cameraInfoCallback(
+    const sensor_msgs::msg::CameraInfo::SharedPtr msg,
+    const std::string topic_name);
 
   rclcpp_action::GoalResponse handleGoal(
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const sobits_interfaces::action::VlaRecordState::Goal> goal);
   rclcpp_action::CancelResponse handleCancel(
-    const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>> goal_handle);
+    const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
+    goal_handle);
   void handleAccepted(
-    const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>> goal_handle);
+    const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
+    goal_handle);
   void execute(
-    const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>> goal_handle);
+    const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
+    goal_handle);
 
   rclcpp_action::Server<sobits_interfaces::action::VlaRecordState>::SharedPtr record_action_server_;
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr task_update_service_;
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr subtask_update_service_;
 
   std::shared_ptr<rosbag2_transport::Recorder> recorder_node_;
+  std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> recorder_executor_;
   std::thread recorder_thread_;
   std::mutex recorder_mutex_;
   std::atomic<bool> is_recording_{false};
@@ -150,7 +157,8 @@ private:
   double max_episode_duration_sec_{0.0};  // 0 = disabled
   bool task_has_been_set_{false};
 
-  std::map<std::string, rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr> camera_info_subs_;
+  std::map<std::string,
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr> camera_info_subs_;
   std::map<std::string, std::pair<uint32_t, uint32_t>> camera_dimensions_;
 
   // Recording health monitoring
@@ -184,7 +192,7 @@ private:
   std::string previous_task_name_;
   std::string current_task_path_;
   std::string previous_task_path_;
-  
+
   std::string current_subtask_name_;
   std::vector<SubtaskInfo> current_episode_subtasks_;
 
