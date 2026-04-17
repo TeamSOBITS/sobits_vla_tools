@@ -16,6 +16,9 @@
     # faster than this rate are downsampled (dropped) to match.
     fps: 10
 
+    # Video codec used by LeRobotDataset writer. Use "auto" for portable defaults.
+    vcodec: "auto"
+
     # Maximum acceptable temporal gap (seconds) between sensor readings in a single frame.
     # Frames exceeding this threshold are flagged in the logs.
     sync_threshold: 0.1
@@ -23,6 +26,10 @@
     # If true, push the finalized dataset to HuggingFace Hub using `dataset_name` as the repo ID.
     # Requires HF credentials (run: huggingface-cli login).
     push_to_hub: false
+
+    # If true, delete the existing output dataset directory before converting.
+    # Useful when re-running conversion after a failed attempt.
+    overwrite: false
 
     # If true, the HuggingFace Hub repository will be created as private.
     # Only relevant when push_to_hub is true.
