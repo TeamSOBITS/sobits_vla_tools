@@ -12,10 +12,11 @@ find_package(rclpy REQUIRED)
 # Install Python modules
 ament_python_install_package(${PROJECT_NAME})
 
-# Install Python executables
+# Install Python executables (rename to drop .py so ros2 run/launch finds it)
 install(PROGRAMS
   ${PROJECT_NAME}/ros2bag_to_lerobotdataset.py
   DESTINATION lib/${PROJECT_NAME}
+  RENAME ros2bag_to_lerobotdataset
 )
 
 # Install directories

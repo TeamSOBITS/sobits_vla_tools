@@ -20,9 +20,23 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-pandas</exec_depend>
+  <exec_depend>python3-pyarrow</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
 
-  <!-- <depend>TODO</depend> -->
+  <!--
+    Runtime note:
+    This package is typically executed with /opt/pytorch/.venv/bin/python3 where
+    lerobot, rosbags, and torch are installed. Keep that environment in sync with
+    the imports used in ros2bag_to_lerobotdataset.py.
+  -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

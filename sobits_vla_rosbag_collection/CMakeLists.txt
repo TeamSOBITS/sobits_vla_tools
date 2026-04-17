@@ -17,6 +17,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(rosbag2_cpp REQUIRED)
+find_package(rosbag2_storage REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(sobits_interfaces REQUIRED)
@@ -49,6 +51,8 @@ ament_target_dependencies(${PROJECT_NAME}
   "rclcpp"
   "rclcpp_action"
   "rclcpp_components"
+  "rosbag2_cpp"
+  "rosbag2_storage"
   "sensor_msgs"
   "rcl_interfaces"
   "sobits_interfaces"
