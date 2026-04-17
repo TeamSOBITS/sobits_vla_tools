@@ -17,10 +17,24 @@ def generate_launch_description_impl(context, *args, **kwargs):
     rosbag_directory = LaunchConfiguration('rosbag_directory').perform(context)
     recorded_bags_meta_file = LaunchConfiguration('recorded_bags_meta_file').perform(context)
     dataset_name = LaunchConfiguration('dataset_name').perform(context)
+    vcodec = LaunchConfiguration('vcodec').perform(context)
+    overwrite = LaunchConfiguration('overwrite').perform(context).lower() == 'true'
 
-    # Defaults
+    # Defaults: prefer src-tree rosbags dir (written at runtime), fall back to install share
     if not rosbag_directory:
-        rosbag_directory = os.path.join(collection_share, 'rosbags')
+        launch_file_path = os.path.abspath(__file__)
+        if '/install/' in launch_file_path:
+            ws_root = launch_file_path.split('/install/')[0]
+            pkg_name = 'sobits_vla_rosbag_collection'
+            src_candidate = os.path.join(
+                ws_root, 'src', 'robocup_opl_doinglaundry', 'sobits_vla_tools', pkg_name)
+            src_candidate_flat = os.path.join(ws_root, 'src', 'sobits_vla_tools', pkg_name)
+            if os.path.isdir(os.path.join(src_candidate, 'rosbags')):
+                rosbag_directory = os.path.join(src_candidate, 'rosbags')
+            elif os.path.isdir(os.path.join(src_candidate_flat, 'rosbags')):
+                rosbag_directory = os.path.join(src_candidate_flat, 'rosbags')
+        if not rosbag_directory:
+            rosbag_directory = os.path.join(collection_share, 'rosbags')
         
     if not recorded_bags_meta_file:
         recorded_bags_meta_file = os.path.join(rosbag_directory, "recorded_bags_meta.yaml")
@@ -35,6 +49,9 @@ def generate_launch_description_impl(context, *args, **kwargs):
         override_params['recorded_bags_meta_file'] = recorded_bags_meta_file
     if dataset_name:
         override_params['dataset_name'] = dataset_name
+    if vcodec:
+        override_params['vcodec'] = vcodec
+    override_params['overwrite'] = overwrite
         
     if override_params:
         parameters.append(override_params)
@@ -70,6 +87,16 @@ def generate_launch_description():
             'dataset_name',
             default_value='',
             description='Dataset name.'
+        ),
+        DeclareLaunchArgument(
+            'vcodec',
+            default_value='',
+            description='Video codec override (e.g., auto, h264, av1). Uses config value when empty.'
+        ),
+        DeclareLaunchArgument(
+            'overwrite',
+            default_value='false',
+            description='Delete existing output dataset before converting.'
         ),
         OpaqueFunction(function=generate_launch_description_impl)
     ])
