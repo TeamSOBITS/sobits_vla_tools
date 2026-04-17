@@ -13,16 +13,19 @@ class GamepadClient : public rclcpp::Node
 public:
   explicit GamepadClient(const rclcpp::NodeOptions & options);
   ~GamepadClient();
+
 private:
   void joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
   void sendGoal(const uint8_t & command);
   void goalResponseCallback(
-    rclcpp_action::ClientGoalHandle<sobits_interfaces::action::VlaRecordState>::SharedPtr goal_handle);
+    rclcpp_action::ClientGoalHandle<sobits_interfaces::action::VlaRecordState>::SharedPtr
+    goal_handle);
   void feedbackCallback(
     rclcpp_action::ClientGoalHandle<sobits_interfaces::action::VlaRecordState>::SharedPtr,
     const std::shared_ptr<const sobits_interfaces::action::VlaRecordState::Feedback> feedback);
   void resultCallback(
-    const rclcpp_action::ClientGoalHandle<sobits_interfaces::action::VlaRecordState>::WrappedResult & result);
+    const rclcpp_action::ClientGoalHandle<sobits_interfaces::action::VlaRecordState>::WrappedResult
+    & result);
   void timerCallback();
 
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
