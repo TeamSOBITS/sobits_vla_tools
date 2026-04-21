@@ -1,84 +1,98 @@
 /**:
   ros__parameters:
     model:
-      # Model repository ID
-      repo_id: "team-sobits/sobit_light_smolvla"
-      # Device to run the model on
+      # --- Policy selection ---
+      # Pick ONE of the policy_class values below and set matching repo_id.
+      #
+      # SmolVLA (VLM-based, recommended for SOBIT HOME):
+      #   policy_class: "lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy"
+      #   repo_id: "lerobot/smolvla_base"  or  "team-sobits/sobit_home_smolvla"
+      #
+      # pi0 (PaliGemma + flow matching, strong zero-shot):
+      #   policy_class: "lerobot.policies.pi0.modeling_pi0.PI0Policy"
+      #   repo_id: "lerobot/pi0"
+      #
+      # pi05 (pi0 with improved training, latest Physical Intelligence):
+      #   policy_class: "lerobot.policies.pi05.modeling_pi05.PI05Policy"
+      #   repo_id: "lerobot/pi05"
+      #
+      # pi0_fast (distilled pi0, ~10x faster, same quality):
+      #   policy_class: "lerobot.policies.pi0_fast.modeling_pi0_fast.PI0FastPolicy"
+      #   repo_id: "lerobot/pi0_fast"
+      #
+      repo_id: "<hf_user>/<finetuned_model_repo>"
+      policy_class: "lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy"
+      # Inference device (cuda recommended; cpu for debug only).
       device: "cuda"
-      # Use automatic mixed precision
+      # Enable automatic mixed precision (pi0/pi05/pi0_fast ignore this; SmolVLA uses it).
       use_amp: true
+
+    runtime:
+      # Control publish frequency [Hz]. Must be <= policy chunk_size * 1/action_horizon.
+      control_hz: 10.0
+      # Actions per policy chunk (match policy config chunk_size, default 50).
+      actions_per_chunk: 50
+      # Re-infer when queue drops below this fraction of actions_per_chunk [0.0–1.0].
+      chunk_size_threshold: 0.6
+      # Overlap merge strategy: weighted_average | newest
+      aggregate_fn_name: weighted_average
+      # Run inference in background thread while publishing (true = async).
+      async_enabled: true
+
+    rtc:
+      # RTC (Real-Time Chunking) — supported by SmolVLA, pi0, pi05, pi0_fast.
+      # Uses predict_action_chunk with prefix attention to reduce motion discontinuity.
+      # Disable (false) for policies not in the registry (ACT, Diffusion, etc.).
+      enabled: true
+      # Steps of overlap between consecutive chunks (typical: 8–12).
+      execution_horizon: 10
+      # Maximum guidance weight applied by RTC prefix attention (10.0 = optimal for 10-step flow).
+      max_guidance_weight: 10.0
+      # Prefix attention schedule: EXP (recommended) | LINEAR | ONES | ZEROS
+      prefix_attention_schedule: EXP
+      # Measured inference latency in control steps (used to align new chunk to queue).
+      inference_delay: 4
+      # Enable RTC debug logging.
+      debug: false
+
     robot:
-      # Name of the robot
-      name: "sobit_light"
-      # Description of the robot
-      parts:
-        - body
-        - mobile_base
-      body:
-        joints:
-          - arm_shoulder_roll.pos
-          - arm_shoulder_pitch.pos
-          - arm_shoulder_pitch_sub.pos
-          - arm_elbow_pitch.pos
-          - arm_forearm_roll.pos
-          - arm_wrist_pitch.pos
-          - arm_wrist_roll.pos
-          - hand.pos
-          - head_yaw.pos
-          - head_pitch.pos
-        joints_ros:
-          - arm_shoulder_roll_joint
-          - arm_shoulder_pitch_joint
-          - arm_shoulder_pitch_sub_joint
-          - arm_elbow_pitch_joint
-          - arm_forearm_roll_joint
-          - arm_wrist_pitch_joint
-          - arm_wrist_roll_joint
-          - hand_joint
-          - head_yaw_joint
-          - head_pitch_joint
-        obs_topic: "/sobit_light/joint_states"
-        act_topic: "/sobit_light/joint_trajectory_controller/joint_trajectory"
+      # Robot identifier used for logging and profile lookup.
+      name: robot_name
+      # JointState topic containing current joint positions.
+      joint_states_topic: "/robot_name/joint_states"
+      # Odometry topic for base velocity features; leave empty if unused.
+      odom_topic: ""
+      groups:
+        # Controller groups — each maps ROS joint names to policy feature names.
+        names: [arm]
+        arm:
+          command_topic: "/robot_name/arm_controller/joint_trajectory"
+          joints_ros:
+            [
+              joint_1,
+              joint_2,
+            ]
+          # Policy feature names must match training dataset feature keys exactly.
+          features:
+            [
+              joint_1,
+              joint_2,
+            ]
       mobile_base:
-        joints:
-          - x.vel
-          - theta.vel
-        joints_ros:
-          - base_l_drive_wheel_joint
-          - base_r_drive_wheel_joint
-        obs_topic: "/sobit_light/odometry/odometry"
-        act_topic: "/sobit_light/manual_control/cmd_vel"
+        # Leave empty for fixed-base robots.
+        command_topic: ""
+        features: [x.vel, theta.vel]
       cameras:
-        types:
-          - front
-          - back
-          - head
-          - wrist.top
-        front:
-          width: 1280
-          height: 720
-          fps: 10
-          color_mode: rgb # bgr
-          topic: "/sobit_light/front_camera/image_raw"
-        back:
-          width: 1280
-          height: 720
-          fps: 10
-          color_mode: rgb # bgr
-          topic: "/sobit_light/back_camera/image_raw"
+        names: [head]
+        default_encoding: rgb8
         head:
-          width: 1280
-          height: 720
-          fps: 10
-          color_mode: rgb # bgr
-          topic: "/sobit_light/head_camera/color/image_raw"
-        wrist.top:
-          width: 848
-          height: 480
-          fps: 10
-          color_mode: rgb # bgr
-          topic: "/sobit_light/hand_camera/color/image_rect_raw"
+          topic: "/robot_name/head_camera/color/image_raw"
 
     gamepad:
-      topic: "/sobit_light/joy"
-      play_button: 0
+      topic: "/joy"
+      name: controller_name
+      controllers: [controller_name]
+      controller_name:
+        button_mapping:
+          play: 0
+          stop: 1
