@@ -36,7 +36,7 @@ SOBITS VLA Tools is a monorepo providing the full pipeline for controlling SOBIT
 | System | Version |
 | ------ | ------- |
 | Ubuntu | 22.04 (Jammy Jellyfish) |
-| ROS    | Humble Hawksbill        |
+| ROS    | Jazzy Jalisco           |
 | Python | ≥3.10                  |
 
 > [!NOTE]
@@ -102,6 +102,7 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
 | Save/Delete | Save current episode / Delete last saved episode (if not recording) |
 
 Button mappings are configured in [gamepad_settings.yaml](./sobits_vla_rosbag_collection/config/gamepad_settings.yaml).
+Supported controller profiles currently include `quest`, `dualshock4`, and `keyboard`.
 
 #### Recording Quality Monitors
 
@@ -119,6 +120,10 @@ The collection node monitors data quality in real-time during recording:
 #### Configuration
 
 Robot-specific config: `config/record_settings_<robot_name>.yaml`
+
+For this repository, the main presets are:
+- `config/record_settings_sobit_home.yaml`
+- `config/record_settings_sobit_light.yaml`
 
 | Group | Key Parameters |
 | ----- | -------------- |
@@ -147,7 +152,7 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 
 | Argument | Default | Description |
 | -------- | ------- | ----------- |
-| `config_file` | `conversion_settings.yaml` | Conversion config file |
+| `config_file` | `conversion_settings.yaml` | Conversion config file (switch per robot profile) |
 | `rosbag_directory` | (from collection package) | Path to recorded rosbag episodes |
 | `recorded_bags_meta_file` | `<rosbag_directory>/recorded_bags_meta.yaml` | Metadata file from collection |
 | `dataset_name` | (from config) | Output dataset name |
@@ -165,12 +170,14 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 
 Config file: [conversion_settings.yaml](./sobits_vla_rosbag_conversion/config/conversion_settings.yaml)
 
+Robot-specific preset example: [conversion_settings_sobit_home.yaml](./sobits_vla_rosbag_conversion/config/conversion_settings_sobit_home.yaml)
+
 | Parameter | Default | Description |
 | --------- | ------- | ----------- |
 | `fps` | `10` | Target dataset frame rate |
 | `sync_threshold` | `0.1` | Max temporal gap (seconds) between synced sensors |
 | `primary_camera` | `head_camera` | Camera used as sync trigger |
-| `cameras` | `head_camera, hand_camera` | Cameras included in the dataset |
+| `cameras` | `head_camera, hand_left_camera, hand_right_camera` | Cameras included in the dataset |
 | `ee_pose.enabled` | `false` | Enable end-effector pose extraction |
 | `skip_static_threshold` | `0.0` | Joint movement threshold for static frame filtering (0 = disabled) |
 | `push_to_hub` | `false` | Push resulting dataset to HuggingFace Hub |
@@ -192,10 +199,61 @@ Config file: [conversion_settings.yaml](./sobits_vla_rosbag_conversion/config/co
 
 **Package:** [sobits_vla_deploy](./sobits_vla_deploy/)
 
-Runs real-time VLA inference on the robot. Subscribes to camera streams and joint states, runs the policy model, and publishes trajectory commands.
+Runs real-time VLA inference on the robot with async chunk execution and RTC-enabled chunk smoothing when supported by the policy.
 
-> [!NOTE]
-> TBD — Deployment utilities are under development.
+#### Run
+
+```bash
+ros2 run sobits_vla_deploy sobits_vla_deploy.py --ros-args \
+  --params-file $(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/robot_config.yaml
+```
+
+To use a robot-specific setup, pass a `robot_config_<robot_name>.yaml` file (for example, `robot_config_sobit_home.yaml`).
+
+#### Launch
+
+```bash
+ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py
+```
+
+With a robot-specific config:
+
+```bash
+ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py \
+  config_file:=$(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/robot_config_sobit_home.yaml
+```
+
+#### Config layout
+
+- Generic template: [robot_config.yaml](./sobits_vla_deploy/config/robot_config.yaml)
+- Robot-specific preset example: [robot_config_sobit_home.yaml](./sobits_vla_deploy/config/robot_config_sobit_home.yaml)
+
+The deploy node uses a flat robot config under `robot` (selected by `robot.name`) and supports:
+- joint state and odom topics
+- multiple joint trajectory controller groups
+- optional mobile base command features
+- camera topics and encodings
+
+#### Multi-controller gamepad mapping
+
+Deploy now supports controller-specific mappings:
+
+```yaml
+gamepad:
+  topic: /joy
+  name: quest
+  controllers: [quest, dualshock4]
+  quest:
+    button_mapping:
+      play: 4
+      stop: 5
+  dualshock4:
+    button_mapping:
+      play: 7
+      stop: 6
+```
+
+This allows multiple controllers to trigger play/stop in the same runtime.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -239,7 +297,7 @@ Runs real-time VLA inference on the robot. Subscribes to camera streams and join
 
 - [LeRobot](https://github.com/huggingface/lerobot) — Dataset format and training framework
 <!-- - [SmolVLA](https://huggingface.co/HuggingFaceTB/SmolVLA-256) — VLA model architecture -->
-- [ROS 2 Humble](https://docs.ros.org/en/humble/) — Robot middleware
+- [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/) — Robot middleware
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

@@ -19,9 +19,9 @@ SOBITS VLA Toolsは，SOBITS自作ロボットをVision-Language-Action（VLA）
 
 | パッケージ | 説明 |
 | ---------- | ---- |
-| [sobits_vla_collection](./sobits_vla_collection/) | ゲームパッドによるマルチモーダルrosbag記録（リアルタイム品質監視付き） |
-| [sobits_vla_conversion](./sobits_vla_conversion/) | rosbagを[LeRobot](https://github.com/huggingface/lerobot)データセット形式に変換 |
-| [sobits_vla_training](./sobits_vla_training/)` | モデル学習ユーティリティ（TBD） |
+| [sobits_vla_rosbag_collection](./sobits_vla_rosbag_collection/) | ゲームパッドによるマルチモーダルrosbag記録（リアルタイム品質監視付き） |
+| [sobits_vla_rosbag_conversion](./sobits_vla_rosbag_conversion/) | rosbagを[LeRobot](https://github.com/huggingface/lerobot)データセット形式に変換 |
+| [sobits_vla_training](./sobits_vla_training/) | モデル学習ユーティリティ（TBD） |
 | [sobits_vla_deploy](./sobits_vla_deploy/) | ロボット制御用リアルタイムVLA推論ノード（TBD） |
 | [sobits_vla_visualization](./sobits_vla_visualization/) | データセット・推論の可視化（TBD） |
 
@@ -36,7 +36,7 @@ SOBITS VLA Toolsは，SOBITS自作ロボットをVision-Language-Action（VLA）
 | System | Version |
 | ------ | ------- |
 | Ubuntu | 22.04 (Jammy Jellyfish) |
-| ROS    | Humble Hawksbill        |
+| ROS    | Jazzy Jalisco           |
 | Python | ≥3.10                  |
 
 > [!NOTE]
@@ -77,7 +77,7 @@ SOBITS VLA Toolsは，SOBITS自作ロボットをVision-Language-Action（VLA）
 
 ### 1. データ収集
 
-**パッケージ:** [sobits_vla_collection](./sobits_vla_collection/)
+**パッケージ:** [sobits_vla_rosbag_collection](./sobits_vla_rosbag_collection/)
 
 ゲームパッドコントローラーを使用して，カメラ・関節状態・オドメトリ・LiDAR・TFなどのマルチモーダルセンサーデータをrosbagエピソードとして記録します．
 
@@ -103,6 +103,7 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
 | Save（停止中） | 最後に保存したエピソードを削除（取り消し） |
 
 ボタンマッピングは[gamepad_settings.yaml](./sobits_vla_rosbag_collection/config/gamepad_settings.yaml)で設定します．
+現在のコントローラープロファイルは`quest`，`dualshock4`，`keyboard`に対応しています．
 
 #### 記録品質モニタリング
 
@@ -121,6 +122,10 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
 
 ロボット固有設定: `config/record_settings_<robot_name>.yaml`
 
+本リポジトリで主に使う設定:
+- `config/record_settings_sobit_home.yaml`
+- `config/record_settings_sobit_light.yaml`
+
 | グループ | 主要パラメータ |
 | -------- | -------------- |
 | ロボット形態 | `parts`, `joint_names`, `is_actionable`, `joint_states_topic` |
@@ -133,7 +138,7 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
 
 ### 2. データセット変換
 
-**パッケージ:** [sobits_vla_conversion](./sobits_vla_conversion/)
+**パッケージ:** [sobits_vla_rosbag_conversion](./sobits_vla_rosbag_conversion/)
 
 生のrosbag記録を時刻同期されたマルチモーダルフレームで[LeRobot](https://github.com/huggingface/lerobot)データセット形式に変換します．
 
@@ -148,7 +153,7 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 
 | 引数 | デフォルト | 説明 |
 | ---- | ---------- | ---- |
-| `config_file` | `conversion_settings.yaml` | 変換設定ファイル |
+| `config_file` | `conversion_settings.yaml` | 変換設定ファイル（ロボットに応じて切り替え） |
 | `rosbag_directory` | （収集パッケージから） | 記録済みrosbagエピソードのパス |
 | `recorded_bags_meta_file` | `<rosbag_directory>/recorded_bags_meta.yaml` | 収集時のメタデータファイル |
 | `dataset_name` | （設定から） | 出力データセット名 |
@@ -166,12 +171,14 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 
 設定ファイル: [conversion_settings.yaml](./sobits_vla_rosbag_conversion/config/conversion_settings.yaml)
 
+ロボット別プリセット例: [conversion_settings_sobit_home.yaml](./sobits_vla_rosbag_conversion/config/conversion_settings_sobit_home.yaml)
+
 | パラメータ | デフォルト | 説明 |
 | ---------- | ---------- | ---- |
 | `fps` | `10` | ターゲットデータセットフレームレート |
 | `sync_threshold` | `0.1` | 同期センサー間の最大時間差（秒） |
 | `primary_camera` | `head_camera` | 同期トリガーとして使用するカメラ |
-| `cameras` | `head_camera, hand_camera` | データセットに含めるカメラ |
+| `cameras` | `head_camera, hand_left_camera, hand_right_camera` | データセットに含めるカメラ |
 | `ee_pose.enabled` | `false` | エンドエフェクター姿勢抽出を有効化 |
 | `skip_static_threshold` | `0.0` | 静止フレームフィルタリングの関節移動閾値（0 = 無効） |
 | `push_to_hub` | `false` | 結果のデータセットをHuggingFace Hubにプッシュ |
@@ -193,10 +200,61 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 
 **パッケージ:** [sobits_vla_deploy](./sobits_vla_deploy/)
 
-ロボット上でリアルタイムVLA推論を実行します．カメラストリームと関節状態をサブスクライブし，ポリシーモデルを実行して軌道コマンドをパブリッシュします．
+ロボット上でリアルタイムVLA推論を実行します．ポリシーが対応している場合，非同期チャンク実行（Async）とRTCによるチャンク接続の滑らかさ向上を利用できます．
 
-> [!NOTE]
-> TBD — 推論ユーティリティは開発中です．
+#### 実行方法
+
+```bash
+ros2 run sobits_vla_deploy sobits_vla_deploy.py --ros-args \
+  --params-file $(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/robot_config.yaml
+```
+
+ロボット別設定を使う場合は，`robot_config_<robot_name>.yaml`を指定してください（例: `robot_config_sobit_home.yaml`）．
+
+#### launchによる起動
+
+```bash
+ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py
+```
+
+ロボット別設定ファイルを指定する場合:
+
+```bash
+ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py \
+  config_file:=$(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/robot_config_sobit_home.yaml
+```
+
+#### 設定ファイル構成
+
+- 汎用テンプレート: [robot_config.yaml](./sobits_vla_deploy/config/robot_config.yaml)
+- ロボット別プリセット例: [robot_config_sobit_home.yaml](./sobits_vla_deploy/config/robot_config_sobit_home.yaml)
+
+`robot`直下（`robot.name`でロボット名を指定）で以下を設定できます:
+- `joint_states_topic` と `odom_topic`
+- 複数の関節軌道コントローラグループ
+- モバイルベース指令トピックと特徴量
+- カメラトピックと画像エンコーディング
+
+#### 複数コントローラー対応（gamepad）
+
+デプロイ側gamepad設定は，コントローラーごとのボタンマッピングに対応しています．
+
+```yaml
+gamepad:
+  topic: /joy
+  name: quest
+  controllers: [quest, dualshock4]
+  quest:
+    button_mapping:
+      play: 4
+      stop: 5
+  dualshock4:
+    button_mapping:
+      play: 7
+      stop: 6
+```
+
+この設定により，複数コントローラーから同一ノードのplay/stop制御が可能です．
 
 <p align="right">(<a href="#readme-top">上に戻る</a>)</p>
 
@@ -239,7 +297,7 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 
 - [LeRobot](https://github.com/huggingface/lerobot) — データセット形式と学習フレームワーク
 <!-- - [SmolVLA](https://huggingface.co/HuggingFaceTB/SmolVLA-256) — VLAモデルアーキテクチャ -->
-- [ROS 2 Humble](https://docs.ros.org/en/humble/) — ロボットミドルウェア
+- [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/) — ロボットミドルウェア
 
 <p align="right">(<a href="#readme-top">上に戻る</a>)</p>
 
