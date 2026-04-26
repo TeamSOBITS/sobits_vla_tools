@@ -90,24 +90,8 @@
       actions_to_record:
         - "/robot/move_base"
       # Format for the recorded bag files (e.g., "mcap", "sqlite3")
-      conversion_format: "mcap" 
+      conversion_format: "mcap"
       # Specify the compression mode ("none", "file", "message")
       compression_mode: "none"
       # If compression is enabled, specify the compression format ("zstd" is the only supported compression format)
       compression_format: "zstd"
-
-    # Control settings for the gamepad
-    gamepad_config:
-      # Gamepad type (e.g., "dualshock4", "keyboard")
-      name: "dualshock4"
-      # Mapping of gamepad buttons to actions
-      dualshock4:
-        button_mapping:
-          record: 7 # Top
-          save: 6 # Left
-          delete: 6 # Right
-      keyboard:
-        button_mapping:
-          record: "r"
-          save: "s"
-          delete: "d"
