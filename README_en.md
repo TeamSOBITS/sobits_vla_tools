@@ -132,6 +132,159 @@ For this repository, the main presets are:
 | Recording | `topics_to_record`, compression format/mode |
 | Monitoring | `expected_sensor_fps`, `min_disk_space_warning_gb`, `min_episode_duration` |
 
+#### Launching SOBIT HOME
+
+Launch the robot **before** starting the teleop node or the Quest app.
+
+**Real robot:**
+
+```bash
+ros2 launch sobit_home_bringup real_minimal.launch.py \
+  enable_teleop:=true
+```
+
+**Simulation (Gazebo):**
+
+```bash
+ros2 launch sobit_home_bringup gz_minimal.launch.py \
+  world_model:=simple_data_collection \
+  enable_teleop:=true
+```
+
+Available `world_model` values: `empty`, `wrs`, `small_house`, `rcjo2025_arena`, `rcjo2026_arena`, `simple_data_collection`.
+
+**Teleop node (Quest, real robot):**
+
+```bash
+ros2 launch sobits_teleop sobits_teleop.launch.py \
+  robot_name:=sobit_home \
+  device:=quest \
+  use_moveit:=true \
+  ros_ip:=127.0.0.1
+```
+
+**Teleop node (Quest, simulation):**
+
+```bash
+ros2 launch sobits_teleop sobits_teleop.launch.py \
+  robot_name:=sobit_home \
+  device:=quest \
+  use_moveit:=true \
+  ros_ip:=127.0.0.1 \
+  use_sim_time:=true
+```
+
+#### Collecting Data with SOBIT HOME and Meta Quest
+
+SOBIT HOME teleoperation uses the Meta Quest headset via [sobits_teleop](https://github.com/TeamSOBITS/sobits_teleop). The Quest app communicates with the PC over TCP port 10000. Two connection methods are supported:
+
+| Method | When to use |
+| ------ | ----------- |
+| **Wired (ADB)** | Quest connected to PC via USB cable — most reliable, no network required |
+| **Wireless (Wi-Fi)** | Cable-free operation; Quest and PC must be on the same network |
+
+---
+
+##### Option A — Wired connection (ADB)
+
+The launch file automatically runs `adb reverse tcp:10000 tcp:10000`, which tunnels the app's connection through USB. No IP configuration is needed on the Quest side.
+
+1. Turn on the Quest by pressing the button on the **left side** of the headset.
+2. Connect the Quest to the PC with a USB cable and run the following command **once** in the computer. (You should have runned the installer for sobits_teleop already).
+   ```bash
+   sudo adb kill-server
+   sudo adb start-server
+   ```
+3. Accept the **"Allow USB debugging"** prompt inside the headset by clicking on the **"Allow always from this computer"**
+4. Verify the device is detected:
+   ```bash
+   adb devices
+   ```
+5. Launch the teleop node on the PC:
+   ```bash
+   ros2 launch sobits_teleop sobits_teleop.launch.py \
+     robot_name:=sobit_home \
+     device:=quest \
+     use_moveit:=true \
+     ros_ip:=127.0.0.1
+   ```
+6. Inside the headset, open the library window (**Meta button**, right controller), go to **Menu->Unknown Sources**, and launch the **Quest Teleoperation** app.
+7. Press the **three-lines button on the left controller** to open settings, set the IP to `127.0.0.1`, and press **OK** — the robot's camera feeds should appear.
+
+---
+
+##### Option B — Wireless connection (Wi-Fi)
+
+Quest and PC must be on the same Wi-Fi network.
+
+**On the Quest headset:**
+
+1. Turn on the Quest by pressing the button on the **left side** of the headset.
+2. Using the **right controller**, press the **Meta button** to open the library window.
+3. Open **Quick Controls** (the icon with two dots and three lines) and press **Wi-Fi**.
+4. Select your network, enter the password, and wait until **"Connected"** appears.
+5. Press the back arrow, then **Done** to finish.
+
+**On the PC:**
+
+7. Launch the teleop node, passing your PC's IP on the shared network:
+   ```bash
+   ros2 launch sobits_teleop sobits_teleop.launch.py \
+     robot_name:=sobit_home \
+     device:=quest \
+     use_moveit:=true \
+     ros_ip:=<PC_IP_ADDRESS>
+   ```
+   Replace `<PC_IP_ADDRESS>` with your PC's IP (e.g. `192.168.11.10`).
+
+**Back on the Quest:**
+
+8. From the library window, go to **Menu->Unknown Sources** and launch the **Quest Teleoperation** app.
+9. Press the **three-lines button on the left controller**, enter your PC's IP address, and press **OK** — the robot's camera feeds should appear.
+
+---
+
+##### Teleop launch arguments
+
+| Argument | Default | Description |
+| -------- | ------- | ----------- |
+| `robot_name` | `sobit_home` | Robot configuration profile to load |
+| `device` | `quest` | Input device — Quest controller |
+| `ros_ip` | `127.0.0.1` | PC IP the Quest app connects to (`127.0.0.1` for wired ADB). Check your your PC's IP if wireless. |
+| `use_moveit` | `true` | Set `true` to enable MoveIt-based arm control via Quest |
+
+> [!TIP]
+> Launch the robot bringup on the PC **before** opening the Quest app, so camera topics are already available when the app connects.
+
+##### Set the task name
+
+The collection node organises episodes into per-task directories. Before recording, set the task name via the `/vla_task_update` service:
+
+```bash
+ros2 service call /rosbag_collection/vla_task_update sobits_interfaces/srv/VlaUpdateTask "{label: 'pick up the bottle'}"
+```
+
+Changing the task name mid-session will save subsequent episodes into a new directory.
+
+##### Launch the rosbag collection node and record episodes
+
+In a separate terminal, launch the rosbag collection node:
+
+```bash
+ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
+  robot_name:=sobit_home \
+  record_directory:=/path/to/rosbags
+```
+
+Once the node is running, use the Quest controllers to manage episodes:
+
+| Button | State | Action |
+| ------ | ----- | ------ |
+| **A button** (right controller) | Idle | Start recording |
+| **A button** (right controller) | Recording | Pause / Resume |
+| **B button** (right controller) | Recording | Save episode and stop |
+| **B button** (right controller) | Idle | Delete the last saved episode |
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 

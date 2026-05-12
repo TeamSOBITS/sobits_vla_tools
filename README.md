@@ -133,6 +133,159 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
 | 記録 | `topics_to_record`, 圧縮形式/モード |
 | モニタリング | `expected_sensor_fps`, `min_disk_space_warning_gb`, `min_episode_duration` |
 
+#### SOBIT HOME の起動
+
+テレオペレーションノードや Quest アプリを起動する**前に**，ロボットを先に起動してください．
+
+**実機：**
+
+```bash
+ros2 launch sobit_home_bringup real_minimal.launch.py \
+  enable_teleop:=true
+```
+
+**シミュレーション（Gazebo）：**
+
+```bash
+ros2 launch sobit_home_bringup gz_minimal.launch.py \
+  world_model:=simple_data_collection \
+  enable_teleop:=true
+```
+
+`world_model` に指定できる値: `empty`, `wrs`, `small_house`, `rcjo2025_arena`, `rcjo2026_arena`, `simple_data_collection`．
+
+**テレオペレーションノード（Quest，実機）：**
+
+```bash
+ros2 launch sobits_teleop sobits_teleop.launch.py \
+  robot_name:=sobit_home \
+  device:=quest \
+  use_moveit:=true \
+  ros_ip:=127.0.0.1
+```
+
+**テレオペレーションノード（Quest，シミュレーション）：**
+
+```bash
+ros2 launch sobits_teleop sobits_teleop.launch.py \
+  robot_name:=sobit_home \
+  device:=quest \
+  use_moveit:=true \
+  ros_ip:=127.0.0.1 \
+  use_sim_time:=true
+```
+
+#### SOBIT HOME + Meta Quest でのデータ収集
+
+SOBIT HOME のテレオペレーションは，[sobits_teleop](https://github.com/TeamSOBITS/sobits_teleop) を通じて Meta Quest ヘッドセットを使用します．Quest アプリは TCP ポート 10000 で PC と通信します．接続方法は2種類あります：
+
+| 方法 | 使いどき |
+| ---- | -------- |
+| **有線（ADB）** | USB ケーブルで Quest を PC に接続 — 最も安定，ネットワーク不要 |
+| **無線（Wi-Fi）** | ケーブルなしで操作；Quest と PC が同じネットワーク上にある必要あり |
+
+---
+
+##### オプション A — 有線接続（ADB）
+
+launch ファイルが自動的に `adb reverse tcp:10000 tcp:10000` を実行し，USB 経由でアプリの接続をトンネリングします．Quest 側の IP 設定は不要です．
+
+1. ヘッドセット**左側のボタン**を押して Quest を起動する．
+2. USB ケーブルで Quest を PC に接続し，以下のコマンドを PC で**一度だけ**実行する（sobits_teleop のインストーラー実行済みであること）：
+   ```bash
+   sudo adb kill-server
+   sudo adb start-server
+   ```
+3. ヘッドセット内に表示される **"このコンピュータからのUSBデバッグを常に許可する"** を選択して承認する．
+4. デバイスが認識されているか確認する：
+   ```bash
+   adb devices
+   ```
+5. PC でテレオペレーションノードを起動する：
+   ```bash
+   ros2 launch sobits_teleop sobits_teleop.launch.py \
+     robot_name:=sobit_home \
+     device:=quest \
+     use_moveit:=true \
+     ros_ip:=127.0.0.1
+   ```
+6. ヘッドセット内でライブラリウィンドウを開き（**右コントローラーのMetaボタン**），**Menu → Unknown Sources** に移動して **Quest Teleoperation** アプリを起動する．
+7. **左コントローラーの3本線ボタン**を押して設定パネルを開き，IP に `127.0.0.1` を入力して **OK** を押すと，ロボットのカメラ映像が表示される．
+
+---
+
+##### オプション B — 無線接続（Wi-Fi）
+
+Quest と PC が同じ Wi-Fi ネットワークに接続されている必要があります．
+
+**Quest ヘッドセット側：**
+
+1. ヘッドセット**左側のボタン**を押して Quest を起動する．
+2. **右コントローラーのMetaボタン**を押してライブラリウィンドウを開く．
+3. **クイックコントロール**（2つのドットと3本線のアイコン）を開き，**Wi-Fi** を押す．
+4. ネットワークを選択してパスワードを入力し，**"Connected"** が表示されるまで待つ．
+5. 戻る矢印を押してから **Done** を押して設定を完了する．
+
+**PC 側：**
+
+6. 共有ネットワーク上の PC の IP アドレスを指定してテレオペレーションノードを起動する：
+   ```bash
+   ros2 launch sobits_teleop sobits_teleop.launch.py \
+     robot_name:=sobit_home \
+     device:=quest \
+     use_moveit:=true \
+     ros_ip:=<PC_IP_ADDRESS>
+   ```
+   `<PC_IP_ADDRESS>` を PC の IP アドレスに置き換えてください（例: `192.168.11.10`）．
+
+**Quest に戻る：**
+
+7. ライブラリウィンドウで **Menu → Unknown Sources** に移動し，**Quest Teleoperation** アプリを起動する．
+8. **左コントローラーの3本線ボタン**を押して設定パネルを開き，PC の IP アドレスを入力して **OK** を押すと，ロボットのカメラ映像が表示される．
+
+---
+
+##### テレオペレーション起動引数
+
+| 引数 | デフォルト | 説明 |
+| ---- | ---------- | ---- |
+| `robot_name` | `sobit_home` | ロボット設定プロファイル |
+| `device` | `quest` | 入力デバイス — Quest コントローラー |
+| `ros_ip` | `127.0.0.1` | Quest アプリが接続する PC の IP（有線 ADB の場合は `127.0.0.1`，無線の場合は PC の IP を確認） |
+| `use_moveit` | `true` | `true` にすると MoveIt ベースのアーム制御が有効になる |
+
+> [!TIP]
+> Quest アプリを接続する**前に**，PC 側でロボットの bringup を先に起動しておくと，カメラトピックがすでに配信された状態でアプリが接続できます．
+
+##### タスク名の設定
+
+収集ノードはエピソードをタスクごとのディレクトリに整理します．記録を開始する前に，`/vla_task_update` サービスでタスク名を設定してください：
+
+```bash
+ros2 service call /rosbag_collection/vla_task_update sobits_interfaces/srv/VlaUpdateTask "{label: 'pick up the bottle'}"
+```
+
+タスク名を変更すると，以降のエピソードは新しいディレクトリに保存されます．
+
+##### rosbag 収集ノードの起動とエピソードの記録
+
+別ターミナルで rosbag 収集ノードを起動する：
+
+```bash
+ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
+  robot_name:=sobit_home \
+  record_directory:=/path/to/rosbags
+```
+
+ノードが起動したら，Quest コントローラーで以下の操作を行います：
+
+| ボタン | 状態 | 動作 |
+| ------ | ---- | ---- |
+| **A ボタン**（右コントローラー） | 待機中 | 記録開始 |
+| **A ボタン**（右コントローラー） | 記録中 | 一時停止 / 再開 |
+| **B ボタン**（右コントローラー） | 記録中 | エピソードを保存して停止 |
+| **B ボタン**（右コントローラー） | 待機中 | 最後に保存したエピソードを削除 |
+
 <p align="right">(<a href="#readme-top">上に戻る</a>)</p>
 
 
