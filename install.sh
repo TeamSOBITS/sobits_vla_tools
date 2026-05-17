@@ -14,26 +14,19 @@ else
 fi
 
 # Version specs can be overridden per environment, e.g.:
-#   LEROBOT_VERSION_SPEC='~=0.5.1' NUMPY_VERSION_SPEC='>=2.0.0,<2.3.0' ./install.sh
 LEROBOT_VERSION_SPEC=${LEROBOT_VERSION_SPEC:-"~=0.5.1"}
-# lerobot==0.5.1 requires numpy>=2.0.0,<2.3.0.
 NUMPY_VERSION_SPEC=${NUMPY_VERSION_SPEC:-">=2.0.0,<2.3.0"}
 NUMEXPR_VERSION_SPEC=${NUMEXPR_VERSION_SPEC:-">=2.10.2"}
 BOTTLENECK_VERSION_SPEC=${BOTTLENECK_VERSION_SPEC:-">=1.4.2"}
 TORCH_VERSION_SPEC=${TORCH_VERSION_SPEC:-""}
 
-PIP_ARGS=(--no-user)
 # Ubuntu 24+ can mark system Python as externally managed (PEP 668).
 # Only add the override when not using a virtual environment.
 if ! "${PYTHON_BIN}" -c 'import sys; raise SystemExit(0 if sys.prefix != sys.base_prefix else 1)'; then
-    PIP_ARGS+=(--break-system-packages)
+    PIP_ARGS=(--break-system-packages)
 fi
 
-# /opt/pytorch/.venv is typically root-owned; wrap pip with sudo when needed.
-PIP_CMD=("${PYTHON_BIN}" -m pip)
-if [ ! -w "$("${PYTHON_BIN}" -c 'import site; print(site.getsitepackages()[0])')" ]; then
-    PIP_CMD=(sudo "${PYTHON_BIN}" -m pip)
-fi
+PIP_CMD="${PYTHON_BIN} -m pip"
 
 cd "${WORKSPACE_ROOT}"
 
@@ -68,15 +61,17 @@ echo "Using Python: ${PYTHON_BIN}"
 echo "LeRobot spec: ${LEROBOT_VERSION_SPEC}"
 echo "NumPy spec: ${NUMPY_VERSION_SPEC}"
 
-"${PIP_CMD[@]}" install "${PIP_ARGS[@]}" -U pip
-"${PIP_CMD[@]}" install "${PIP_ARGS[@]}" "${PYTHON_PACKAGES[@]}"
+${PIP_CMD} install "${PIP_ARGS[@]}" -U pip
+${PIP_CMD} install "${PIP_ARGS[@]}" "${PYTHON_PACKAGES[@]}"
 
 if ! "${PYTHON_BIN}" -c "import torch" >/dev/null 2>&1; then
     TORCH_PACKAGE="torch"
     if [ -n "${TORCH_VERSION_SPEC}" ]; then
         TORCH_PACKAGE="torch${TORCH_VERSION_SPEC}"
     fi
-    "${PIP_CMD[@]}" install "${PIP_ARGS[@]}" "${TORCH_PACKAGE}"
+    ${PIP_CMD} install "${PIP_ARGS[@]}" "${TORCH_PACKAGE}"
 fi
+
+${PIP_CMD} install "${PIP_ARGS[@]}" "setuptools<80.0.0"
 
 echo "╚══╣ Install: SOBITS VLA TOOLS (FINISHED) ╠══╝"
