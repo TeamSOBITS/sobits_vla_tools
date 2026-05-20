@@ -1197,7 +1197,9 @@ void RosbagCollection::createRosbagYaml()
           yaml_file_path.c_str());
       throw std::runtime_error("Failed to open YAML file for writing");
     }
-    yaml_file << yaml_node;
+    YAML::Emitter emitter;
+    emitter << YAML::Block << yaml_node;
+    yaml_file << emitter.c_str();
     yaml_file.close();
     RCLCPP_INFO(this->get_logger(), "Created rosbag YAML file: %s", yaml_file_path.c_str());
   } catch (const std::exception & e) {
@@ -1261,7 +1263,9 @@ void RosbagCollection::updateRosbagYaml()
           yaml_file_path.c_str());
       throw std::runtime_error("Failed to open YAML file for writing");
     }
-    yaml_file << yaml_node;
+    YAML::Emitter emitter;
+    emitter << YAML::Block << yaml_node;
+    yaml_file << emitter.c_str();
     yaml_file.close();
     RCLCPP_DEBUG(this->get_logger(), "Updated rosbag YAML file: %s", yaml_file_path.c_str());
   } catch (const std::exception & e) {
@@ -1365,7 +1369,9 @@ void RosbagCollection::updateEpisodeYaml()
   // Save the updated YAML node to the file
   try {
     std::ofstream yaml_file(yaml_file_path);
-    yaml_file << yaml_node;
+    YAML::Emitter emitter;
+    emitter << YAML::Block << yaml_node;
+    yaml_file << emitter.c_str();
     yaml_file.close();
   } catch (const std::exception & e) {
     RCLCPP_ERROR(this->get_logger(), "Failed to update episode YAML file: %s", e.what());
@@ -1416,7 +1422,9 @@ void RosbagCollection::removeEpisodeFromYaml()
     // Save
     try {
       std::ofstream yaml_file(yaml_file_path);
-      yaml_file << yaml_node;
+      YAML::Emitter emitter;
+      emitter << YAML::Block << yaml_node;
+      yaml_file << emitter.c_str();
       yaml_file.close();
       RCLCPP_INFO(this->get_logger(), "Successfully removed episode from YAML.");
     } catch (const std::exception & e) {
