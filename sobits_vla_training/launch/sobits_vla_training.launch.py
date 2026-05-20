@@ -86,7 +86,7 @@ def _create_train_node(context, *args, **kwargs):
     return [
         Node(
             package='sobits_vla_training',
-            executable='train_node.py',
+            executable='train_node',
             name=node_name,
             output='screen',
             parameters=[
