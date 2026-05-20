@@ -83,6 +83,13 @@ def build_train_config(params: dict[str, Any]):
     if raw_pretrained:
         policy_overrides['pretrained_path'] = _resolve_pretrained_path(raw_pretrained)
 
+    hub_repo_id: str = params.get('hub.repo_id', '') or ''
+    if hub_repo_id:
+        policy_overrides['repo_id'] = hub_repo_id
+        policy_overrides['push_to_hub'] = True
+    else:
+        policy_overrides['push_to_hub'] = False
+
     policy_cfg = make_policy_config(
         policy_type=policy_type,
         overrides=policy_overrides,
@@ -99,7 +106,7 @@ def build_train_config(params: dict[str, Any]):
         enable=params.get('wandb.enable', True),
         project=params.get('wandb.project', 'sobits_vla_training'),
         entity=params.get('wandb.entity', None) or None,
-        run_name=params.get('wandb.run_name', None) or None,
+        run_id=params.get('wandb.run_name', None) or None,
         notes=params.get('wandb.notes', '') or '',
     )
 
