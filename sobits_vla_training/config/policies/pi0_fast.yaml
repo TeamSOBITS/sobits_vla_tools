@@ -1,0 +1,51 @@
+# PI0_fast policy training defaults.
+# Distilled tokenized variant of PI0 — much faster inference, similar quality.
+
+policy_type: pi0_fast
+
+pretrained_path: "lerobot/pi0_fast"
+
+# --- Action chunking ---
+chunk_size: 50
+n_action_steps: 50
+n_obs_steps: 1
+
+# --- Dimension padding ---
+max_state_dim: 32
+max_action_dim: 32
+
+# --- Model ---
+paligemma_variant: "gemma_2b"
+action_expert_variant: "gemma_300m"
+dtype: "bfloat16"
+
+# --- Action tokenization ---
+max_action_tokens: 256
+temperature: 0.0
+
+# --- Vision ---
+image_resolution: [224, 224]
+empty_cameras: 0
+freeze_vision_encoder: false
+
+# --- Fine-tuning scope ---
+train_expert_only: false
+gradient_checkpointing: true
+
+# --- Optimisation ---
+optimizer_lr: 2.5e-5
+optimizer_betas: [0.9, 0.95]
+optimizer_eps: 1.0e-8
+optimizer_weight_decay: 0.01
+optimizer_grad_clip_norm: 1.0
+
+# --- LR schedule ---
+scheduler_warmup_steps: 1000
+scheduler_decay_steps: 30000
+scheduler_decay_lr: 2.5e-6
+
+# --- Mixed precision ---
+use_amp: false
+
+# --- Compilation ---
+compile_model: false

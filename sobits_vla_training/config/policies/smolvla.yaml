@@ -1,0 +1,45 @@
+# SmolVLA policy training defaults.
+# All fields map 1-to-1 to SmolVLAConfig dataclass fields.
+# Override any field in training_config.yaml under policy_overrides:
+
+policy_type: smolvla
+
+# Pretrained backbone to fine-tune from. Set to a local path or HF repo.
+# Leave empty to initialise from scratch (not recommended).
+pretrained_path: "lerobot/smolvla_base"
+
+# --- Action chunking ---
+chunk_size: 50
+n_action_steps: 50
+n_obs_steps: 1
+
+# --- Dimension padding (must be >= actual robot DOF) ---
+max_state_dim: 32
+max_action_dim: 32
+
+# --- Vision ---
+resize_imgs_with_padding: [512, 512]
+empty_cameras: 0
+freeze_vision_encoder: true
+
+# --- Fine-tuning scope ---
+train_expert_only: true
+train_state_proj: true
+
+# --- Optimisation (policy preset, used when use_policy_training_preset: true) ---
+optimizer_lr: 1.0e-4
+optimizer_betas: [0.9, 0.95]
+optimizer_eps: 1.0e-8
+optimizer_weight_decay: 1.0e-10
+optimizer_grad_clip_norm: 10.0
+
+# --- LR schedule ---
+scheduler_warmup_steps: 1000
+scheduler_decay_steps: 30000
+scheduler_decay_lr: 2.5e-6
+
+# --- Mixed precision ---
+use_amp: true
+
+# --- Compilation (disable for fine-tuning; enable for long production runs) ---
+compile_model: false
