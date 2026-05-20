@@ -885,6 +885,7 @@ class RosbagConversionNode(Node):
             fps=self.fps,
             features=features,
             root=self.output_directory,
+            robot_type=robot_info.get("morphology", {}).get("type"),
             video_backend="auto",
             vcodec=self.vcodec,
             streaming_encoding=True,
