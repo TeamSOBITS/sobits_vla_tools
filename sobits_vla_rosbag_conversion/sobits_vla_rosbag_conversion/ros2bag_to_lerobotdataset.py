@@ -48,7 +48,6 @@ def _ensure_runtime_dependencies() -> None:
 _ensure_runtime_dependencies()
 
 from rosbags.highlevel import AnyReader
-from rosbags.image import message_to_cvimage
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 try:
@@ -166,14 +165,37 @@ class RosbagConversionNode(Node):
             except Exception:
                 return None
 
-        # Raw Image message path
-        img = message_to_cvimage(msg)
+        # Raw Image message path — decode manually (rosbags.image removed in 0.10+)
+        encoding = getattr(msg, 'encoding', '')
+        data = msg.data
+        if isinstance(data, memoryview):
+            data = bytes(data)
+        raw = np.frombuffer(data, dtype=np.uint8)
+        h, w = msg.height, msg.width
+        if encoding in ('mono8', '8UC1'):
+            img = raw.reshape(h, w)
+            return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        if encoding in ('mono16', '16UC1'):
+            img = np.frombuffer(data, dtype=np.uint16).reshape(h, w)
+            img8 = (img >> 8).astype(np.uint8)
+            return cv2.cvtColor(img8, cv2.COLOR_GRAY2RGB)
+        if encoding in ('rgb8',):
+            return raw.reshape(h, w, 3).copy()
+        if encoding in ('bgr8',):
+            img = raw.reshape(h, w, 3)
+            return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if encoding in ('rgba8',):
+            img = raw.reshape(h, w, 4)
+            return cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+        if encoding in ('bgra8',):
+            img = raw.reshape(h, w, 4)
+            return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+        # Fallback: try to reshape as BGR and convert
+        channels = len(raw) // (h * w) if h * w > 0 else 3
+        img = raw.reshape(h, w, channels)
         if img.ndim == 2:
             return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-
-        if img.ndim == 3 and img.shape[2] == 3 and getattr(msg, 'encoding', '') in ['bgr8', 'bgra8']:
-            return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        if img.ndim == 3 and img.shape[2] == 4:
+        if img.shape[2] == 4:
             return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
         return img
 
