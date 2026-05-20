@@ -77,6 +77,9 @@ class RosbagConversionNode(Node):
         self.declare_parameter('ee_pose.enabled', False)
         self.declare_parameter('ee_pose.target_frame', 'base_link')
         self.declare_parameter('ee_pose.source_frame', 'hand_palm_link')
+        self.declare_parameter('ee_pose.names', [''])
+        self.declare_parameter('ee_pose.source_frames', [''])
+        self.declare_parameter('ee_pose.target_frames', [''])
         self.declare_parameter('cameras.skip', False)
         self.declare_parameter('cameras.primary', 'head_camera')
         self.declare_parameter('cameras.names', [''])
@@ -95,8 +98,22 @@ class RosbagConversionNode(Node):
         self.overwrite = self.get_parameter('overwrite').get_parameter_value().bool_value
         self.skip_static_threshold = self.get_parameter('skip_static_threshold').get_parameter_value().double_value
         self.ee_pose_enabled = self.get_parameter('ee_pose.enabled').get_parameter_value().bool_value
-        self.ee_pose_target = self.get_parameter('ee_pose.target_frame').get_parameter_value().string_value
-        self.ee_pose_source = self.get_parameter('ee_pose.source_frame').get_parameter_value().string_value
+        # Build ee_configs: list of (name, source_frame, target_frame)
+        _ee_names   = [n for n in self.get_parameter('ee_pose.names').get_parameter_value().string_array_value if n]
+        _ee_sources = [s for s in self.get_parameter('ee_pose.source_frames').get_parameter_value().string_array_value if s]
+        _ee_targets = [t for t in self.get_parameter('ee_pose.target_frames').get_parameter_value().string_array_value if t]
+        if _ee_names and _ee_sources:
+            # Pad target_frames with the first entry if shorter than sources
+            if not _ee_targets:
+                _ee_targets = [self.get_parameter('ee_pose.target_frame').get_parameter_value().string_value] * len(_ee_names)
+            while len(_ee_targets) < len(_ee_names):
+                _ee_targets.append(_ee_targets[0])
+            self.ee_configs = list(zip(_ee_names, _ee_sources, _ee_targets))
+        else:
+            # Legacy single-EE fallback
+            _src = self.get_parameter('ee_pose.source_frame').get_parameter_value().string_value
+            _tgt = self.get_parameter('ee_pose.target_frame').get_parameter_value().string_value
+            self.ee_configs = [('', _src, _tgt)]  # name='' → feature key stays "observation.ee_pose"
         self.skip_cameras = self.get_parameter('cameras.skip').get_parameter_value().bool_value
         self.primary_camera = self.get_parameter('cameras.primary').get_parameter_value().string_value
         raw_names = self.get_parameter('cameras.names').get_parameter_value().string_array_value
@@ -286,9 +303,9 @@ class RosbagConversionNode(Node):
         commanded_joints = {}       # {joint_name: position}
         commanded_joints_time = {}  # {joint_name: timestamp}
 
-        # EE pose tracking
+        # EE pose tracking — one prev_pose entry per configured EE
         tf_tree = OfflineTFTree() if self.ee_pose_enabled else None
-        prev_ee_pose = None
+        prev_ee_poses = {name: None for name, _, _ in self.ee_configs}
 
         # Compute wanted topic set and filter connections
         wanted = set(self.camera_topics.values()) | {self.joint_states_topic}
@@ -482,34 +499,39 @@ class RosbagConversionNode(Node):
                                 (len(self.base_keys),), cmd_vel_fresh, dtype=torch.bool
                             )
 
-                        # End-effector pose via TF chain
+                        # End-effector pose via TF chain (supports multiple EEs)
                         if tf_tree is not None:
                             stamp_ns = int(t_sec * 1e9)
-                            ee_mat = tf_tree.resolve(
-                                self.ee_pose_target, self.ee_pose_source, stamp_ns
-                            )
-                            if ee_mat is None:
-                                skipped_tf += 1
-                                if skipped_tf <= 5:
-                                    self.get_logger().warn(
-                                        f"TF lookup failed: '{self.ee_pose_source}' → '{self.ee_pose_target}' "
-                                        f"at t={t_sec:.3f}s. Skipping frame."
-                                    )
+                            ee_failed = False
+                            for ee_name, ee_src, ee_tgt in self.ee_configs:
+                                ee_mat = tf_tree.resolve(ee_tgt, ee_src, stamp_ns)
+                                if ee_mat is None:
+                                    skipped_tf += 1
+                                    if skipped_tf <= 5:
+                                        self.get_logger().warn(
+                                            f"TF lookup failed: '{ee_src}' → '{ee_tgt}' "
+                                            f"at t={t_sec:.3f}s. Skipping frame."
+                                        )
+                                    ee_failed = True
+                                    break
+                                ee_abs = mat_to_pose6d(ee_mat)
+                                prev = prev_ee_poses[ee_name]
+                                if prev is not None:
+                                    for ax in range(3, 6):
+                                        diff = ee_abs[ax] - prev[ax]
+                                        if diff > np.pi:
+                                            ee_abs[ax] -= 2 * np.pi
+                                        elif diff < -np.pi:
+                                            ee_abs[ax] += 2 * np.pi
+                                    ee_rel = ee_abs - prev
+                                else:
+                                    ee_rel = np.zeros(6, dtype=np.float32)
+                                key = f"observation.ee_pose.{ee_name}" if ee_name else "observation.ee_pose"
+                                frame[key] = torch.from_numpy(ee_abs.copy())
+                                frame[f"{key}.delta"] = torch.from_numpy(ee_rel)
+                                prev_ee_poses[ee_name] = ee_abs.copy()
+                            if ee_failed:
                                 continue
-                            ee_abs = mat_to_pose6d(ee_mat)
-                            if prev_ee_pose is not None:
-                                for ax in range(3, 6):
-                                    diff = ee_abs[ax] - prev_ee_pose[ax]
-                                    if diff > np.pi:
-                                        ee_abs[ax] -= 2 * np.pi
-                                    elif diff < -np.pi:
-                                        ee_abs[ax] += 2 * np.pi
-                                ee_rel = ee_abs - prev_ee_pose
-                            else:
-                                ee_rel = np.zeros(6, dtype=np.float32)
-                            frame["observation.ee_pose"] = torch.from_numpy(ee_abs.copy())
-                            frame["observation.ee_pose.delta"] = torch.from_numpy(ee_rel)
-                            prev_ee_pose = ee_abs.copy()
 
                         if not self.skip_cameras:
                             for c_name in self.camera_topics.keys():
@@ -852,12 +874,10 @@ class RosbagConversionNode(Node):
             features["action.base.is_fresh"] = {"dtype": "bool", "shape": (base_dim,), "names": None}
         if self.ee_pose_enabled:
             ee_names = ["x", "y", "z", "roll", "pitch", "yaw"]
-            features["observation.ee_pose"] = {
-                "dtype": "float32", "shape": (6,), "names": ee_names,
-            }
-            features["observation.ee_pose.delta"] = {
-                "dtype": "float32", "shape": (6,), "names": ee_names,
-            }
+            for ee_name, _, _ in self.ee_configs:
+                key = f"observation.ee_pose.{ee_name}" if ee_name else "observation.ee_pose"
+                features[key] = {"dtype": "float32", "shape": (6,), "names": ee_names}
+                features[f"{key}.delta"] = {"dtype": "float32", "shape": (6,), "names": ee_names}
 
         if self.has_subtasks:
             features["subtask_index"] = {"dtype": "int64", "shape": (1,), "names": ["subtask_index"]}
