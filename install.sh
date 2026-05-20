@@ -48,7 +48,8 @@ rosdep install --from-paths sobits_vla_tools --ignore-src -r -y
 
 PYTHON_PACKAGES=(
     "huggingface_hub"
-    "lerobot${LEROBOT_VERSION_SPEC}"
+    "lerobot[transformers-dep]${LEROBOT_VERSION_SPEC}"
+    "peft"
     "numpy${NUMPY_VERSION_SPEC}"
     "numexpr${NUMEXPR_VERSION_SPEC}"
     "bottleneck${BOTTLENECK_VERSION_SPEC}"
