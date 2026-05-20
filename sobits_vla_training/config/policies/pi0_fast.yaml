@@ -3,7 +3,7 @@
 
 policy_type: pi0_fast
 
-pretrained_path: "lerobot/pi0_fast"
+pretrained_path: "lerobot/pi0fast-base"
 
 # --- Action chunking ---
 chunk_size: 50
