@@ -19,7 +19,7 @@
       num_workers: 4
       # Optional feature rename map: {"old_key": "new_key"}.
       # Useful when dataset keys differ from policy expectations.
-      rename_map:
+      rename_map: []
 
     # =========================================================================
     # Checkpoint / resume
@@ -78,7 +78,7 @@
       # W&B run name. Auto-generated from policy + timestamp when empty.
       run_name: ""
       # Tags attached to the run.
-      tags:
+      tags: []
       # Notes attached to the run.
       notes: ""
 
@@ -113,4 +113,4 @@
     # policy_overrides:
     #   chunk_size: 100
     #   freeze_vision_encoder: false
-    policy_overrides:
+    policy_overrides: []
