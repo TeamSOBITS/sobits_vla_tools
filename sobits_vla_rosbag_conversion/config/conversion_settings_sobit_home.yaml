@@ -29,9 +29,9 @@
 
     # End-effector pose via TF tree.
     ee_pose:
-      enabled: false
+      enabled: true
       target_frame: "base_link"
-      source_frame: "hand_palm_link"
+      source_frame: "hand_left_end_effector_link"
 
     # Camera configuration for sobit_home.
     # primary = sync trigger camera (one frame assembled per primary image).
