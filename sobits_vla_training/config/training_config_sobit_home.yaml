@@ -1,0 +1,200 @@
+/**:
+  ros__parameters:
+    # =========================================================================
+    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo) — PI0.5
+    #
+    # Dataset : sobit_home-pickup_the_block-gazebo (101 episodes, 6 fps)
+    # Policy  : PI0.5  (PaliGemma 2B + Gemma 300M action expert, flow matching)
+    # Robot   : SOBIT HOME — dual arm, 3 cameras, mobile base
+    # DOF     : 31 (head×2 + body×1 + arm_left×6 + arm_right×6
+    #                + hand_left×8 + hand_right×8)
+    # VRAM    : ~13.5 GB estimated peak (fits 16 GB laptop GPU)
+    # =========================================================================
+
+    policy: pi05
+
+    # =========================================================================
+    # Dataset
+    # =========================================================================
+    dataset:
+      # Local LeRobotDataset path (already downloaded from HuggingFace Hub).
+      repo_id: ""
+
+      # Hold out 10 episodes (~10%) for validation.
+      val_split: 0.1
+
+      # DataLoader workers — 4 is safe for 3-camera video datasets on this machine.
+      num_workers: 4
+
+      # Feature rename map — dataset keys already match PI0.5 conventions.
+      rename_map: []
+
+    # =========================================================================
+    # Checkpoint / resume
+    # =========================================================================
+    checkpoint:
+      output_dir: ""
+
+      # Set to true to continue an interrupted run from the last saved checkpoint.
+      resume: false
+
+      # Fine-tune from the official PI0.5 base weights.
+      # Set to a local path if you have already downloaded lerobot/pi05.
+      pretrained_path: "lerobot/pi05"
+
+      # Save every 5 000 steps — frequent enough for a 101-episode dataset.
+      save_freq: 5000
+      save_checkpoint: true
+
+    # =========================================================================
+    # Training loop
+    # =========================================================================
+    training:
+      # ~30 000 steps ≈ reasonable convergence for a 101-episode manipulation task.
+      steps: 30000
+
+      # Batch size 8 keeps VRAM under budget for PI0.5 + 3 cameras at bf16.
+      batch_size: 8
+
+      # Gradient accumulation: effective batch = 8 × 4 = 32.
+      grad_accum: 4
+
+      seed: 1000
+
+      # Use PI0.5's built-in AdamW preset (lr=2.5e-5, weight_decay=0.01).
+      use_policy_training_preset: true
+
+      # Log every 100 steps.
+      log_freq: 100
+
+      # Evaluate on val split every 5 000 steps.
+      eval_freq: 5000
+
+    # =========================================================================
+    # Multi-GPU
+    # =========================================================================
+    # Single laptop GPU.
+    num_gpus: 1
+
+    # =========================================================================
+    # Weights & Biases
+    # =========================================================================
+    wandb:
+      enable: true
+      project: "sobits_vla_training"
+      entity: ""
+      run_name: "sobit_home-pickup_block-pi05"
+      notes: "PI0.5 fine-tune on SOBIT HOME"
+      tags:
+        - pi05
+        - sobit_home
+
+    # =========================================================================
+    # HuggingFace Hub push
+    # =========================================================================
+    hub:
+      push_on_finish: true
+      repo_id: ""
+      private: true
+      push_best: true
+
+    # =========================================================================
+    # VRAM pre-flight gate
+    # =========================================================================
+    vram:
+      # PI0.5 estimated ~13.5 GB; leave 2.5 GB headroom under 16 GB.
+      limit_gb: 15.5
+      verbose: true
+
+    # =========================================================================
+    # LoRA / PEFT
+    # =========================================================================
+    # PI0.5 default target_modules (from modeling_pi05._get_default_peft_targets):
+    #   gemma_expert self_attn q/v projections + state/action projection layers.
+    # Passing target_modules: "" lets the policy use its built-in regex default.
+    peft:
+      method_type: "LORA"
+
+      # Rank — r=16 is the recommended starting point for task adaptation.
+      r: 16
+
+      # lora_alpha=32 gives a scaling factor of alpha/r = 2.0 (standard).
+      lora_alpha: 32
+
+      # Light dropout to prevent overfitting on 101 episodes.
+      lora_dropout: 0.05
+
+      # Leave empty to use PI0.5's built-in default target_modules regex:
+      #   gemma_expert self_attn (q,v)_proj + state_proj + action_*_proj layers.
+      # Override with a list of module suffixes if you need finer control.
+      target_modules: ""
+
+      # Modules to fully fine-tune alongside the LoRA adapters.
+      # Empty: the policy default is [] (LoRA-only, no full fine-tune modules).
+      full_training_modules: []
+
+    # =========================================================================
+    # PI0.5 policy overrides
+    # =========================================================================
+    # These override the base values in config/policies/pi05.yaml.
+    policy_overrides:
+      # --- Dimensions ---
+      # action / observation.state are both [31] in this dataset.
+      # PI0.5 pads to max_state_dim / max_action_dim internally.
+      max_state_dim: 32
+      max_action_dim: 32
+
+      # --- Action chunking ---
+      # 50 steps at 6 fps = ~8 s of predicted motion per inference call.
+      chunk_size: 50
+      n_action_steps: 50
+      n_obs_steps: 1
+
+      # --- Model ---
+      paligemma_variant: "gemma_2b"
+      action_expert_variant: "gemma_300m"
+      dtype: "bfloat16"
+
+      # --- Flow matching ---
+      num_inference_steps: 10
+
+      # --- Vision ---
+      # PI0.5 resizes all cameras to 224×224 internally.
+      image_resolution:
+        - 224
+        - 224
+
+      # 3 physical cameras — no empty camera padding needed.
+      empty_cameras: 0
+
+      # Freeze vision encoder — LoRA handles adaptation; no need to update backbone.
+      freeze_vision_encoder: true
+
+      # Enable gradient checkpointing — required at batch_size=8 for 3 cameras.
+      gradient_checkpointing: true
+
+      # With LoRA active, train_expert_only can be false — LoRA scope is tighter.
+      train_expert_only: false
+
+      # Signal to the policy that PEFT adapters are in use.
+      use_peft: true
+
+      # Tokenizer context length (PI0.5 default is 200).
+      tokenizer_max_length: 200
+
+      # --- Relative actions ---
+      # Disabled: PI0.5 works in absolute joint-space for this task.
+      use_relative_actions: false
+
+      # --- Optimisation (used only when use_policy_training_preset: false) ---
+      optimizer_lr: 2.5e-5
+      optimizer_weight_decay: 0.01
+      optimizer_grad_clip_norm: 1.0
+
+      # --- LR schedule ---
+      scheduler_warmup_steps: 500
+      scheduler_decay_steps: 30000
+      scheduler_decay_lr: 2.5e-6
+
+      # Disable torch.compile for fine-tuning (incompatible with gradient checkpointing).
+      compile_model: false
