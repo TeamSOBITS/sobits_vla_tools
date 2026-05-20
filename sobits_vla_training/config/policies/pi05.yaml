@@ -3,7 +3,7 @@
 
 policy_type: pi05
 
-pretrained_path: "lerobot/pi05"
+pretrained_path: "lerobot/pi05_base"
 
 # --- Action chunking ---
 chunk_size: 50
