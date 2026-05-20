@@ -1,4 +1,4 @@
-#!/opt/pytorch/.venv/bin/python3
+#!/usr/bin/env python3
 """
 Multi-camera ros2bag to LeRobot dataset conversion.
 Operates as a ROS 2 Node, loading config from the recorded_bags_meta.yaml
