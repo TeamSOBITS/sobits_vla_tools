@@ -50,6 +50,32 @@ from rclpy.node import Node
 logger = logging.getLogger(__name__)
 
 
+def _patch_bool_quantile_normalization() -> None:
+    """Workaround for lerobot bug: QUANTILES normalization crashes on bool tensors.
+
+    Dataset `.is_fresh` flags (dtype=bool) reach the quantile normalizer with
+    bool stats (q01/q99). PyTorch does not support subtraction on bool tensors,
+    so we cast to float before the q99-q01 step.
+    """
+    import torch
+    from lerobot.processor.normalize_processor import _NormalizationMixin
+
+    orig = _NormalizationMixin._apply_transform
+
+    def _patched(self, tensor, key, feature_type, *, inverse=False):
+        if tensor.dtype == torch.bool:
+            tensor = tensor.float()
+            # Also cast cached stats so q99 - q01 doesn't fail
+            if key in self._tensor_stats:
+                stats = self._tensor_stats[key]
+                for stat_key in ('q01', 'q99', 'q10', 'q90', 'min', 'max', 'mean', 'std'):
+                    if stat_key in stats and stats[stat_key].dtype == torch.bool:
+                        stats[stat_key] = stats[stat_key].float()
+        return orig(self, tensor, key, feature_type, inverse=inverse)
+
+    _NormalizationMixin._apply_transform = _patched
+
+
 class TrainNode(Node):
     """ROS 2 node that launches LeRobot training as a background thread."""
 
@@ -85,6 +111,8 @@ class TrainNode(Node):
             'checkpoint.output_dir', './outputs/train', _p('Output directory for checkpoints'))
         self.declare_parameter(
             'checkpoint.resume', False, _p('Resume from last checkpoint in output_dir'))
+        self.declare_parameter(
+            'checkpoint.overwrite', False, _p('Delete output_dir before training if it exists'))
         self.declare_parameter(
             'checkpoint.pretrained_path', '', _p('Local path or HF repo_id for init weights'))
         self.declare_parameter(
@@ -158,7 +186,7 @@ class TrainNode(Node):
             'policy',
             'dataset.repo_id', 'dataset.val_split', 'dataset.num_workers',
             'dataset.rename_map',
-            'checkpoint.output_dir', 'checkpoint.resume',
+            'checkpoint.output_dir', 'checkpoint.resume', 'checkpoint.overwrite',
             'checkpoint.pretrained_path', 'checkpoint.save_freq',
             'checkpoint.save_checkpoint',
             'training.steps', 'training.batch_size', 'training.grad_accum',
@@ -218,6 +246,14 @@ class TrainNode(Node):
             verbose=params.get('vram.verbose', True),
         )
 
+        if params.get('checkpoint.overwrite', False) and not params.get('checkpoint.resume', False):
+            import shutil
+            from pathlib import Path
+            out = Path(params.get('checkpoint.output_dir', '')).expanduser().resolve()
+            if out.is_dir():
+                shutil.rmtree(out)
+                self.get_logger().info(f'Overwrite: removed existing output dir {out}')
+
         from sobits_vla_training.config_builder import build_accelerator, build_train_config
         train_cfg, peft_extra = build_train_config(params)
 
@@ -248,6 +284,8 @@ class TrainNode(Node):
             f'batch={train_cfg.batch_size} '
             f'output={train_cfg.output_dir}'
         )
+
+        _patch_bool_quantile_normalization()
 
         from lerobot.scripts.lerobot_train import train
         train(train_cfg, accelerator=accelerator)
