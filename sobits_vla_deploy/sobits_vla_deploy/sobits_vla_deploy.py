@@ -175,6 +175,12 @@ class LeRobotDeployNode(Node):
         self._single_step_lock = Lock()
         self._task_label: str = ''
 
+        self._tf_buffer = tf2_ros.Buffer()
+        self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
+        self._ee_left_base_frame = 'base_footprint'
+        self._ee_left_target_frame = 'hand_left_end_effector_link'
+        self._prev_ee_pose_left: Optional[np.ndarray] = None
+
         qos = QoSProfile(depth=1)
 
         self._joy_sub = self.create_subscription(
@@ -641,6 +647,35 @@ class LeRobotDeployNode(Node):
         with self._lock:
             self._images[cam_name] = image
 
+    def _get_ee_pose_left(self) -> Optional[np.ndarray]:
+        """Return left EE pose as [x, y, z, roll, pitch, yaw] in base_footprint frame."""
+        try:
+            t = self._tf_buffer.lookup_transform(
+                self._ee_left_base_frame,
+                self._ee_left_target_frame,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.05),
+            )
+            tx = t.transform.translation
+            q = t.transform.rotation
+            try:
+                from scipy.spatial.transform import Rotation as _R
+                rpy = _R.from_quat([q.x, q.y, q.z, q.w]).as_euler('xyz')
+            except ImportError:
+                import math as _math
+                sinr = 2.0 * (q.w * q.x + q.y * q.z)
+                cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+                roll = _math.atan2(sinr, cosr)
+                sinp = 2.0 * (q.w * q.y - q.z * q.x)
+                pitch = _math.asin(max(-1.0, min(1.0, sinp)))
+                siny = 2.0 * (q.w * q.z + q.x * q.y)
+                cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+                yaw = _math.atan2(siny, cosy)
+                rpy = [roll, pitch, yaw]
+            return np.array([tx.x, tx.y, tx.z, rpy[0], rpy[1], rpy[2]], dtype=np.float32)
+        except Exception:
+            return None
+
     def _snapshot_observation(self) -> Optional[Dict[str, Any]]:
         with self._lock:
             if any(self._images[c] is None for c in self._camera_names):
@@ -650,8 +685,16 @@ class LeRobotDeployNode(Node):
                 obs[cam_name] = image.copy()
 
         if self._obs_features is None and _LEROBOT_AVAILABLE:
-            # Build dataset feature spec: float for joints, (H,W,C) tuple for cameras
+            # Build dataset feature spec: float for joints+base, (H,W,C) tuple for cameras.
+            # Mobile base velocities must be included here so that hw_to_dataset_features
+            # maps them into observation.state alongside joint positions.  The dataset
+            # convention uses base_x/base_y/base_theta; _BASE_KEY_ALIASES maps those to
+            # x.vel/y.vel/theta.vel at action publish time, but for the *observation*
+            # the state vector stores them under the deploy keys (x.vel etc.), so we
+            # use those same keys here and rely on the model's normalizer ordering.
             hw_features: Dict[str, Any] = {feature: float for feature in self._joint_features}
+            for base_feat in self._mobile_base_features:
+                hw_features[base_feat] = float
             for cam_name in self._camera_names:
                 img = obs[cam_name]
                 hw_features[cam_name] = img.shape  # (H, W, C)
@@ -661,7 +704,67 @@ class LeRobotDeployNode(Node):
             return obs
 
         # v0.5.1: ds_features first, values second, then prefix
-        return build_dataset_frame(self._obs_features, obs, 'observation')
+        frame = build_dataset_frame(self._obs_features, obs, 'observation')
+
+        # Add features that are not produced by hw_to_dataset_features but are required
+        # by the model as separate dataset keys.
+        ee_pose = self._get_ee_pose_left()
+        if ee_pose is not None:
+            frame['observation.ee_pose.left'] = ee_pose
+            frame['observation.ee_pose.left.delta'] = (
+                ee_pose - self._prev_ee_pose_left
+                if self._prev_ee_pose_left is not None
+                else np.zeros(6, dtype=np.float32)
+            )
+            self._prev_ee_pose_left = ee_pose.copy()
+        else:
+            frame['observation.ee_pose.left'] = np.zeros(6, dtype=np.float32)
+            frame['observation.ee_pose.left.delta'] = np.zeros(6, dtype=np.float32)
+
+        # All joint states are fresh: published at 200 Hz, far above the 10 Hz control rate.
+        state_dim = (
+            frame['observation.state'].shape[-1]
+            if 'observation.state' in frame and hasattr(frame['observation.state'], 'shape')
+            else len(self._joint_features) + len(self._mobile_base_features)
+        )
+        frame['observation.state.is_fresh'] = np.ones(state_dim, dtype=np.float32)
+
+        # The normalizer's stats were computed on a state vector with all joints
+        # including mimic joints excluded from the YAML (e.g. r_mcp_joint ×2).
+        # Pad observation.state to the expected_state_dim set during _load_policy,
+        # filling missing joints with 0.0 in model-ordering order.
+        import torch
+        expected_state_dim = getattr(self, '_expected_state_dim', None)
+        if expected_state_dim is not None and 'observation.state' in frame:
+            state_arr = frame['observation.state']
+            current_dim = state_arr.shape[-1] if hasattr(state_arr, 'shape') else len(state_arr)
+            if current_dim < expected_state_dim:
+                model_names = getattr(self, '_model_action_feature_names', None)
+                if model_names is not None:
+                    model_joint_names = [
+                        n for n in model_names
+                        if n not in self._BASE_KEY_ALIASES
+                        and n not in self._BASE_KEY_ALIASES.values()
+                    ]
+                else:
+                    # fallback: just zero-pad to expected dim
+                    model_joint_names = None
+                yaml_index = {name: i for i, name in enumerate(self._joint_features)}
+                state_tensor = (
+                    torch.from_numpy(state_arr)
+                    if isinstance(state_arr, np.ndarray)
+                    else torch.tensor(state_arr, dtype=torch.float32)
+                )
+                padded = torch.zeros(expected_state_dim, dtype=state_tensor.dtype)
+                if model_joint_names is not None:
+                    for i, name in enumerate(model_joint_names):
+                        if i < expected_state_dim and name in yaml_index:
+                            padded[i] = state_tensor[yaml_index[name]]
+                else:
+                    padded[:current_dim] = state_tensor
+                frame['observation.state'] = padded.numpy()
+
+        return frame
 
     def _predict_actions(self, obs_frame: Dict[str, Any]) -> List[Dict[str, float]]:
         import torch
