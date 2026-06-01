@@ -201,8 +201,10 @@ class LeRobotDeployNode(Node):
 
         self._camera_subs = []
         for cam_name, cam_topic in self._camera_topics.items():
+            is_compressed = self._camera_compressed.get(cam_name, False)
+            msg_type = CompressedImage if is_compressed else Image
             sub = self.create_subscription(
-                Image,
+                msg_type,
                 cam_topic,
                 lambda msg, name=cam_name: self._on_image(msg, name),
                 qos,
@@ -425,19 +427,28 @@ class LeRobotDeployNode(Node):
                 self._joint_feature_to_ros[feature] = joint_name
 
         self.declare_parameter(f'{ns}.cameras.default_encoding', 'rgb8')
+        self.declare_parameter(f'{ns}.cameras.default_compressed', True)
         default_encoding = str(self.get_parameter(f'{ns}.cameras.default_encoding').value)
+        default_compressed = bool(
+            self.get_parameter(f'{ns}.cameras.default_compressed').value
+        )
         self._camera_topics: Dict[str, str] = {}
         self._camera_encodings: Dict[str, str] = {}
+        self._camera_compressed: Dict[str, bool] = {}
         for cam_name in self._camera_names:
             cam_ns = f'{ns}.cameras.{cam_name}'
             self.declare_parameter(f'{cam_ns}.topic', '')
             self.declare_parameter(f'{cam_ns}.encoding', default_encoding)
+            self.declare_parameter(f'{cam_ns}.compressed', default_compressed)
             cam_topic = str(self.get_parameter(f'{cam_ns}.topic').value)
             if not cam_topic:
                 raise RuntimeError('Camera {!r} must define a topic.'.format(cam_name))
             self._camera_topics[cam_name] = cam_topic
             self._camera_encodings[cam_name] = str(
                 self.get_parameter(f'{cam_ns}.encoding').value
+            )
+            self._camera_compressed[cam_name] = bool(
+                self.get_parameter(f'{cam_ns}.compressed').value
             )
 
     def _build_rtc_config(self) -> Optional[Any]:
@@ -575,10 +586,14 @@ class LeRobotDeployNode(Node):
             if 'theta.vel' in self._mobile_base_features:
                 self._state_vector['theta.vel'] = float(msg.twist.twist.angular.z)
 
-    def _on_image(self, msg: Image, cam_name: str) -> None:
+    def _on_image(self, msg: Any, cam_name: str) -> None:
         encoding = self._camera_encodings.get(cam_name, 'rgb8')
+        is_compressed = self._camera_compressed.get(cam_name, False)
         try:
-            image = self._bridge.imgmsg_to_cv2(msg, desired_encoding=encoding)
+            if is_compressed:
+                image = self._bridge.compressed_imgmsg_to_cv2(msg, desired_encoding=encoding)
+            else:
+                image = self._bridge.imgmsg_to_cv2(msg, desired_encoding=encoding)
         except Exception as exc:
             self.get_logger().warn(
                 'Image decode failed for {!r}: {}'.format(cam_name, exc),
