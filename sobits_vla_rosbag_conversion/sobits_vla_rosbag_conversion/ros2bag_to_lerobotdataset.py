@@ -89,27 +89,7 @@ class RosbagConversionNode(Node):
         self.recorded_bags_meta_file = self.get_parameter('recorded_bags_meta_file').get_parameter_value().string_value
         self.dataset_name = self.get_parameter('dataset_name').get_parameter_value().string_value
         output_dir = self.get_parameter('output_directory').get_parameter_value().string_value
-        if output_dir:
-            self.output_directory = Path(output_dir)
-        else:
-            # Resolve src-tree lerobotdataset/ via the module's .py file.
-            # __file__ may be the console-script entry point (not a symlink), so we use
-            # importlib to locate the actual .py module, whose install path IS a symlink
-            # that realpath resolves back to the src tree.
-            import importlib.util
-            spec = importlib.util.find_spec('sobits_vla_rosbag_conversion.ros2bag_to_lerobotdataset')
-            module_file = Path(os.path.realpath(spec.origin)) if spec else Path(os.path.realpath(__file__))
-            self.output_directory = None
-            candidate = module_file.parent
-            for _ in range(6):
-                sibling = candidate / 'lerobotdataset'
-                if sibling.is_dir() and '/install/' not in str(sibling):
-                    self.output_directory = sibling
-                    break
-                candidate = candidate.parent
-            if self.output_directory is None:
-                from ament_index_python.packages import get_package_share_directory
-                self.output_directory = Path(get_package_share_directory('sobits_vla_rosbag_conversion')) / 'lerobotdataset'
+        self.output_directory = Path(output_dir) if output_dir else None
         self.fps = self.get_parameter('fps').get_parameter_value().integer_value
         self.vcodec = self.get_parameter('vcodec').get_parameter_value().string_value
         self.sync_threshold = self.get_parameter('sync_threshold').get_parameter_value().double_value
@@ -1022,30 +1002,20 @@ class RosbagConversionNode(Node):
                     "names": ["channels", "height", "width"],
                 }
 
-        # Dataset lives at lerobotdataset/<dataset_name>/ so each dataset has its own subfolder
+        # Resolve output root (mirrors LeRobot default logic) so we can check existence
         import shutil
-        dataset_root = self.output_directory / self.dataset_name
+        from lerobot.utils.constants import HF_LEROBOT_HOME
+        dataset_root = self.output_directory if self.output_directory else HF_LEROBOT_HOME / self.dataset_name
         if self.overwrite and dataset_root.exists():
             self.get_logger().warn(f"overwrite=true: deleting existing dataset at {dataset_root}")
             shutil.rmtree(dataset_root)
-        elif not self.overwrite and dataset_root.exists():
-            self.get_logger().info(
-                f"Dataset already exists at {dataset_root} and overwrite=false. "
-                "Skipping conversion."
-            )
-            if self.push_to_hub:
-                self.get_logger().info(f"Pushing existing dataset to HuggingFace Hub as '{self.dataset_name}'...")
-                existing = LeRobotDataset(self.dataset_name, root=dataset_root)
-                existing.push_to_hub(private=self.hub_private)
-                self.get_logger().info("Push to Hub completed!")
-            return
 
         # Create dataset
         dataset = LeRobotDataset.create(
             repo_id=self.dataset_name,
             fps=self.fps,
             features=features,
-            root=dataset_root,
+            root=self.output_directory,
             robot_type=robot_info.get("morphology", {}).get("type"),
             video_backend="auto",
             vcodec=self.vcodec,
