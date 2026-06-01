@@ -268,7 +268,6 @@ class TrainNode(Node):
             'wandb.run_name', 'wandb.notes',
             'hub.push_on_finish', 'hub.repo_id', 'hub.private', 'hub.push_best',
             'vram.limit_gb', 'vram.verbose',
-            'policy_overrides',
             'peft.method_type', 'peft.r', 'peft.lora_alpha', 'peft.lora_dropout',
             'peft.target_modules', 'peft.full_training_modules',
         ]
@@ -279,6 +278,25 @@ class TrainNode(Node):
                 params[name] = self.get_parameter(name).value
             except Exception:
                 pass
+
+        # Collect policy_overrides.* sub-parameters from YAML.
+        # ROS 2 parses nested YAML dicts as sub-parameters (policy_overrides.max_action_dim,
+        # policy_overrides.chunk_size, …) rather than a single dict value, so we discover
+        # them dynamically and reassemble the dict here.
+        po: dict[str, Any] = {}
+        try:
+            result = self.list_parameters(prefixes=['policy_overrides'], depth=2)
+            for pname in result.names:
+                if pname.startswith('policy_overrides.'):
+                    key = pname[len('policy_overrides.'):]
+                    try:
+                        po[key] = self.get_parameter(pname).value
+                    except Exception:
+                        pass
+        except Exception as exc:
+            self.get_logger().warning(f'policy_overrides discovery failed: {exc}')
+        params['policy_overrides'] = po
+
         return params
 
     def start_training(self) -> None:
@@ -357,6 +375,7 @@ class TrainNode(Node):
         )
 
         _patch_bool_quantile_normalization()
+        _patch_pi05_action_dim_padding()
 
         from lerobot.scripts.lerobot_train import train
         train(train_cfg, accelerator=accelerator)
