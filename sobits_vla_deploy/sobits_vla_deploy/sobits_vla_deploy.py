@@ -789,6 +789,71 @@ class LeRobotDeployNode(Node):
                 load_kwargs['config'] = cfg
             self._policy = policy_cls.from_pretrained(self._model_repo_id, **load_kwargs)
 
+        if load_device != 'cpu':
+            import gc as _gc
+            _gc.collect()
+            torch.cuda.empty_cache()
+            # Model is already bfloat16 (loaded via torch_dtype=bfloat16 above).
+            # Move to GPU module-by-module to avoid the double-allocation peak that
+            # .to(device) causes (it holds both the CPU copy and the new GPU copy
+            # simultaneously, requiring ~2x model VRAM).
+            self.get_logger().info(
+                'Moving bfloat16 model to {} module-by-module ...'.format(load_device)
+            )
+            gpu_device = torch.device(load_device)
+            for name, module in self._policy.named_children():
+                module.to(gpu_device)
+                _gc.collect()
+                torch.cuda.empty_cache()
+            # Move any top-level parameters/buffers not covered by named_children
+            for param in self._policy.parameters(recurse=False):
+                param.data = param.data.to(gpu_device)
+            for buf in self._policy.buffers(recurse=False):
+                buf.data = buf.data.to(gpu_device)
+            _gc.collect()
+            torch.cuda.empty_cache()
+            self.get_logger().info('Model moved to GPU.')
+
+            # PI05's denoise_step explicitly casts suffix_out to float32 before
+            # action_out_proj (modeling_pi05.py line 901/776), so action_out_proj must
+            # remain float32. Our load in bfloat16 above overwrote it — restore.
+            if hasattr(self._policy, 'model') and hasattr(self._policy.model, 'action_out_proj'):
+                self._policy.model.action_out_proj.to(dtype=torch.float32)
+                self.get_logger().info('Kept action_out_proj in float32 (pi05 design).')
+
+            # PI05's sample_noise hardcodes float32, but action_in_proj is bfloat16.
+            # Patch it on the model instance so noise dtype matches action_in_proj weights.
+            if hasattr(self._policy, 'model') and hasattr(self._policy.model, 'sample_noise'):
+                import types
+
+                def _sample_noise_bf16(self_inner, shape, device):
+                    return torch.normal(
+                        mean=0.0, std=1.0, size=shape, dtype=torch.bfloat16, device=device
+                    )
+
+                self._policy.model.sample_noise = types.MethodType(
+                    _sample_noise_bf16, self._policy.model
+                )
+                self.get_logger().info('Patched sample_noise to bfloat16.')
+
+            # PI05's sample_actions hardcodes time_tensor as float32 (line 832), which
+            # then flows into embed_suffix → time_mlp_in (bfloat16 weights) → dtype mismatch.
+            # Patch embed_suffix to cast both noisy_actions and timestep to the weight dtype.
+            if hasattr(self._policy, 'model') and hasattr(self._policy.model, 'embed_suffix'):
+                import types
+                _orig_embed_suffix = self._policy.model.__class__.embed_suffix
+
+                def _embed_suffix_cast(self_inner, noisy_actions, timestep):
+                    w_dtype = self_inner.action_in_proj.weight.dtype
+                    noisy_actions = noisy_actions.to(dtype=w_dtype)
+                    timestep = timestep.to(dtype=w_dtype)
+                    return _orig_embed_suffix(self_inner, noisy_actions, timestep)
+
+                self._policy.model.embed_suffix = types.MethodType(
+                    _embed_suffix_cast, self._policy.model
+                )
+                self.get_logger().info('Patched embed_suffix to cast inputs to weight dtype.')
+
         if hasattr(self._policy, 'reset'):
             self._policy.reset()
 
