@@ -32,7 +32,7 @@ from collections import deque
 from dataclasses import dataclass
 from importlib import import_module
 from threading import Condition, Lock, Thread
-from time import monotonic
+from time import monotonic  # wall-clock: correct for GPU latency measurement, not sim time
 from typing import Any, Dict, List, Optional
 
 from builtin_interfaces.msg import Duration
@@ -41,12 +41,16 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 import numpy as np
 import rclpy
+import rclpy.duration
+import rclpy.time
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
-from sensor_msgs.msg import Image, JointState, Joy
+from sensor_msgs.msg import CompressedImage, Image, JointState, Joy
+from std_msgs.msg import Bool, String
 from sobits_interfaces.srv import VlaUpdateTask
+import tf2_ros
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 # LeRobot v0.5.1 imports — paths changed from v0.4.x
