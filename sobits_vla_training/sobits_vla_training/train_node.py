@@ -126,7 +126,7 @@ class TrainNode(Node):
 
     def __init__(self) -> None:
         """Initialise the training node and declare all ROS 2 parameters."""
-        super().__init__('sobits_vla_training')
+        super().__init__('sobits_vla_training', allow_undeclared_parameters=True)
         self._training_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
 
