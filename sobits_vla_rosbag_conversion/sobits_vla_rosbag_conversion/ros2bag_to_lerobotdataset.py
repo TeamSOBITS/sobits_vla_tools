@@ -306,26 +306,20 @@ class RosbagConversionNode(Node):
         latest_joint_time = 0.0
         latest_cmd_vel = [0.0] * len(self.base_keys) if self.has_mobile_base else None
         latest_cmd_vel_time = 0.0
-        latest_odom_vel = [0.0] * len(self.base_keys) if self.has_mobile_base else None
-        latest_odom_time = 0.0
-        # Per-joint commanded positions and timestamps.
-        # Populated from JointTrajectory (sparse) or controller_state reference (continuous).
-        # JointTrajectory takes precedence when both are available for a joint.
-        commanded_joints = {}        # {joint_name: position}
-        commanded_joints_time = {}   # {joint_name: timestamp}
-        commanded_joints_from_traj = set()  # joints already seen in a JointTrajectory msg
+        # Per-joint commanded positions and timestamps (from JointTrajectory messages)
+        commanded_joints = {}       # {joint_name: position}
+        commanded_joints_time = {}  # {joint_name: timestamp}
 
         # EE pose tracking — one prev_pose entry per configured EE
         prev_ee_poses = {name: None for name, _, _ in self.ee_configs}
 
         # Compute wanted topic set and filter connections
         wanted = set(self.camera_topics.values()) | {self.joint_states_topic}
-        wanted |= self.part_command_topics  # JointTrajectory topics (sparse commanded positions)
-        wanted |= self.part_state_topics    # controller_state topics (continuous reference positions)
+        wanted |= self.part_command_topics  # JointTrajectory topics (required for action)
         if self.has_mobile_base and self.cmd_vel_topic:
             wanted.add(self.cmd_vel_topic)
-        if self.has_mobile_base and self.odom_topic:
-            wanted.add(self.odom_topic)
+        if self.ee_pose_enabled:
+            wanted |= {"/tf", "/tf_static"}
 
         last_frame_time = 0.0  # timestamp of the last assembled frame (for freshness)
         min_frame_interval = 1.0 / self.fps if self.fps > 0 else 0.0  # downsampling interval
@@ -333,34 +327,15 @@ class RosbagConversionNode(Node):
 
         sync_deltas = []
 
-        # Pre-ingest the entire TF tree before the main pass so that static transforms
-        # (published after the first camera frame in message order) are always available.
-        tf_tree = None
-        if self.ee_pose_enabled:
-            tf_tree = OfflineTFTree()
-            with AnyReader([Path(bag_folder)]) as tf_reader:
-                tf_conns = [c for c in tf_reader.connections if c.topic in ("/tf", "/tf_static")]
-                for conn, _, raw in tf_reader.messages(connections=tf_conns):
-                    msg = tf_reader.deserialize(raw, conn.msgtype)
-                    tf_tree.ingest(msg, is_static=(conn.topic == "/tf_static"))
+        tf_tree = OfflineTFTree() if self.ee_pose_enabled else None
 
         with AnyReader([Path(bag_folder)]) as reader:
-            # Pre-validate topics.
-            # controller_state topics (part_state_topics) are optional fallbacks —
-            # their absence is logged as a warning, not a hard failure.
+            # Pre-validate topics — log each missing topic with its purpose
             available = {c.topic for c in reader.connections}
-            required = wanted - self.part_state_topics
-            missing_required = required - available
-            missing_optional = self.part_state_topics - available
-            if missing_optional:
-                for m in sorted(missing_optional):
-                    self.get_logger().warning(
-                        f"Bag '{bag_folder}': optional controller_state topic missing: {m}. "
-                        "Arm deltas will fall back to zero for joints without trajectory commands."
-                    )
-            if missing_required:
-                self.get_logger().error(f"Bag '{bag_folder}' is missing {len(missing_required)} required topic(s). Skipping episode.")
-                for m in sorted(missing_required):
+            missing = wanted - available
+            if missing:
+                self.get_logger().error(f"Bag '{bag_folder}' is missing {len(missing)} required topic(s). Skipping episode.")
+                for m in sorted(missing):
                     if m == self.joint_states_topic:
                         reason = "joint state observation"
                     elif m in self.part_command_topics:
@@ -377,7 +352,7 @@ class RosbagConversionNode(Node):
                 self.skipped_bags.append({
                     "bag": bag_folder,
                     "reason": "missing_topics",
-                    "missing": {m: reason for m in sorted(missing_required) for reason in [
+                    "missing": {m: reason for m in sorted(missing) for reason in [
                         "joint_state" if m == self.joint_states_topic else
                         "joint_command" if m in self.part_command_topics else
                         "base_velocity" if m == self.cmd_vel_topic else
@@ -404,29 +379,19 @@ class RosbagConversionNode(Node):
                     latest_joint_velocity = [joint_vel.get(feat, 0.0) for feat in self.action_features]
                     latest_joint_time = t_sec
 
+                elif tf_tree is not None and topic in ("/tf", "/tf_static"):
+                    msg = reader.deserialize(rawdata, connection.msgtype)
+                    tf_tree.ingest(msg, is_static=(topic == "/tf_static"))
+
                 elif topic in self.part_command_topics:
                     msg = reader.deserialize(rawdata, connection.msgtype)
-                    # JointTrajectory: sparse but authoritative — mark joints as traj-sourced
+                    # JointTrajectory messages carry commanded positions
                     if hasattr(msg, 'joint_names') and hasattr(msg, 'points') and len(msg.points) > 0:
                         target_point = msg.points[-1]  # final waypoint = target
                         t_cmd = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') and msg.header.stamp.sec > 0 else t_bag
                         for jn, pos in zip(msg.joint_names, target_point.positions):
                             commanded_joints[jn] = pos
                             commanded_joints_time[jn] = t_cmd
-                            commanded_joints_from_traj.add(jn)
-
-                elif topic in self.part_state_topics:
-                    msg = reader.deserialize(rawdata, connection.msgtype)
-                    # JointTrajectoryControllerState: continuous reference.positions gives
-                    # the controller's current setpoint — use as fallback for joints that
-                    # have never appeared in a JointTrajectory message.
-                    if hasattr(msg, 'joint_names') and hasattr(msg, 'reference'):
-                        t_cmd = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') and msg.header.stamp.sec > 0 else t_bag
-                        ref_positions = list(msg.reference.positions)
-                        for jn, pos in zip(msg.joint_names, ref_positions):
-                            if jn not in commanded_joints_from_traj:
-                                commanded_joints[jn] = pos
-                                commanded_joints_time[jn] = t_cmd
 
                 elif topic == self.cmd_vel_topic and self.has_mobile_base:
                     msg = reader.deserialize(rawdata, connection.msgtype)
@@ -440,20 +405,6 @@ class RosbagConversionNode(Node):
                     else:
                         latest_cmd_vel = [msg.linear.x, msg.angular.z]
                     latest_cmd_vel_time = t_sec
-
-                elif topic == self.odom_topic and self.has_mobile_base:
-                    msg = reader.deserialize(rawdata, connection.msgtype)
-                    t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') else t_bag
-                    twist = msg.twist.twist
-                    if self.has_cmd_vel_y and self.has_cmd_vel_z:
-                        latest_odom_vel = [twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.z]
-                    elif self.has_cmd_vel_y:
-                        latest_odom_vel = [twist.linear.x, twist.linear.y, twist.angular.z]
-                    elif self.has_cmd_vel_z:
-                        latest_odom_vel = [twist.linear.x, twist.linear.z, twist.angular.z]
-                    else:
-                        latest_odom_vel = [twist.linear.x, twist.angular.z]
-                    latest_odom_time = t_sec
 
                 elif topic in self.topic_to_cam:
                     cam_name = self.topic_to_cam[topic]
@@ -489,14 +440,7 @@ class RosbagConversionNode(Node):
                         img_times = list(image_times.values())
                         max_camera_diff = max(img_times) - min(img_times)
                         joint_diff = abs(image_times[self.primary_camera] - latest_joint_time)
-                        # Only check cmd_vel staleness when at least one cmd_vel has been received.
-                        # latest_cmd_vel_time == 0.0 means the robot has been stationary since bag
-                        # start and no /cmd_vel was published yet — not a sync failure.
-                        cmd_vel_diff = (
-                            abs(image_times[self.primary_camera] - latest_cmd_vel_time)
-                            if self.has_mobile_base and latest_cmd_vel_time > 0.0
-                            else 0.0
-                        )
+                        cmd_vel_diff = abs(image_times[self.primary_camera] - latest_cmd_vel_time) if self.has_mobile_base else 0.0
                         max_sync = max(max_camera_diff, joint_diff, cmd_vel_diff)
 
                         if max_sync > self.sync_threshold:
@@ -512,72 +456,53 @@ class RosbagConversionNode(Node):
                                 skipped_downsample += 1
                                 continue
 
-                        # Skip static frames: skip if no joint OR base velocity exceeds threshold
+                        # Skip static frames: skip if no joint velocity exceeds threshold
                         if self.skip_static_threshold > 0.0 and latest_joint_velocity is not None:
-                            joint_moving = np.any(np.abs(latest_joint_velocity) > self.skip_static_threshold)
-                            base_moving = (
-                                self.has_mobile_base
-                                and latest_cmd_vel is not None
-                                and np.any(np.abs(latest_cmd_vel) > self.skip_static_threshold)
-                            )
-                            if not joint_moving and not base_moving:
+                            if not np.any(np.abs(latest_joint_velocity) > self.skip_static_threshold):
                                 skipped_static += 1
                                 continue
 
-                        # State: measured joint positions + odom base velocity (matches deploy observation)
-                        odom_vel = latest_odom_vel if (self.has_mobile_base and latest_odom_vel is not None) else []
-                        state = latest_joint_state + odom_vel
+                        # State: measured joint positions only (no cmd_vel)
+                        state = latest_joint_state
                         # Action: commanded joint positions, fall back to measured if not yet received
                         action = [
                             commanded_joints.get(feat, latest_joint_state[i])
                             for i, feat in enumerate(self.action_features)
                         ]
-
-                        # Append base velocity to action so PI05 trains on all dims
-                        base_vel = latest_cmd_vel if (self.has_mobile_base and latest_cmd_vel is not None) else []
-                        action_full = action + base_vel
-
                         frame = {
                             "task": instruction,
-                            "action": torch.tensor(action_full, dtype=torch.float32),
+                            "action": torch.tensor(action, dtype=torch.float32),
                             "observation.state": torch.tensor(state, dtype=torch.float32),
                         }
 
                         # Freshness masks
                         joint_dim = len(self.action_features)
-                        odom_fresh = self.has_mobile_base and latest_odom_time > last_frame_time
                         state_fresh = latest_joint_time > last_frame_time
-                        odom_freshness = [odom_fresh] * len(self.base_keys) if self.has_mobile_base else []
-                        frame["observation.state.is_fresh"] = torch.tensor(
-                            [state_fresh] * joint_dim + odom_freshness, dtype=torch.bool
+                        frame["observation.state.is_fresh"] = torch.full(
+                            (joint_dim,), state_fresh, dtype=torch.bool
                         )
 
-                        # Per-joint freshness + base freshness appended
+                        # Per-joint action freshness based on individual command timestamps
                         action_freshness = [
                             commanded_joints_time.get(feat, 0.0) > last_frame_time
                             for feat in self.action_features
                         ]
-                        if self.has_mobile_base:
-                            cmd_vel_fresh = latest_cmd_vel_time > last_frame_time
-                            action_freshness += [cmd_vel_fresh] * len(self.base_keys)
                         frame["action.is_fresh"] = torch.tensor(action_freshness, dtype=torch.bool)
 
-                        # Delta action: commanded - measured per joint; base dims are velocity (not delta of pos)
+                        # Delta action: commanded - measured per joint
                         delta = [action[i] - state[i] for i in range(joint_dim)]
-                        delta_base = base_vel  # base velocity IS the delta (no absolute base obs)
-                        frame["action.delta"] = torch.tensor(delta + delta_base, dtype=torch.float32)
-                        # Delta freshness
+                        frame["action.delta"] = torch.tensor(delta, dtype=torch.float32)
+                        # Delta freshness requires both command and state to be fresh
                         delta_freshness = [
                             action_freshness[i] and state_fresh
                             for i in range(joint_dim)
                         ]
-                        if self.has_mobile_base:
-                            delta_freshness += [cmd_vel_fresh] * len(self.base_keys)
                         frame["action.delta.is_fresh"] = torch.tensor(delta_freshness, dtype=torch.bool)
 
-                        # Base velocity also stored as standalone feature for inspection
+                        # Base velocity action (separate feature, inherently delta)
                         if self.has_mobile_base:
                             frame["action.base"] = torch.tensor(latest_cmd_vel, dtype=torch.float32)
+                            cmd_vel_fresh = latest_cmd_vel_time > last_frame_time
                             frame["action.base.is_fresh"] = torch.full(
                                 (len(self.base_keys),), cmd_vel_fresh, dtype=torch.bool
                             )
@@ -699,8 +624,7 @@ class RosbagConversionNode(Node):
                     parts = morphology.get("parts", [])
 
                     self.action_features = []  # joint names (excludes mobile base)
-                    self.part_command_topics = set()  # topics carrying JointTrajectory commands
-                    self.part_state_topics = set()    # topics carrying JointTrajectoryControllerState
+                    self.part_command_topics = set()  # topics carrying joint commands
                     for part in parts:
                         part_info = morphology.get(part, {})
                         if part_info.get("is_actionable", False):
@@ -715,9 +639,6 @@ class RosbagConversionNode(Node):
                                 cmd_topic = part_info.get("command_topic", "")
                                 if cmd_topic:
                                     self.part_command_topics.add(cmd_topic)
-                                state_topic = part_info.get("state_topic", "")
-                                if state_topic:
-                                    self.part_state_topics.add(state_topic)
 
                     if not self.action_features and not self.has_mobile_base:
                         self.get_logger().error("No actionable joints and no active mobile base found. Aborting.")
@@ -961,25 +882,19 @@ class RosbagConversionNode(Node):
 
         joint_dim = len(self.action_features)
         base_dim = len(self.base_keys)
-        # Total action dim: joints + base velocity (appended so PI05 trains on both)
-        total_action_dim = joint_dim + base_dim
-        total_action_names = self.action_features + self.base_keys
-        # Total state dim: joints + odom base velocity (mirrors deploy observation.state)
-        total_state_dim = joint_dim + base_dim
-        total_state_names = self.action_features + self.base_keys
 
         features = {
-            # Joint action: commanded positions (absolute) + base velocity appended
-            "action": {"dtype": "float32", "shape": (total_action_dim,), "names": total_action_names},
-            "action.is_fresh": {"dtype": "bool", "shape": (total_action_dim,), "names": None},
-            # Joint action delta: (commanded - measured) per joint, zeros for base dims
-            "action.delta": {"dtype": "float32", "shape": (total_action_dim,), "names": total_action_names},
-            "action.delta.is_fresh": {"dtype": "bool", "shape": (total_action_dim,), "names": None},
-            # Joint state: measured positions + odom base velocity (matches deploy observation)
-            "observation.state": {"dtype": "float32", "shape": (total_state_dim,), "names": total_state_names},
-            "observation.state.is_fresh": {"dtype": "bool", "shape": (total_state_dim,), "names": None},
+            # Joint action: commanded positions (absolute)
+            "action": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
+            "action.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
+            # Joint action delta: commanded - measured
+            "action.delta": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
+            "action.delta.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
+            # Joint state: measured positions from /joint_states
+            "observation.state": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
+            "observation.state.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
         }
-        # Base velocity also kept as standalone feature for inspection / non-PI05 policies
+        # Base velocity action (separate — already delta, different units from joint positions)
         if self.has_mobile_base:
             features["action.base"] = {"dtype": "float32", "shape": (base_dim,), "names": self.base_keys}
             features["action.base.is_fresh"] = {"dtype": "bool", "shape": (base_dim,), "names": None}
