@@ -9,8 +9,11 @@ def generate_launch_description_impl(context, *args, **kwargs):
     conversion_share = get_package_share_directory("sobits_vla_rosbag_conversion")
     collection_share = get_package_share_directory("sobits_vla_rosbag_collection")
     
-    # Configuration File
+    # Configuration File — robot name selects conversion_settings_<robot>.yaml
     config_file = LaunchConfiguration('config_file').perform(context)
+    robot = LaunchConfiguration('robot').perform(context)
+    if not config_file:
+        config_file = f'conversion_settings_{robot}.yaml' if robot else 'conversion_settings.yaml'
     if not os.path.isabs(config_file):
         config_file = os.path.join(conversion_share, 'config', config_file)
         
@@ -20,22 +23,22 @@ def generate_launch_description_impl(context, *args, **kwargs):
     vcodec = LaunchConfiguration('vcodec').perform(context)
     overwrite = LaunchConfiguration('overwrite').perform(context).lower() == 'true'
 
-    # Defaults: prefer src-tree rosbags dir (written at runtime), fall back to install share
+    # Default rosbag_directory: src-tree sobits_vla_rosbag_collection/rosbags/
+    # os.path.realpath resolves the --symlink-install symlink back to the src file,
+    # then we walk up to the workspace src root and locate the collection package.
     if not rosbag_directory:
-        launch_file_path = os.path.abspath(__file__)
-        if '/install/' in launch_file_path:
-            ws_root = launch_file_path.split('/install/')[0]
-            pkg_name = 'sobits_vla_rosbag_collection'
-            src_candidate = os.path.join(
-                ws_root, 'src', 'robocup_opl_doinglaundry', 'sobits_vla_tools', pkg_name)
-            src_candidate_flat = os.path.join(ws_root, 'src', 'sobits_vla_tools', pkg_name)
-            if os.path.isdir(os.path.join(src_candidate, 'rosbags')):
-                rosbag_directory = os.path.join(src_candidate, 'rosbags')
-            elif os.path.isdir(os.path.join(src_candidate_flat, 'rosbags')):
-                rosbag_directory = os.path.join(src_candidate_flat, 'rosbags')
+        src_file = os.path.realpath(__file__)  # resolves symlink → actual src path
+        # Walk up until we find the sobits_vla_rosbag_collection sibling package
+        candidate = os.path.dirname(src_file)
+        for _ in range(6):
+            sibling = os.path.join(candidate, 'sobits_vla_rosbag_collection', 'rosbags')
+            if os.path.isdir(sibling):
+                rosbag_directory = sibling
+                break
+            candidate = os.path.dirname(candidate)
         if not rosbag_directory:
             rosbag_directory = os.path.join(collection_share, 'rosbags')
-        
+
     if not recorded_bags_meta_file:
         recorded_bags_meta_file = os.path.join(rosbag_directory, "recorded_bags_meta.yaml")
 
@@ -69,9 +72,15 @@ def generate_launch_description_impl(context, *args, **kwargs):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
+            'robot',
+            default_value='',
+            description='Robot name — selects conversion_settings_<robot>.yaml (e.g. sobit_home).'
+        ),
+        DeclareLaunchArgument(
             'config_file',
-            default_value='conversion_settings.yaml',
-            description='Path to the conversion configuration file'
+            default_value='',
+            description='Explicit config file path or name (overrides robot). '
+                        'Defaults to conversion_settings_<robot>.yaml or conversion_settings.yaml.'
         ),
         DeclareLaunchArgument(
             'rosbag_directory',
