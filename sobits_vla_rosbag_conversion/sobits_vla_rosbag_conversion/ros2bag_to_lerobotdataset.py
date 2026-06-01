@@ -71,7 +71,7 @@ class RosbagConversionNode(Node):
         self.declare_parameter('vcodec', 'auto')
         self.declare_parameter('sync_threshold', 0.1)
         self.declare_parameter('push_to_hub', False)
-        self.declare_parameter('hub_private', True)
+        self.declare_parameter('hub_private', False)
         self.declare_parameter('overwrite', False)
         self.declare_parameter('skip_static_threshold', 0.0)
         self.declare_parameter('ee_pose.enabled', False)
