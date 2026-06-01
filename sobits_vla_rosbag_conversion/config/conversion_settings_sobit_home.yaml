@@ -8,7 +8,7 @@
     dataset_name: "MyDataset"
 
     # Local directory where the LeRobot dataset is written.
-    # Empty = ~/.cache/huggingface/lerobot/<dataset_name>
+    # Empty = <package_src>/lerobotdataset/
     output_directory: ""
 
     # Target fps for the LeRobot dataset.
@@ -26,6 +26,28 @@
 
     # Skip frames where no joint exceeds this velocity (rad/s). 0.0 = disabled.
     skip_static_threshold: 0.0
+
+    # Mimic joints and unused arm/hand joints to exclude from action/state features.
+    # Right arm and right hand are excluded: only left arm is used for pick-up task.
+    excluded_joints:
+      # Mimic joints (no independent signal)
+      - hand_left_finger_r_mcp_joint
+      - hand_right_finger_r_mcp_joint
+      # Right arm (6 DOF)
+      - arm_right_shoulder_tilt_joint
+      - arm_right_upper_roll_joint
+      - arm_right_upper_flex_joint
+      - arm_right_elbow_joint
+      - arm_right_wrist_tilt_joint
+      - arm_right_wrist_roll_joint
+      # Right hand (8 DOF, including the mimic above)
+      - hand_right_finger_l_mcp_joint
+      - hand_right_finger_l_pip_joint
+      - hand_right_finger_l_dip_joint
+      - hand_right_finger_c_mcp_joint
+      - hand_right_finger_c_ip_joint
+      - hand_right_finger_r_pip_joint
+      - hand_right_finger_r_dip_joint
 
     # End-effector pose via TF tree.
     ee_pose:
