@@ -84,7 +84,6 @@ class RosbagConversionNode(Node):
         self.declare_parameter('cameras.primary', 'head_camera')
         self.declare_parameter('cameras.names', [''])
         self.declare_parameter('cameras.compressed', [False])
-        self.declare_parameter('excluded_joints', [''])
 
         self.rosbag_directory = self.get_parameter('rosbag_directory').get_parameter_value().string_value
         self.recorded_bags_meta_file = self.get_parameter('recorded_bags_meta_file').get_parameter_value().string_value
@@ -118,8 +117,6 @@ class RosbagConversionNode(Node):
         self.hub_private = self.get_parameter('hub_private').get_parameter_value().bool_value
         self.overwrite = self.get_parameter('overwrite').get_parameter_value().bool_value
         self.skip_static_threshold = self.get_parameter('skip_static_threshold').get_parameter_value().double_value
-        raw_excluded = self.get_parameter('excluded_joints').get_parameter_value().string_array_value
-        self.excluded_joints = set(j for j in raw_excluded if j)
         self.ee_pose_enabled = self.get_parameter('ee_pose.enabled').get_parameter_value().bool_value
         # Build ee_configs: list of (name, source_frame, target_frame)
         _ee_names   = [n for n in self.get_parameter('ee_pose.names').get_parameter_value().string_array_value if n]
@@ -734,13 +731,7 @@ class RosbagConversionNode(Node):
                                 self.cmd_vel_topic = part_info.get("cmd_vel_topic", "/cmd_vel")
                                 self.odom_topic = part_info.get("odom_topic", "")
                             else:
-                                joints = part_info.get("joint_names", [])
-                                excluded = [j for j in joints if j in self.excluded_joints]
-                                if excluded:
-                                    self.get_logger().info(
-                                        f"Excluding mimic/unwanted joints from '{part}': {excluded}"
-                                    )
-                                self.action_features.extend(j for j in joints if j not in self.excluded_joints)
+                                self.action_features.extend(part_info.get("joint_names", []))
                                 cmd_topic = part_info.get("command_topic", "")
                                 if cmd_topic:
                                     self.part_command_topics.add(cmd_topic)
