@@ -76,6 +76,51 @@ def _patch_bool_quantile_normalization() -> None:
     _NormalizationMixin._apply_transform = _patched
 
 
+def _patch_pi05_action_dim_padding() -> None:
+    """Zero-pad action projection weights when max_action_dim > pretrained checkpoint dim.
+
+    When max_action_dim is increased (e.g. 32→34 to add base x,y,θ), the pretrained
+    action_in_proj.weight (1024x32) and action_out_proj.weight/bias (32x1024 / 32) no
+    longer match the model's shapes (1024x34, 34x1024, 34). PyTorch load_state_dict
+    raises a size-mismatch error, which the from_pretrained outer try/except catches by
+    returning a fully random model — losing all pretrained weights.
+
+    This patch intercepts _fix_pytorch_state_dict_keys (called just before load_state_dict)
+    and pads the extra columns/rows with zeros, so pretrained weights load for dims 0..N-1
+    and only the new dimensions start from zero.
+    """
+    import torch
+    from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+
+    orig_fix = PI05Policy._fix_pytorch_state_dict_keys
+
+    def _patched_fix(self, state_dict, model_config):
+        fixed = orig_fix(self, state_dict, model_config)
+        model_action_dim = self.model.action_in_proj.in_features
+
+        for key in list(fixed.keys()):
+            val = fixed[key]
+            # action_in_proj.weight: (width, ckpt_dim) → (width, model_dim)
+            if key.endswith('action_in_proj.weight') and val.ndim == 2 and val.shape[1] < model_action_dim:
+                extra = model_action_dim - val.shape[1]
+                pad = torch.zeros(val.shape[0], extra, dtype=val.dtype, device=val.device)
+                fixed[key] = torch.cat([val, pad], dim=1)
+            # action_out_proj.weight: (ckpt_dim, width) → (model_dim, width)
+            elif key.endswith('action_out_proj.weight') and val.ndim == 2 and val.shape[0] < model_action_dim:
+                extra = model_action_dim - val.shape[0]
+                pad = torch.zeros(extra, val.shape[1], dtype=val.dtype, device=val.device)
+                fixed[key] = torch.cat([val, pad], dim=0)
+            # action_out_proj.bias: (ckpt_dim,) → (model_dim,)
+            elif key.endswith('action_out_proj.bias') and val.ndim == 1 and val.shape[0] < model_action_dim:
+                extra = model_action_dim - val.shape[0]
+                pad = torch.zeros(extra, dtype=val.dtype, device=val.device)
+                fixed[key] = torch.cat([val, pad], dim=0)
+
+        return fixed
+
+    PI05Policy._fix_pytorch_state_dict_keys = _patched_fix
+
+
 class TrainNode(Node):
     """ROS 2 node that launches LeRobot training as a background thread."""
 
