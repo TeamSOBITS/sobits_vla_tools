@@ -308,6 +308,12 @@ class LeRobotDeployNode(Node):
         self.declare_parameter('runtime.chunk_size_threshold', 0.6)
         self.declare_parameter('runtime.aggregate_fn_name', 'weighted_average')
         self.declare_parameter('runtime.async_enabled', True)
+        # When true: infer every tick, publish only step[0], discard the rest.
+        # Eliminates chunk-boundary jumps at the cost of higher GPU usage.
+        self.declare_parameter('runtime.single_step_mode', False)
+        # Max radians any joint may move in a single control step. Prevents violent
+        # jumps at chunk boundaries when the queue runs empty. 0.0 = disabled.
+        self.declare_parameter('runtime.max_joint_delta_per_step', 0.15)
 
         self.declare_parameter('rtc.enabled', True)
         self.declare_parameter('rtc.execution_horizon', 10)
@@ -332,6 +338,12 @@ class LeRobotDeployNode(Node):
         )
         self._aggregate_fn_name = str(self.get_parameter('runtime.aggregate_fn_name').value)
         self._async_enabled = bool(self.get_parameter('runtime.async_enabled').value)
+        self._single_step_mode = bool(
+            self.get_parameter('runtime.single_step_mode').value
+        )
+        self._max_joint_delta = float(
+            self.get_parameter('runtime.max_joint_delta_per_step').value
+        )
 
         self._rtc_enabled = bool(self.get_parameter('rtc.enabled').value)
         self._rtc_execution_horizon = int(self.get_parameter('rtc.execution_horizon').value)
@@ -861,6 +873,37 @@ class LeRobotDeployNode(Node):
         return []
 
     def _inference_worker(self) -> None:
+        # single_step_mode: publish timer pops _single_step_result directly;
+        # this thread just keeps running inference and depositing results.
+        if self._single_step_mode:
+            while rclpy.ok() and not self._shutdown_inference:
+                with self._inference_cond:
+                    if not self._play_enabled:
+                        self._inference_cond.wait(timeout=0.5)
+                        continue
+
+                obs_frame = self._snapshot_observation()
+                if obs_frame is None:
+                    with self._inference_cond:
+                        self._inference_cond.wait(timeout=0.05)
+                    continue
+
+                try:
+                    steps = self._predict_actions(obs_frame)
+                except Exception as exc:
+                    import traceback as _tb
+                    self.get_logger().error(
+                        'Inference error: {}. Retrying.\n{}'.format(exc, _tb.format_exc()),
+                        throttle_duration_sec=2.0,
+                    )
+                    continue
+
+                if steps:
+                    with self._single_step_lock:
+                        self._single_step_result = steps[0]
+            return
+
+        # Default chunked mode
         while rclpy.ok() and not self._shutdown_inference:
             with self._inference_cond:
                 play = self._play_enabled
@@ -885,8 +928,9 @@ class LeRobotDeployNode(Node):
             try:
                 chunk = self._predict_actions(obs_frame)
             except Exception as exc:
+                import traceback as _tb
                 self.get_logger().error(
-                    'Inference error: {}. Retrying.'.format(exc),
+                    'Inference error: {}. Retrying.\n{}'.format(exc, _tb.format_exc()),
                     throttle_duration_sec=2.0,
                 )
                 with self._inference_cond:
@@ -901,28 +945,56 @@ class LeRobotDeployNode(Node):
         if not self._play_enabled:
             return
 
-        queue_len = self._chunk_buffer.size()
-        threshold_len = max(1, int(self._actions_per_chunk * self._chunk_size_threshold))
-        if self._async_enabled and queue_len <= threshold_len:
-            with self._inference_cond:
-                self._inference_cond.notify_all()
+        if self._single_step_mode:
+            with self._single_step_lock:
+                step = self._single_step_result
+                self._single_step_result = None
+            if step is None:
+                self.get_logger().warn(
+                    'Single-step inference not ready yet.',
+                    throttle_duration_sec=2.0,
+                )
+                return
+        else:
+            queue_len = self._chunk_buffer.size()
+            threshold_len = max(1, int(self._actions_per_chunk * self._chunk_size_threshold))
+            if self._async_enabled and queue_len <= threshold_len:
+                with self._inference_cond:
+                    self._inference_cond.notify_all()
 
-        step = self._chunk_buffer.pop()
-        if step is None:
-            self.get_logger().warn(
-                'Action queue empty. Increase actions_per_chunk or lower control_hz.',
-                throttle_duration_sec=2.0,
-            )
-            return
+            step = self._chunk_buffer.pop()
+            if step is None:
+                self.get_logger().warn(
+                    'Action queue empty. Increase actions_per_chunk or lower control_hz.',
+                    throttle_duration_sec=2.0,
+                )
+                return
 
+        now = self.get_clock().now().to_msg()
         for group in self._joint_groups:
             msg = JointTrajectory()
+            msg.header.stamp = now
             msg.joint_names = group.joints_ros
             point = JointTrajectoryPoint()
-            point.positions = [
+            raw_positions = [
                 float(step.get(feature, self._state_vector.get(feature, 0.0)))
                 for feature in group.features
             ]
+            if self._max_joint_delta > 0.0:
+                point.positions = [
+                    float(
+                        max(
+                            self._state_vector.get(feat, raw) - self._max_joint_delta,
+                            min(
+                                self._state_vector.get(feat, raw) + self._max_joint_delta,
+                                raw,
+                            ),
+                        )
+                    )
+                    for feat, raw in zip(group.features, raw_positions)
+                ]
+            else:
+                point.positions = raw_positions
             point.time_from_start = self._step_duration
             msg.points = [point]
             self._group_publishers[group.name].publish(msg)
@@ -934,6 +1006,12 @@ class LeRobotDeployNode(Node):
             cmd.linear.z = float(step.get('z.vel', 0.0))
             cmd.angular.z = float(step.get('theta.vel', 0.0))
             self._base_pub.publish(cmd)
+            print(
+                'BASE cmd_vel  x={:.4f}  y={:.4f}  theta={:.4f}'.format(
+                    cmd.linear.x, cmd.linear.y, cmd.angular.z
+                ),
+                flush=True,
+            )
 
 
 def main(args: Optional[List[str]] = None) -> None:
