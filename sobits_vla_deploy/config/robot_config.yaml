@@ -64,34 +64,39 @@
       odom_topic: ""
       groups:
         # Controller groups — each maps ROS joint names to policy feature names.
-        names: [arm]
+        names:
+          - arm
         arm:
           command_topic: "/robot_name/arm_controller/joint_trajectory"
           joints_ros:
-            [
-              joint_1,
-              joint_2,
-            ]
+            - joint_1
+            - joint_2
           # Policy feature names must match training dataset feature keys exactly.
           features:
-            [
-              joint_1,
-              joint_2,
-            ]
+            - joint_1
+            - joint_2
       mobile_base:
         # Leave empty for fixed-base robots.
         command_topic: ""
-        features: [x.vel, theta.vel]
+        features:
+          - x.vel
+          - theta.vel
       cameras:
-        names: [head]
+        names:
+          - head
         default_encoding: rgb8
+        # Set true to subscribe to sensor_msgs/CompressedImage (image_raw/compressed topics).
+        # Use false for sensor_msgs/Image (image_raw topics).
+        # Must match what was recorded during training data collection.
+        default_compressed: false
         head:
           topic: "/robot_name/head_camera/color/image_raw"
 
     gamepad:
       topic: "/joy"
       name: controller_name
-      controllers: [controller_name]
+      controllers:
+        - controller_name
       controller_name:
         button_mapping:
           play: 0

@@ -1,21 +1,24 @@
 /**:
   ros__parameters:
     model:
-      repo_id: "team-sobits/sobit_home_smolvla"
-      policy_class: "lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy"
+      repo_id: ""
+      policy_class: "lerobot.policies.pi05.modeling_pi05.PI05Policy"
       device: "cuda"
-      use_amp: true
+      use_amp: false
 
     runtime:
-      control_hz: 10.0
+      control_hz: 6.0
       actions_per_chunk: 50
       chunk_size_threshold: 0.6
       aggregate_fn_name: weighted_average
       async_enabled: true
+      single_step_mode: false
+      max_joint_delta_per_step: 0.15
 
     rtc:
-      enabled: true
-      execution_horizon: 10
+      # PI05 does not expose predict_action_chunk — keep disabled to avoid spurious warnings.
+      enabled: false
+      execution_horizon: 6
       max_guidance_weight: 10.0
       prefix_attention_schedule: EXP
       inference_delay: 4
@@ -24,136 +27,132 @@
     robot:
       name: sobit_home
       joint_states_topic: "/sobit_home/joint_states"
-      # odom_topic: "/sobit_home/odom"
+      # odom_topic: base velocities are appended to observation.state at inference time
+      # to match the dataset where cmd_vel dims are included in the state vector.
+      odom_topic: "/sobit_home/odom"
       groups:
-        names: [head, body, left_arm, right_arm, left_hand, right_hand]
+        names:
+          - head
+          - body
+          - left_arm
+          - right_arm
+          - left_hand
+          - right_hand
         head:
           command_topic: "/sobit_home/head_position_controller/joint_trajectory"
           joints_ros:
-            [
-              head_pan_joint,
-              head_tilt_joint,
-            ]
+            - head_pan_joint
+            - head_tilt_joint
           features:
-            [
-              head_pan_joint,
-              head_tilt_joint,
-            ]
+            - head_pan_joint
+            - head_tilt_joint
         body:
           command_topic: "/sobit_home/body_position_controller/joint_trajectory"
           joints_ros:
-            [
-              body_lift_joint,
-            ]
+            - body_lift_joint
           features:
-            [
-              body_lift_joint,
-            ]
+            - body_lift_joint
         left_arm:
           command_topic: "/sobit_home/arm_left_position_controller/joint_trajectory"
           joints_ros:
-            [
-              arm_left_shoulder_tilt_joint,
-              arm_left_upper_roll_joint,
-              arm_left_upper_flex_joint,
-              arm_left_elbow_joint,
-              arm_left_wrist_tilt_joint,
-              arm_left_wrist_roll_joint,
-            ]
+            - arm_left_shoulder_tilt_joint
+            - arm_left_upper_roll_joint
+            - arm_left_upper_flex_joint
+            - arm_left_elbow_joint
+            - arm_left_wrist_tilt_joint
+            - arm_left_wrist_roll_joint
           features:
-            [
-              arm_left_shoulder_tilt_joint,
-              arm_left_upper_roll_joint,
-              arm_left_upper_flex_joint,
-              arm_left_elbow_joint,
-              arm_left_wrist_tilt_joint,
-              arm_left_wrist_roll_joint,
-            ]
+            - arm_left_shoulder_tilt_joint
+            - arm_left_upper_roll_joint
+            - arm_left_upper_flex_joint
+            - arm_left_elbow_joint
+            - arm_left_wrist_tilt_joint
+            - arm_left_wrist_roll_joint
         right_arm:
           command_topic: "/sobit_home/arm_right_position_controller/joint_trajectory"
           joints_ros:
-            [
-              arm_right_shoulder_tilt_joint,
-              arm_right_upper_roll_joint,
-              arm_right_upper_flex_joint,
-              arm_right_elbow_joint,
-              arm_right_wrist_tilt_joint,
-              arm_right_wrist_roll_joint,
-            ]
+            - arm_right_shoulder_tilt_joint
+            - arm_right_upper_roll_joint
+            - arm_right_upper_flex_joint
+            - arm_right_elbow_joint
+            - arm_right_wrist_tilt_joint
+            - arm_right_wrist_roll_joint
           features:
-            [
-              arm_right_shoulder_tilt_joint,
-              arm_right_upper_roll_joint,
-              arm_right_upper_flex_joint,
-              arm_right_elbow_joint,
-              arm_right_wrist_tilt_joint,
-              arm_right_wrist_roll_joint,
-            ]
+            - arm_right_shoulder_tilt_joint
+            - arm_right_upper_roll_joint
+            - arm_right_upper_flex_joint
+            - arm_right_elbow_joint
+            - arm_right_wrist_tilt_joint
+            - arm_right_wrist_roll_joint
         left_hand:
           command_topic: "/sobit_home/hand_left_position_controller/joint_trajectory"
           joints_ros:
-            [
-              hand_left_finger_l_mcp_joint,
-              hand_left_finger_l_pip_joint,
-              hand_left_finger_l_dip_joint,
-              hand_left_finger_c_mcp_joint,
-              hand_left_finger_c_ip_joint,
-              hand_left_finger_r_mcp_joint,
-              hand_left_finger_r_pip_joint,
-              hand_left_finger_r_dip_joint,
-            ]
+            - hand_left_finger_l_mcp_joint
+            - hand_left_finger_l_pip_joint
+            - hand_left_finger_l_dip_joint
+            - hand_left_finger_c_mcp_joint
+            - hand_left_finger_c_ip_joint
+            - hand_left_finger_r_pip_joint
+            - hand_left_finger_r_dip_joint
           features:
-            [
-              hand_left_finger_l_mcp_joint,
-              hand_left_finger_l_pip_joint,
-              hand_left_finger_l_dip_joint,
-              hand_left_finger_c_mcp_joint,
-              hand_left_finger_c_ip_joint,
-              hand_left_finger_r_mcp_joint,
-              hand_left_finger_r_pip_joint,
-              hand_left_finger_r_dip_joint,
-            ]
+            - hand_left_finger_l_mcp_joint
+            - hand_left_finger_l_pip_joint
+            - hand_left_finger_l_dip_joint
+            - hand_left_finger_c_mcp_joint
+            - hand_left_finger_c_ip_joint
+            - hand_left_finger_r_pip_joint
+            - hand_left_finger_r_dip_joint
         right_hand:
           command_topic: "/sobit_home/hand_right_position_controller/joint_trajectory"
           joints_ros:
-            [
-              hand_right_finger_l_mcp_joint,
-              hand_right_finger_l_pip_joint,
-              hand_right_finger_l_dip_joint,
-              hand_right_finger_c_mcp_joint,
-              hand_right_finger_c_ip_joint,
-              hand_right_finger_r_mcp_joint,
-              hand_right_finger_r_pip_joint,
-              hand_right_finger_r_dip_joint,
-            ]
+            - hand_right_finger_l_mcp_joint
+            - hand_right_finger_l_pip_joint
+            - hand_right_finger_l_dip_joint
+            - hand_right_finger_c_mcp_joint
+            - hand_right_finger_c_ip_joint
+            - hand_right_finger_r_pip_joint
+            - hand_right_finger_r_dip_joint
           features:
-            [
-              hand_right_finger_l_mcp_joint,
-              hand_right_finger_l_pip_joint,
-              hand_right_finger_l_dip_joint,
-              hand_right_finger_c_mcp_joint,
-              hand_right_finger_c_ip_joint,
-              hand_right_finger_r_mcp_joint,
-              hand_right_finger_r_pip_joint,
-              hand_right_finger_r_dip_joint,
-            ]
+            - hand_right_finger_l_mcp_joint
+            - hand_right_finger_l_pip_joint
+            - hand_right_finger_l_dip_joint
+            - hand_right_finger_c_mcp_joint
+            - hand_right_finger_c_ip_joint
+            - hand_right_finger_r_pip_joint
+            - hand_right_finger_r_dip_joint
       mobile_base:
         command_topic: "/sobit_home/cmd_vel"
-        features: [x.vel, y.vel, theta.vel]
+        features:
+          - x.vel
+          - y.vel
+          - theta.vel
       cameras:
-        names: [head, hand_left, hand_right]
+        # Camera names must match the dataset feature keys exactly:
+        # observation.images.head_camera / hand_left_camera
+        # hand_right_camera excluded — not in the left-arm dataset.
+        names:
+          - head_camera
+          - hand_left_camera
+          - hand_right_camera
         default_encoding: rgb8
-        head:
-          topic: "/sobit_home/head_camera/color/image_raw"
-        hand_left:
-          topic: "/sobit_home/hand_left_camera/color/image_raw"
-        hand_right:
-          topic: "/sobit_home/hand_right_camera/color/image_raw"
+        # Dataset collected from compressed topics — subscribe to CompressedImage.
+        default_compressed: true
+        head_camera:
+          topic: "/sobit_home/head_camera/color/image_raw/compressed"
+          compressed: true
+        hand_left_camera:
+          topic: "/sobit_home/hand_left_camera/color/image_raw/compressed"
+          compressed: true
+        hand_right_camera:
+          topic: "/sobit_home/hand_right_camera/color/image_raw/compressed"
+          compressed: true
 
     gamepad:
       topic: "/sobit_home/joy"
       name: quest
-      controllers: [quest, dualshock4]
+      controllers:
+        - quest
+        - dualshock4
       quest:
         button_mapping:
           play: 4
