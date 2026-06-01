@@ -324,7 +324,7 @@ class LeRobotDeployNode(Node):
 
         self.declare_parameter('gamepad.topic', '/joy')
         self.declare_parameter('gamepad.name', 'default')
-        self.declare_parameter('gamepad.controllers', [])
+        self.declare_parameter('gamepad.controllers', [''])
 
         self._model_repo_id = str(self.get_parameter('model.repo_id').value)
         self._policy_class_path = str(self.get_parameter('model.policy_class').value)
@@ -358,7 +358,9 @@ class LeRobotDeployNode(Node):
 
         self._joy_topic = str(self.get_parameter('gamepad.topic').value)
         self._gamepad_name = str(self.get_parameter('gamepad.name').value)
-        self._gamepad_controllers = list(self.get_parameter('gamepad.controllers').value)
+        self._gamepad_controllers = [
+            c for c in self.get_parameter('gamepad.controllers').value if c
+        ]
         if self._gamepad_name and self._gamepad_name not in self._gamepad_controllers:
             self._gamepad_controllers.append(self._gamepad_name)
 
@@ -431,12 +433,12 @@ class LeRobotDeployNode(Node):
         for group_name in group_names:
             group_ns = f'{ns}.groups.{group_name}'
             self.declare_parameter(f'{group_ns}.command_topic', '')
-            self.declare_parameter(f'{group_ns}.joints_ros', [])
-            self.declare_parameter(f'{group_ns}.features', [])
+            self.declare_parameter(f'{group_ns}.joints_ros', [''])
+            self.declare_parameter(f'{group_ns}.features', [''])
 
             command_topic = str(self.get_parameter(f'{group_ns}.command_topic').value)
-            joints_ros = list(self.get_parameter(f'{group_ns}.joints_ros').value)
-            features = list(self.get_parameter(f'{group_ns}.features').value)
+            joints_ros = [j for j in self.get_parameter(f'{group_ns}.joints_ros').value if j]
+            features = [f for f in self.get_parameter(f'{group_ns}.features').value if f]
 
             if not command_topic:
                 raise RuntimeError(
