@@ -15,9 +15,9 @@ endif()
 find_package(ament_cmake REQUIRED)
 
 find_package(sobits_vla_rosbag_collection REQUIRED)
-find_package(sobits_vla_rosbag_conversion REQUIRED)
-find_package(sobits_vla_training REQUIRED)
-find_package(sobits_vla_deploy REQUIRED)
+# find_package(sobits_vla_rosbag_conversion REQUIRED)
+# find_package(sobits_vla_training REQUIRED)
+# find_package(sobits_vla_deploy REQUIRED)
 find_package(sobits_vla_visualization REQUIRED)
 
 
