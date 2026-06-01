@@ -857,6 +857,38 @@ class LeRobotDeployNode(Node):
         if hasattr(self._policy, 'reset'):
             self._policy.reset()
 
+        # Read action_feature_names from the model config so _to_action_steps can map
+        # by name instead of by position. Falls back to None (position-based) if absent.
+        self._model_action_feature_names: Optional[List[str]] = getattr(
+            self._policy.config, 'action_feature_names', None
+        )
+        if self._model_action_feature_names:
+            self.get_logger().info(
+                'Model action_feature_names: {}'.format(self._model_action_feature_names)
+            )
+            # Validate that every YAML feature exists in the model's list.
+            # Base keys may appear under dataset convention (base_x/base_y/base_theta)
+            # instead of deploy convention (x.vel/y.vel/theta.vel) — account for aliases.
+            yaml_features = self._joint_features + self._mobile_base_features
+            _alias_rev = {v: k for k, v in self._BASE_KEY_ALIASES.items()}
+            model_names_set = set(self._model_action_feature_names)
+            missing = [
+                f for f in yaml_features
+                if f not in model_names_set and _alias_rev.get(f) not in model_names_set
+            ]
+            wired = set(yaml_features) | {self._BASE_KEY_ALIASES.get(f, f) for f in yaml_features}
+            unknown = [f for f in self._model_action_feature_names if f not in wired]
+            if missing:
+                self.get_logger().warn(
+                    'YAML features not in model action_feature_names (will be zeroed): '
+                    '{}'.format(missing)
+                )
+            if unknown:
+                self.get_logger().warn(
+                    'Model outputs joints not wired to any controller (ignored): '
+                    '{}'.format(unknown)
+                )
+
         # Build pre/post processor pipelines for v0.5.1 predict_action API
         self._preprocessor = None
         self._postprocessor = None
@@ -870,6 +902,32 @@ class LeRobotDeployNode(Node):
                     'Could not build pre/post processors: {}. '
                     'Direct policy.select_action will be used.'.format(exc)
                 )
+
+        # Determine expected observation.state dim from the preprocessor normalizer stats
+        # so _snapshot_observation can pad correctly regardless of whether action_feature_names
+        # is populated on the model config.
+        self._expected_state_dim: Optional[int] = None
+        try:
+            from safetensors.torch import load_file as _st_load
+            from huggingface_hub import hf_hub_download as _hf_dl
+            stats_path = _hf_dl(
+                self._model_repo_id,
+                'policy_preprocessor_step_2_normalizer_processor.safetensors',
+            )
+            stats = _st_load(stats_path)
+            q01 = stats.get('observation.state.q01')
+            if q01 is not None:
+                self._expected_state_dim = int(q01.shape[-1])
+                self.get_logger().info(
+                    'observation.state expected dim from normalizer stats: {}'.format(
+                        self._expected_state_dim
+                    )
+                )
+        except Exception as exc:
+            self.get_logger().warn(
+                'Could not determine expected_state_dim from normalizer stats ({}). '
+                'Padding disabled.'.format(exc)
+            )
 
     def _on_update_task(
         self,
@@ -1083,13 +1141,27 @@ class LeRobotDeployNode(Node):
         import torch
 
         device = torch.device(self._model_device)
+        model_dtype = next(self._policy.parameters()).dtype
+
+        # Cast all values to tensors on device (used for RTC and direct select_action paths).
+        # Note: predict_action() calls prepare_observation_for_inference() internally which
+        # expects raw numpy arrays and does its own from_numpy() + device placement, so we
+        # must NOT pre-convert when taking that path.
+        def _to_device(v: Any) -> Any:
+            if isinstance(v, torch.Tensor):
+                return v.to(device=device, dtype=model_dtype)
+            if isinstance(v, np.ndarray):
+                t = torch.from_numpy(v.copy())
+                return t.to(device=device, dtype=model_dtype)
+            return v
 
         if self._rtc_enabled and hasattr(self._policy, 'predict_action_chunk'):
+            obs_tensor = {k: _to_device(v) for k, v in obs_frame.items()}
             try:
                 prev_left_over = self._chunk_buffer.left_over(self._rtc_inference_delay)
                 t0 = monotonic()
                 raw_chunk = self._policy.predict_action_chunk(
-                    obs_frame,
+                    obs_tensor,
                     inference_delay=self._rtc_inference_delay,
                     prev_chunk_left_over=prev_left_over,
                 )
@@ -1107,14 +1179,24 @@ class LeRobotDeployNode(Node):
                 )
 
         if _LEROBOT_AVAILABLE and self._preprocessor is not None:
+            # predict_action expects raw numpy arrays; do NOT pre-convert to tensors.
+            # It internally calls prepare_observation_for_inference → torch.from_numpy.
+            # Ensure image values are numpy (build_dataset_frame already returns numpy).
+            obs_numpy: Dict[str, Any] = {}
+            for k, v in obs_frame.items():
+                if isinstance(v, torch.Tensor):
+                    obs_numpy[k] = v.detach().cpu().numpy()
+                else:
+                    obs_numpy[k] = v
             t0 = monotonic()
             raw_action = predict_action(
-                obs_frame,
+                obs_numpy,
                 self._policy,
                 device,
                 self._preprocessor,
                 self._postprocessor,
                 self._model_use_amp,
+                task=self._task_label or None,
             )
             elapsed = monotonic() - t0
             if elapsed > 0.2:
@@ -1122,10 +1204,20 @@ class LeRobotDeployNode(Node):
                     'Inference {:.0f}ms > 200ms threshold.'.format(elapsed * 1000)
                 )
         else:
+            obs_tensor = {k: _to_device(v) for k, v in obs_frame.items()}
             with torch.inference_mode():
-                raw_action = self._policy.select_action(obs_frame)
+                raw_action = self._policy.select_action(obs_tensor)
 
         return self._to_action_steps(raw_action)
+
+    # Dataset conversion stores base dims as base_x/base_y/base_theta.
+    # Deploy node publishes via x.vel/y.vel/theta.vel. Map between the two conventions.
+    _BASE_KEY_ALIASES: Dict[str, str] = {
+        'base_x': 'x.vel',
+        'base_y': 'y.vel',
+        'base_z': 'z.vel',
+        'base_theta': 'theta.vel',
+    }
 
     def _to_action_steps(self, raw_actions: Any) -> List[Dict[str, float]]:
         import torch
@@ -1153,23 +1245,56 @@ class LeRobotDeployNode(Node):
             raw_actions = raw_actions.detach().cpu().numpy()
 
         if isinstance(raw_actions, np.ndarray):
-            if raw_actions.ndim == 1:
-                return [
-                    {
-                        key: float(raw_actions[i])
-                        for i, key in enumerate(action_keys)
-                        if i < raw_actions.shape[0]
-                    }
-                ]
-            if raw_actions.ndim == 2:
-                return [
-                    {
-                        key: float(raw_actions[step_idx, i])
-                        for i, key in enumerate(action_keys)
-                        if i < raw_actions.shape[1]
-                    }
-                    for step_idx in range(raw_actions.shape[0])
-                ]
+            # Use model's action_feature_names for named lookup when available.
+            # Applies _BASE_KEY_ALIASES to translate dataset names (base_x/base_y/base_theta)
+            # to deploy convention (x.vel/y.vel/theta.vel).
+            model_names = getattr(self, '_model_action_feature_names', None)
+            if model_names:
+                action_keys_set = set(action_keys)
+
+                def _resolve(name: str) -> Optional[str]:
+                    if name in action_keys_set:
+                        return name
+                    aliased = self._BASE_KEY_ALIASES.get(name)
+                    if aliased and aliased in action_keys_set:
+                        return aliased
+                    return None
+
+                if raw_actions.ndim == 1:
+                    step: Dict[str, float] = {}
+                    for i in range(min(len(model_names), raw_actions.shape[0])):
+                        resolved = _resolve(model_names[i])
+                        if resolved is not None:
+                            step[resolved] = float(raw_actions[i])
+                    return [step]
+                if raw_actions.ndim == 2:
+                    result = []
+                    for step_idx in range(raw_actions.shape[0]):
+                        step = {}
+                        for i in range(min(len(model_names), raw_actions.shape[1])):
+                            resolved = _resolve(model_names[i])
+                            if resolved is not None:
+                                step[resolved] = float(raw_actions[step_idx, i])
+                        result.append(step)
+                    return result
+            else:
+                if raw_actions.ndim == 1:
+                    return [
+                        {
+                            key: float(raw_actions[i])
+                            for i, key in enumerate(action_keys)
+                            if i < raw_actions.shape[0]
+                        }
+                    ]
+                if raw_actions.ndim == 2:
+                    return [
+                        {
+                            key: float(raw_actions[step_idx, i])
+                            for i, key in enumerate(action_keys)
+                            if i < raw_actions.shape[1]
+                        }
+                        for step_idx in range(raw_actions.shape[0])
+                    ]
 
         return []
 
