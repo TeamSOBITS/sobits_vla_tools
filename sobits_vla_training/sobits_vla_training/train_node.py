@@ -209,8 +209,34 @@ class TrainNode(Node):
         self.declare_parameter(
             'vram.verbose', True, _p('Log VRAM estimate even when passing'))
 
-        self.declare_parameter(
-            'policy_overrides', [], _p('Policy config field overrides (key-value map)'))
+        # Policy override sub-parameters. ROS 2 only loads YAML values for declared
+        # parameters, so every key that may appear under policy_overrides: in the YAML
+        # must be declared here. make_policy_config filters to valid fields per policy.
+        _po = 'policy_overrides.'
+        self.declare_parameter(_po + 'max_state_dim', 32)
+        self.declare_parameter(_po + 'max_action_dim', 32)
+        self.declare_parameter(_po + 'chunk_size', 50)
+        self.declare_parameter(_po + 'n_action_steps', 50)
+        self.declare_parameter(_po + 'n_obs_steps', 1)
+        self.declare_parameter(_po + 'paligemma_variant', 'gemma_2b')
+        self.declare_parameter(_po + 'action_expert_variant', 'gemma_300m')
+        self.declare_parameter(_po + 'dtype', 'bfloat16')
+        self.declare_parameter(_po + 'num_inference_steps', 10)
+        self.declare_parameter(_po + 'image_resolution', [224, 224])
+        self.declare_parameter(_po + 'empty_cameras', 0)
+        self.declare_parameter(_po + 'freeze_vision_encoder', False)
+        self.declare_parameter(_po + 'gradient_checkpointing', True)
+        self.declare_parameter(_po + 'train_expert_only', False)
+        self.declare_parameter(_po + 'use_peft', False)  # True = load existing adapter; keep False
+        self.declare_parameter(_po + 'tokenizer_max_length', 200)
+        self.declare_parameter(_po + 'use_relative_actions', False)
+        self.declare_parameter(_po + 'optimizer_lr', 2.5e-5)
+        self.declare_parameter(_po + 'optimizer_weight_decay', 0.01)
+        self.declare_parameter(_po + 'optimizer_grad_clip_norm', 1.0)
+        self.declare_parameter(_po + 'scheduler_warmup_steps', 1000)
+        self.declare_parameter(_po + 'scheduler_decay_steps', 30000)
+        self.declare_parameter(_po + 'scheduler_decay_lr', 2.5e-6)
+        self.declare_parameter(_po + 'compile_model', False)
 
         self.declare_parameter(
             'peft.method_type', '', _p('PEFT method: LORA or empty to disable'))
