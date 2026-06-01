@@ -541,19 +541,253 @@ class LeRobotDeployNode(Node):
             self._rtc_enabled = False
             return None
 
+    def _is_peft_adapter_repo(self, repo_id: str) -> bool:
+        """Return True if repo_id is a PEFT adapter (has adapter_config.json)."""
+        try:
+            from huggingface_hub import file_exists
+            return file_exists(repo_id, 'adapter_config.json')
+        except Exception:
+            pass
+        try:
+            from pathlib import Path
+            return (Path(repo_id) / 'adapter_config.json').exists()
+        except Exception:
+            return False
+
+    def _patch_input_features_from_adapter(self, repo_id: str) -> None:
+        """Overwrite policy.config.input_features with values from the adapter repo's config.json."""
+        try:
+            import json
+            from huggingface_hub import hf_hub_download
+            from lerobot.configs.policies import PolicyFeature, FeatureType
+            cfg_path = hf_hub_download(repo_id, 'config.json')
+            with open(cfg_path) as fh:
+                cfg_dict = json.load(fh)
+            raw_features = cfg_dict.get('input_features', {})
+            if not raw_features:
+                return
+            patched: Dict[str, Any] = {}
+            for k, v in raw_features.items():
+                patched[k] = PolicyFeature(type=FeatureType[v['type']], shape=tuple(v['shape']))
+            self._policy.config.input_features = patched
+            img_keys = [k for k, f in patched.items() if f.type is FeatureType.VISUAL]
+            self.get_logger().info(
+                'Patched input_features from adapter config. Image keys: {}'.format(img_keys)
+            )
+        except Exception as exc:
+            self.get_logger().warn(
+                'Could not patch input_features from adapter config: {}'.format(exc)
+            )
+
+    @staticmethod
+    def _patch_pi05_action_dim_padding() -> None:
+        """Zero-pad action_in/out_proj weights when loading a base checkpoint whose
+        max_action_dim is smaller than the model being built (e.g. pi05_base has 32,
+        but a LoRA adapter trained on 34 dims requires the base to also be 34-dim).
+        Without padding, strict=False silently leaves the extra rows/cols random,
+        which causes PEFT's load_state_dict to see a shape mismatch on the LoRA weights.
+        """
+        import torch
+        try:
+            from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+        except ImportError:
+            return
+
+        orig_fix = PI05Policy._fix_pytorch_state_dict_keys
+
+        def _patched_fix(self, state_dict, model_config):
+            fixed = orig_fix(self, state_dict, model_config)
+            model_action_dim = self.model.action_in_proj.in_features
+            for key in list(fixed.keys()):
+                val = fixed[key]
+                if key.endswith('action_in_proj.weight') and val.ndim == 2 and val.shape[1] < model_action_dim:
+                    extra = model_action_dim - val.shape[1]
+                    pad = torch.zeros(val.shape[0], extra, dtype=val.dtype, device=val.device)
+                    fixed[key] = torch.cat([val, pad], dim=1)
+                elif key.endswith('action_out_proj.weight') and val.ndim == 2 and val.shape[0] < model_action_dim:
+                    extra = model_action_dim - val.shape[0]
+                    pad = torch.zeros(extra, val.shape[1], dtype=val.dtype, device=val.device)
+                    fixed[key] = torch.cat([val, pad], dim=0)
+                elif key.endswith('action_out_proj.bias') and val.ndim == 1 and val.shape[0] < model_action_dim:
+                    extra = model_action_dim - val.shape[0]
+                    pad = torch.zeros(extra, dtype=val.dtype, device=val.device)
+                    fixed[key] = torch.cat([val, pad], dim=0)
+            return fixed
+
+        PI05Policy._fix_pytorch_state_dict_keys = _patched_fix
+
     def _load_policy(self) -> None:
+        import torch
         module_path, class_name = self._policy_class_path.rsplit('.', 1)
         policy_module = import_module(module_path)
         policy_cls = getattr(policy_module, class_name)
 
+        # Apply action-dim padding patch before any from_pretrained call so that
+        # base checkpoints with fewer action dims (e.g. pi05_base has 32) load
+        # cleanly into a larger model (e.g. 34-dim for joints + base velocity).
+        self._patch_pi05_action_dim_padding()
+
         rtc_cfg = self._build_rtc_config()
         cfg = self._build_policy_config(rtc_cfg)
 
-        load_kwargs: Dict[str, Any] = {'strict': False}
-        if cfg is not None:
-            load_kwargs['config'] = cfg
+        # Load weights directly in bfloat16 on CPU to halve peak RAM during load
+        # (~5-6 GB instead of ~11 GB for pi05_base in float32).  PI0/PI05/PI0Fast
+        # call self.model.to(config.device) in __init__ before weights arrive, so
+        # we keep device='cpu' here and move to GPU after the load is complete.
+        load_device = self._model_device
+        if cfg is not None and hasattr(cfg, 'device'):
+            cfg.device = 'cpu'
 
-        self._policy = policy_cls.from_pretrained(self._model_repo_id, **load_kwargs)
+        if self._is_peft_adapter_repo(self._model_repo_id):
+            # LoRA adapter repo: load base model, apply adapter, then merge.
+            # Use the adapter repo's config.json (not the base model's) so that
+            # input_features / image_features reflect the fine-tuned camera names.
+            import json
+            from huggingface_hub import hf_hub_download
+            adapter_cfg_path = hf_hub_download(self._model_repo_id, 'adapter_config.json')
+            with open(adapter_cfg_path) as fh:
+                adapter_meta = json.load(fh)
+            base_model_id = adapter_meta.get('base_model_name_or_path', '')
+            self.get_logger().info(
+                'LoRA adapter detected. Loading base model {!r} ...'.format(base_model_id)
+            )
+
+            # Build typed policy config from the adapter's config.json so that
+            # input_features / image_features reflect the fine-tuned camera names.
+            # We cannot use PreTrainedConfig.from_pretrained because draccus does not
+            # recognise the 'type' field; instead we parse the JSON manually.
+            try:
+                from lerobot.configs.types import PolicyFeature, FeatureType as FT
+                adapter_policy_json_path = hf_hub_download(self._model_repo_id, 'config.json')
+                with open(adapter_policy_json_path) as fh:
+                    adapter_policy_dict = json.load(fh)
+                in_feats = {
+                    k: PolicyFeature(type=FT[v['type']], shape=tuple(v['shape']))
+                    for k, v in adapter_policy_dict.get('input_features', {}).items()
+                }
+                out_feats = {
+                    k: PolicyFeature(type=FT[v['type']], shape=tuple(v['shape']))
+                    for k, v in adapter_policy_dict.get('output_features', {}).items()
+                }
+                # max_action_dim / max_state_dim must match the adapter's training dims
+                # (e.g. 34 for 31 joints + 3 base) so the base model is built with
+                # the right projection shapes before the adapter weights are applied.
+                adapter_policy_cfg = policy_cls.config_class(
+                    input_features=in_feats,
+                    output_features=out_feats,
+                    device='cpu',
+                    chunk_size=adapter_policy_dict.get('chunk_size', 50),
+                    n_action_steps=adapter_policy_dict.get('n_action_steps', 50),
+                    paligemma_variant=adapter_policy_dict.get('paligemma_variant', 'gemma_2b'),
+                    action_expert_variant=adapter_policy_dict.get(
+                        'action_expert_variant', 'gemma_300m'
+                    ),
+                    max_action_dim=adapter_policy_dict.get('max_action_dim', 32),
+                    max_state_dim=adapter_policy_dict.get('max_state_dim', 32),
+                )
+                self.get_logger().info(
+                    'Built adapter policy config. Image features: {}'.format(
+                        list(getattr(adapter_policy_cfg, 'image_features', {}).keys())
+                    )
+                )
+                load_cfg = adapter_policy_cfg
+            except Exception as exc:
+                self.get_logger().warn(
+                    'Could not build adapter policy config ({}). Using ROS-built config.'.format(exc)
+                )
+                load_cfg = cfg
+
+            load_kwargs: Dict[str, Any] = {'strict': False, 'torch_dtype': torch.bfloat16}
+            if load_cfg is not None:
+                load_kwargs['config'] = load_cfg
+
+            # --- memory diagnostics before the heavyweight from_pretrained call ---
+            import sys, gc, traceback as _tb
+            try:
+                import psutil as _psutil
+                _proc = _psutil.Process()
+                _rss_before = _proc.memory_info().rss / 1024 ** 3
+            except Exception:
+                _rss_before = float('nan')
+            try:
+                import torch as _torch
+                if _torch.cuda.is_available():
+                    _torch.cuda.synchronize()
+                    _vram_free_before, _vram_total = _torch.cuda.mem_get_info()
+                    _vram_free_before /= 1024 ** 3
+                    _vram_total /= 1024 ** 3
+                else:
+                    _vram_free_before = _vram_total = float('nan')
+            except Exception:
+                _vram_free_before = _vram_total = float('nan')
+            self.get_logger().info(
+                'from_pretrained START: base={!r}  RAM_used={:.2f}GB  '
+                'VRAM_free={:.2f}/{:.2f}GB  kwargs={}'.format(
+                    base_model_id, _rss_before,
+                    _vram_free_before, _vram_total,
+                    {k: (v if not hasattr(v, '__class__') else v.__class__.__name__)
+                     for k, v in load_kwargs.items()},
+                )
+            )
+            import sys as _sys; _sys.stdout.flush(); _sys.stderr.flush()
+            # ---
+
+            try:
+                self._policy = policy_cls.from_pretrained(base_model_id, **load_kwargs)
+            except Exception as _exc:
+                self.get_logger().error(
+                    'from_pretrained FAILED for base={!r}: {}\n{}'.format(
+                        base_model_id, _exc, _tb.format_exc()
+                    )
+                )
+                _sys.stdout.flush(); _sys.stderr.flush()
+                raise
+
+            try:
+                _rss_after = _psutil.Process().memory_info().rss / 1024 ** 3
+            except Exception:
+                _rss_after = float('nan')
+            try:
+                if _torch.cuda.is_available():
+                    _torch.cuda.synchronize()
+                    _vram_free_after, _ = _torch.cuda.mem_get_info()
+                    _vram_free_after /= 1024 ** 3
+                else:
+                    _vram_free_after = float('nan')
+            except Exception:
+                _vram_free_after = float('nan')
+            self.get_logger().info(
+                'from_pretrained DONE: RAM_used={:.2f}GB  VRAM_free={:.2f}GB'.format(
+                    _rss_after, _vram_free_after
+                )
+            )
+            _sys.stdout.flush(); _sys.stderr.flush()
+
+            self.get_logger().info('Applying LoRA adapter from {!r} ...'.format(
+                self._model_repo_id
+            ))
+            try:
+                from peft import PeftModel
+                self.get_logger().info('PeftModel.from_pretrained START ...')
+                _sys.stdout.flush(); _sys.stderr.flush()
+                self._policy = PeftModel.from_pretrained(
+                    self._policy, self._model_repo_id
+                )
+                self.get_logger().info('PeftModel.from_pretrained DONE. Merging ...')
+                _sys.stdout.flush(); _sys.stderr.flush()
+                self._policy = self._policy.merge_and_unload()
+                self.get_logger().info('LoRA adapter merged.')
+                _sys.stdout.flush(); _sys.stderr.flush()
+            except Exception as exc:
+                self.get_logger().warn(
+                    'PEFT merge failed ({}). Running without adapter.'.format(exc)
+                )
+                _sys.stdout.flush(); _sys.stderr.flush()
+        else:
+            load_kwargs: Dict[str, Any] = {'strict': False, 'torch_dtype': torch.bfloat16}
+            if cfg is not None:
+                load_kwargs['config'] = cfg
+            self._policy = policy_cls.from_pretrained(self._model_repo_id, **load_kwargs)
 
         if hasattr(self._policy, 'reset'):
             self._policy.reset()
