@@ -44,7 +44,17 @@ def _str_to_bool(value: str) -> bool:
 
 def _create_train_node(context, *args, **kwargs):
     """Create the training Node with CLI overrides applied."""
-    config_file = LaunchConfiguration('config_file').perform(context)
+    robot = LaunchConfiguration('robot').perform(context).strip()
+    if robot:
+        from ament_index_python.packages import get_package_share_directory
+        import os
+        config_file = os.path.join(
+            get_package_share_directory('sobits_vla_training'),
+            'config',
+            f'training_config_{robot}.yaml',
+        )
+    else:
+        config_file = LaunchConfiguration('config_file').perform(context)
     node_name = LaunchConfiguration('node_name').perform(context)
 
     policy = LaunchConfiguration('policy').perform(context).strip()
@@ -110,9 +120,21 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             DeclareLaunchArgument(
+                'robot',
+                default_value='',
+                description=(
+                    'Robot name shorthand — resolves to training_config_<robot>.yaml '
+                    '(e.g. robot:=sobit_home). '
+                    'When set, takes precedence over config_file.'
+                ),
+            ),
+            DeclareLaunchArgument(
                 'config_file',
                 default_value=default_config,
-                description='Path to training parameter YAML file.',
+                description=(
+                    'Explicit path to training parameter YAML file. '
+                    'Ignored when robot:= is provided.'
+                ),
             ),
             DeclareLaunchArgument(
                 'node_name',
