@@ -1,14 +1,13 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo) — PI0.5
+    # sobits_vla_training — SOBIT HOME — PI0.5
     #
-    # Dataset : sobit_home-pickup_the_block-gazebo (101 episodes, 6 fps)
+    # Dataset : team-sobits/sobit_home-pickup_the_block-left-gazebo (202 eps, 6 fps)
     # Policy  : PI0.5  (PaliGemma 2B + Gemma 300M action expert, flow matching)
-    # Robot   : SOBIT HOME — dual arm, 3 cameras, mobile base
-    # DOF     : 31 (head×2 + body×1 + arm_left×6 + arm_right×6
-    #                + hand_left×8 + hand_right×8)
-    # VRAM    : ~13.5 GB estimated peak (fits 16 GB laptop GPU)
+    # Robot   : SOBIT HOME — dual arm, 2 cameras (head + hand_left), mobile base
+    # DOF     : 32 (head×2 + body×1 + arm×6x2 + hand×7x2 + mobile_base [x,y,θ])
+    # VRAM    : ~20-21 GB estimated peak at batch_size=8, 2 cameras, bf16, chunk_size=50
     # =========================================================================
 
     policy: pi05
@@ -38,9 +37,12 @@
       # Set to true to continue an interrupted run from the last saved checkpoint.
       resume: false
 
+      # Set to true to delete output_dir before training (ignored when resume is true).
+      overwrite: true
+
       # Fine-tune from the official PI0.5 base weights.
       # Set to a local path if you have already downloaded lerobot/pi05.
-      pretrained_path: "lerobot/pi05"
+      pretrained_path: "lerobot/pi05_base"
 
       # Save every 5 000 steps — frequent enough for a 101-episode dataset.
       save_freq: 5000
@@ -53,7 +55,8 @@
       # ~30 000 steps ≈ reasonable convergence for a 101-episode manipulation task.
       steps: 30000
 
-      # Batch size 8 keeps VRAM under budget for PI0.5 + 3 cameras at bf16.
+      # 32 GB VRAM — pi05 activations are ~1.1 GB/sample (chunk_size=50, 2 cameras).
+      # batch_size=8 → ~20.6 GB peak, safe with headroom. Effective batch = 8 × 4 = 32.
       batch_size: 8
 
       # Gradient accumulation: effective batch = 8 × 4 = 32.
@@ -83,11 +86,13 @@
       enable: true
       project: "sobits_vla_training"
       entity: ""
-      run_name: "sobit_home-pickup_block-pi05"
-      notes: "PI0.5 fine-tune on SOBIT HOME"
+      run_name: "sobit_home-xxx-pi05"
+      notes: "PI0.5 fine-tune on sobit_home-gazebo dataset"
       tags:
         - pi05
         - sobit_home
+        - pickup_block
+        - gazebo
 
     # =========================================================================
     # HuggingFace Hub push
@@ -102,8 +107,8 @@
     # VRAM pre-flight gate
     # =========================================================================
     vram:
-      # PI0.5 estimated ~13.5 GB; leave 2.5 GB headroom under 16 GB.
-      limit_gb: 15.5
+      # 32 GB GPU. Leave 8 GB headroom for safety.
+      limit_gb: 30.0
       verbose: true
 
     # =========================================================================
@@ -139,7 +144,8 @@
     # These override the base values in config/policies/pi05.yaml.
     policy_overrides:
       # --- Dimensions ---
-      # action / observation.state are both [31] in this dataset.
+      # action is [32] = 29 joints + 3 base (x,y,theta).
+      # observation.state is [32] (same dims, joints + base odom vel).
       # PI0.5 pads to max_state_dim / max_action_dim internally.
       max_state_dim: 32
       max_action_dim: 32
@@ -164,20 +170,22 @@
         - 224
         - 224
 
-      # 3 physical cameras — no empty camera padding needed.
+      # 2 physical cameras (head + hand_left) — no empty camera padding needed.
       empty_cameras: 0
 
       # Freeze vision encoder — LoRA handles adaptation; no need to update backbone.
       freeze_vision_encoder: true
 
-      # Enable gradient checkpointing — required at batch_size=8 for 3 cameras.
-      gradient_checkpointing: true
+      # 32 GB VRAM — gradient checkpointing not needed, disable for faster steps.
+      gradient_checkpointing: false
 
       # With LoRA active, train_expert_only can be false — LoRA scope is tighter.
       train_expert_only: false
 
-      # Signal to the policy that PEFT adapters are in use.
-      use_peft: true
+      # Do NOT set use_peft: true here — that tells factory.py to load an existing
+      # adapter_config.json from pretrained_path, which pi05_base doesn't have.
+      # LoRA wrapping is driven by the peft: section below, not this flag.
+      use_peft: false
 
       # Tokenizer context length (PI0.5 default is 200).
       tokenizer_max_length: 200
