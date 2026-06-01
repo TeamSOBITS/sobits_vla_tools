@@ -187,9 +187,9 @@ class RosbagConversionNode(Node):
         data = msg.data
         if isinstance(data, memoryview):
             data = bytes(data)
+        raw = np.frombuffer(data, dtype=np.uint8)
         h, w = msg.height, msg.width
         if encoding in ('mono8', '8UC1'):
-            raw = np.frombuffer(data, dtype=np.uint8)
             img = raw.reshape(h, w)
             return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
         if encoding in ('mono16', '16UC1'):
@@ -197,31 +197,24 @@ class RosbagConversionNode(Node):
             img8 = (img >> 8).astype(np.uint8)
             return cv2.cvtColor(img8, cv2.COLOR_GRAY2RGB)
         if encoding in ('rgb8',):
-            return np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3).copy()
+            return raw.reshape(h, w, 3).copy()
         if encoding in ('bgr8',):
-            img = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3)
+            img = raw.reshape(h, w, 3)
             return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         if encoding in ('rgba8',):
-            img = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
+            img = raw.reshape(h, w, 4)
             return cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
         if encoding in ('bgra8',):
-            img = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
+            img = raw.reshape(h, w, 4)
             return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
-        if encoding in ('32FC1',):
-            # Depth image: normalize to 0-255 uint8 for RGB storage.
-            depth = np.frombuffer(data, dtype=np.float32).reshape(h, w)
-            finite = depth[np.isfinite(depth)]
-            if finite.size > 0:
-                d_min, d_max = float(finite.min()), float(finite.max())
-                scale = 255.0 / (d_max - d_min) if d_max > d_min else 1.0
-                img8 = np.clip((depth - d_min) * scale, 0, 255).astype(np.uint8)
-            else:
-                img8 = np.zeros((h, w), dtype=np.uint8)
-            return cv2.cvtColor(img8, cv2.COLOR_GRAY2RGB)
-        raise ValueError(
-            f"Unsupported raw image encoding '{encoding}'. "
-            "Add explicit handling in _decode_image_message() before using this camera."
-        )
+        # Fallback: try to reshape as BGR and convert
+        channels = len(raw) // (h * w) if h * w > 0 else 3
+        img = raw.reshape(h, w, channels)
+        if img.ndim == 2:
+            return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        if img.shape[2] == 4:
+            return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+        return img
 
     def timer_callback(self):
         """One-shot timer callback to trigger the conversion."""
