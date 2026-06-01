@@ -71,7 +71,7 @@ class RosbagConversionNode(Node):
         self.declare_parameter('vcodec', 'auto')
         self.declare_parameter('sync_threshold', 0.1)
         self.declare_parameter('push_to_hub', False)
-        self.declare_parameter('hub_private', False)
+        self.declare_parameter('hub_private', True)
         self.declare_parameter('overwrite', False)
         self.declare_parameter('skip_static_threshold', 0.0)
         self.declare_parameter('ee_pose.enabled', False)
@@ -84,12 +84,33 @@ class RosbagConversionNode(Node):
         self.declare_parameter('cameras.primary', 'head_camera')
         self.declare_parameter('cameras.names', [''])
         self.declare_parameter('cameras.compressed', [False])
+        self.declare_parameter('excluded_joints', [''])
 
         self.rosbag_directory = self.get_parameter('rosbag_directory').get_parameter_value().string_value
         self.recorded_bags_meta_file = self.get_parameter('recorded_bags_meta_file').get_parameter_value().string_value
         self.dataset_name = self.get_parameter('dataset_name').get_parameter_value().string_value
         output_dir = self.get_parameter('output_directory').get_parameter_value().string_value
-        self.output_directory = Path(output_dir) if output_dir else None
+        if output_dir:
+            self.output_directory = Path(output_dir)
+        else:
+            # Resolve src-tree lerobotdataset/ via the module's .py file.
+            # __file__ may be the console-script entry point (not a symlink), so we use
+            # importlib to locate the actual .py module, whose install path IS a symlink
+            # that realpath resolves back to the src tree.
+            import importlib.util
+            spec = importlib.util.find_spec('sobits_vla_rosbag_conversion.ros2bag_to_lerobotdataset')
+            module_file = Path(os.path.realpath(spec.origin)) if spec else Path(os.path.realpath(__file__))
+            self.output_directory = None
+            candidate = module_file.parent
+            for _ in range(6):
+                sibling = candidate / 'lerobotdataset'
+                if sibling.is_dir() and '/install/' not in str(sibling):
+                    self.output_directory = sibling
+                    break
+                candidate = candidate.parent
+            if self.output_directory is None:
+                from ament_index_python.packages import get_package_share_directory
+                self.output_directory = Path(get_package_share_directory('sobits_vla_rosbag_conversion')) / 'lerobotdataset'
         self.fps = self.get_parameter('fps').get_parameter_value().integer_value
         self.vcodec = self.get_parameter('vcodec').get_parameter_value().string_value
         self.sync_threshold = self.get_parameter('sync_threshold').get_parameter_value().double_value
@@ -97,6 +118,8 @@ class RosbagConversionNode(Node):
         self.hub_private = self.get_parameter('hub_private').get_parameter_value().bool_value
         self.overwrite = self.get_parameter('overwrite').get_parameter_value().bool_value
         self.skip_static_threshold = self.get_parameter('skip_static_threshold').get_parameter_value().double_value
+        raw_excluded = self.get_parameter('excluded_joints').get_parameter_value().string_array_value
+        self.excluded_joints = set(j for j in raw_excluded if j)
         self.ee_pose_enabled = self.get_parameter('ee_pose.enabled').get_parameter_value().bool_value
         # Build ee_configs: list of (name, source_frame, target_frame)
         _ee_names   = [n for n in self.get_parameter('ee_pose.names').get_parameter_value().string_array_value if n]
@@ -187,9 +210,9 @@ class RosbagConversionNode(Node):
         data = msg.data
         if isinstance(data, memoryview):
             data = bytes(data)
-        raw = np.frombuffer(data, dtype=np.uint8)
         h, w = msg.height, msg.width
         if encoding in ('mono8', '8UC1'):
+            raw = np.frombuffer(data, dtype=np.uint8)
             img = raw.reshape(h, w)
             return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
         if encoding in ('mono16', '16UC1'):
@@ -197,24 +220,31 @@ class RosbagConversionNode(Node):
             img8 = (img >> 8).astype(np.uint8)
             return cv2.cvtColor(img8, cv2.COLOR_GRAY2RGB)
         if encoding in ('rgb8',):
-            return raw.reshape(h, w, 3).copy()
+            return np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3).copy()
         if encoding in ('bgr8',):
-            img = raw.reshape(h, w, 3)
+            img = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3)
             return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         if encoding in ('rgba8',):
-            img = raw.reshape(h, w, 4)
+            img = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
             return cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
         if encoding in ('bgra8',):
-            img = raw.reshape(h, w, 4)
+            img = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
             return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
-        # Fallback: try to reshape as BGR and convert
-        channels = len(raw) // (h * w) if h * w > 0 else 3
-        img = raw.reshape(h, w, channels)
-        if img.ndim == 2:
-            return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-        if img.shape[2] == 4:
-            return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
-        return img
+        if encoding in ('32FC1',):
+            # Depth image: normalize to 0-255 uint8 for RGB storage.
+            depth = np.frombuffer(data, dtype=np.float32).reshape(h, w)
+            finite = depth[np.isfinite(depth)]
+            if finite.size > 0:
+                d_min, d_max = float(finite.min()), float(finite.max())
+                scale = 255.0 / (d_max - d_min) if d_max > d_min else 1.0
+                img8 = np.clip((depth - d_min) * scale, 0, 255).astype(np.uint8)
+            else:
+                img8 = np.zeros((h, w), dtype=np.uint8)
+            return cv2.cvtColor(img8, cv2.COLOR_GRAY2RGB)
+        raise ValueError(
+            f"Unsupported raw image encoding '{encoding}'. "
+            "Add explicit handling in _decode_image_message() before using this camera."
+        )
 
     def timer_callback(self):
         """One-shot timer callback to trigger the conversion."""
@@ -299,21 +329,26 @@ class RosbagConversionNode(Node):
         latest_joint_time = 0.0
         latest_cmd_vel = [0.0] * len(self.base_keys) if self.has_mobile_base else None
         latest_cmd_vel_time = 0.0
-        # Per-joint commanded positions and timestamps (from JointTrajectory messages)
-        commanded_joints = {}       # {joint_name: position}
-        commanded_joints_time = {}  # {joint_name: timestamp}
+        latest_odom_vel = [0.0] * len(self.base_keys) if self.has_mobile_base else None
+        latest_odom_time = 0.0
+        # Per-joint commanded positions and timestamps.
+        # Populated from JointTrajectory (sparse) or controller_state reference (continuous).
+        # JointTrajectory takes precedence when both are available for a joint.
+        commanded_joints = {}        # {joint_name: position}
+        commanded_joints_time = {}   # {joint_name: timestamp}
+        commanded_joints_from_traj = set()  # joints already seen in a JointTrajectory msg
 
         # EE pose tracking — one prev_pose entry per configured EE
-        tf_tree = OfflineTFTree() if self.ee_pose_enabled else None
         prev_ee_poses = {name: None for name, _, _ in self.ee_configs}
 
         # Compute wanted topic set and filter connections
         wanted = set(self.camera_topics.values()) | {self.joint_states_topic}
-        wanted |= self.part_command_topics  # JointTrajectory topics (required for action)
+        wanted |= self.part_command_topics  # JointTrajectory topics (sparse commanded positions)
+        wanted |= self.part_state_topics    # controller_state topics (continuous reference positions)
         if self.has_mobile_base and self.cmd_vel_topic:
             wanted.add(self.cmd_vel_topic)
-        if self.ee_pose_enabled:
-            wanted |= {"/tf", "/tf_static"}
+        if self.has_mobile_base and self.odom_topic:
+            wanted.add(self.odom_topic)
 
         last_frame_time = 0.0  # timestamp of the last assembled frame (for freshness)
         min_frame_interval = 1.0 / self.fps if self.fps > 0 else 0.0  # downsampling interval
@@ -321,13 +356,34 @@ class RosbagConversionNode(Node):
 
         sync_deltas = []
 
+        # Pre-ingest the entire TF tree before the main pass so that static transforms
+        # (published after the first camera frame in message order) are always available.
+        tf_tree = None
+        if self.ee_pose_enabled:
+            tf_tree = OfflineTFTree()
+            with AnyReader([Path(bag_folder)]) as tf_reader:
+                tf_conns = [c for c in tf_reader.connections if c.topic in ("/tf", "/tf_static")]
+                for conn, _, raw in tf_reader.messages(connections=tf_conns):
+                    msg = tf_reader.deserialize(raw, conn.msgtype)
+                    tf_tree.ingest(msg, is_static=(conn.topic == "/tf_static"))
+
         with AnyReader([Path(bag_folder)]) as reader:
-            # Pre-validate topics — log each missing topic with its purpose
+            # Pre-validate topics.
+            # controller_state topics (part_state_topics) are optional fallbacks —
+            # their absence is logged as a warning, not a hard failure.
             available = {c.topic for c in reader.connections}
-            missing = wanted - available
-            if missing:
-                self.get_logger().error(f"Bag '{bag_folder}' is missing {len(missing)} required topic(s). Skipping episode.")
-                for m in sorted(missing):
+            required = wanted - self.part_state_topics
+            missing_required = required - available
+            missing_optional = self.part_state_topics - available
+            if missing_optional:
+                for m in sorted(missing_optional):
+                    self.get_logger().warning(
+                        f"Bag '{bag_folder}': optional controller_state topic missing: {m}. "
+                        "Arm deltas will fall back to zero for joints without trajectory commands."
+                    )
+            if missing_required:
+                self.get_logger().error(f"Bag '{bag_folder}' is missing {len(missing_required)} required topic(s). Skipping episode.")
+                for m in sorted(missing_required):
                     if m == self.joint_states_topic:
                         reason = "joint state observation"
                     elif m in self.part_command_topics:
@@ -344,7 +400,7 @@ class RosbagConversionNode(Node):
                 self.skipped_bags.append({
                     "bag": bag_folder,
                     "reason": "missing_topics",
-                    "missing": {m: reason for m in sorted(missing) for reason in [
+                    "missing": {m: reason for m in sorted(missing_required) for reason in [
                         "joint_state" if m == self.joint_states_topic else
                         "joint_command" if m in self.part_command_topics else
                         "base_velocity" if m == self.cmd_vel_topic else
@@ -371,19 +427,29 @@ class RosbagConversionNode(Node):
                     latest_joint_velocity = [joint_vel.get(feat, 0.0) for feat in self.action_features]
                     latest_joint_time = t_sec
 
-                elif tf_tree is not None and topic in ("/tf", "/tf_static"):
-                    msg = reader.deserialize(rawdata, connection.msgtype)
-                    tf_tree.ingest(msg, is_static=(topic == "/tf_static"))
-
                 elif topic in self.part_command_topics:
                     msg = reader.deserialize(rawdata, connection.msgtype)
-                    # JointTrajectory messages carry commanded positions
+                    # JointTrajectory: sparse but authoritative — mark joints as traj-sourced
                     if hasattr(msg, 'joint_names') and hasattr(msg, 'points') and len(msg.points) > 0:
                         target_point = msg.points[-1]  # final waypoint = target
                         t_cmd = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') and msg.header.stamp.sec > 0 else t_bag
                         for jn, pos in zip(msg.joint_names, target_point.positions):
                             commanded_joints[jn] = pos
                             commanded_joints_time[jn] = t_cmd
+                            commanded_joints_from_traj.add(jn)
+
+                elif topic in self.part_state_topics:
+                    msg = reader.deserialize(rawdata, connection.msgtype)
+                    # JointTrajectoryControllerState: continuous reference.positions gives
+                    # the controller's current setpoint — use as fallback for joints that
+                    # have never appeared in a JointTrajectory message.
+                    if hasattr(msg, 'joint_names') and hasattr(msg, 'reference'):
+                        t_cmd = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') and msg.header.stamp.sec > 0 else t_bag
+                        ref_positions = list(msg.reference.positions)
+                        for jn, pos in zip(msg.joint_names, ref_positions):
+                            if jn not in commanded_joints_from_traj:
+                                commanded_joints[jn] = pos
+                                commanded_joints_time[jn] = t_cmd
 
                 elif topic == self.cmd_vel_topic and self.has_mobile_base:
                     msg = reader.deserialize(rawdata, connection.msgtype)
@@ -397,6 +463,20 @@ class RosbagConversionNode(Node):
                     else:
                         latest_cmd_vel = [msg.linear.x, msg.angular.z]
                     latest_cmd_vel_time = t_sec
+
+                elif topic == self.odom_topic and self.has_mobile_base:
+                    msg = reader.deserialize(rawdata, connection.msgtype)
+                    t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') else t_bag
+                    twist = msg.twist.twist
+                    if self.has_cmd_vel_y and self.has_cmd_vel_z:
+                        latest_odom_vel = [twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.z]
+                    elif self.has_cmd_vel_y:
+                        latest_odom_vel = [twist.linear.x, twist.linear.y, twist.angular.z]
+                    elif self.has_cmd_vel_z:
+                        latest_odom_vel = [twist.linear.x, twist.linear.z, twist.angular.z]
+                    else:
+                        latest_odom_vel = [twist.linear.x, twist.angular.z]
+                    latest_odom_time = t_sec
 
                 elif topic in self.topic_to_cam:
                     cam_name = self.topic_to_cam[topic]
@@ -432,7 +512,14 @@ class RosbagConversionNode(Node):
                         img_times = list(image_times.values())
                         max_camera_diff = max(img_times) - min(img_times)
                         joint_diff = abs(image_times[self.primary_camera] - latest_joint_time)
-                        cmd_vel_diff = abs(image_times[self.primary_camera] - latest_cmd_vel_time) if self.has_mobile_base else 0.0
+                        # Only check cmd_vel staleness when at least one cmd_vel has been received.
+                        # latest_cmd_vel_time == 0.0 means the robot has been stationary since bag
+                        # start and no /cmd_vel was published yet — not a sync failure.
+                        cmd_vel_diff = (
+                            abs(image_times[self.primary_camera] - latest_cmd_vel_time)
+                            if self.has_mobile_base and latest_cmd_vel_time > 0.0
+                            else 0.0
+                        )
                         max_sync = max(max_camera_diff, joint_diff, cmd_vel_diff)
 
                         if max_sync > self.sync_threshold:
@@ -448,53 +535,72 @@ class RosbagConversionNode(Node):
                                 skipped_downsample += 1
                                 continue
 
-                        # Skip static frames: skip if no joint velocity exceeds threshold
+                        # Skip static frames: skip if no joint OR base velocity exceeds threshold
                         if self.skip_static_threshold > 0.0 and latest_joint_velocity is not None:
-                            if not np.any(np.abs(latest_joint_velocity) > self.skip_static_threshold):
+                            joint_moving = np.any(np.abs(latest_joint_velocity) > self.skip_static_threshold)
+                            base_moving = (
+                                self.has_mobile_base
+                                and latest_cmd_vel is not None
+                                and np.any(np.abs(latest_cmd_vel) > self.skip_static_threshold)
+                            )
+                            if not joint_moving and not base_moving:
                                 skipped_static += 1
                                 continue
 
-                        # State: measured joint positions only (no cmd_vel)
-                        state = latest_joint_state
+                        # State: measured joint positions + odom base velocity (matches deploy observation)
+                        odom_vel = latest_odom_vel if (self.has_mobile_base and latest_odom_vel is not None) else []
+                        state = latest_joint_state + odom_vel
                         # Action: commanded joint positions, fall back to measured if not yet received
                         action = [
                             commanded_joints.get(feat, latest_joint_state[i])
                             for i, feat in enumerate(self.action_features)
                         ]
+
+                        # Append base velocity to action so PI05 trains on all dims
+                        base_vel = latest_cmd_vel if (self.has_mobile_base and latest_cmd_vel is not None) else []
+                        action_full = action + base_vel
+
                         frame = {
                             "task": instruction,
-                            "action": torch.tensor(action, dtype=torch.float32),
+                            "action": torch.tensor(action_full, dtype=torch.float32),
                             "observation.state": torch.tensor(state, dtype=torch.float32),
                         }
 
                         # Freshness masks
                         joint_dim = len(self.action_features)
+                        odom_fresh = self.has_mobile_base and latest_odom_time > last_frame_time
                         state_fresh = latest_joint_time > last_frame_time
-                        frame["observation.state.is_fresh"] = torch.full(
-                            (joint_dim,), state_fresh, dtype=torch.bool
+                        odom_freshness = [odom_fresh] * len(self.base_keys) if self.has_mobile_base else []
+                        frame["observation.state.is_fresh"] = torch.tensor(
+                            [state_fresh] * joint_dim + odom_freshness, dtype=torch.bool
                         )
 
-                        # Per-joint action freshness based on individual command timestamps
+                        # Per-joint freshness + base freshness appended
                         action_freshness = [
                             commanded_joints_time.get(feat, 0.0) > last_frame_time
                             for feat in self.action_features
                         ]
+                        if self.has_mobile_base:
+                            cmd_vel_fresh = latest_cmd_vel_time > last_frame_time
+                            action_freshness += [cmd_vel_fresh] * len(self.base_keys)
                         frame["action.is_fresh"] = torch.tensor(action_freshness, dtype=torch.bool)
 
-                        # Delta action: commanded - measured per joint
+                        # Delta action: commanded - measured per joint; base dims are velocity (not delta of pos)
                         delta = [action[i] - state[i] for i in range(joint_dim)]
-                        frame["action.delta"] = torch.tensor(delta, dtype=torch.float32)
-                        # Delta freshness requires both command and state to be fresh
+                        delta_base = base_vel  # base velocity IS the delta (no absolute base obs)
+                        frame["action.delta"] = torch.tensor(delta + delta_base, dtype=torch.float32)
+                        # Delta freshness
                         delta_freshness = [
                             action_freshness[i] and state_fresh
                             for i in range(joint_dim)
                         ]
+                        if self.has_mobile_base:
+                            delta_freshness += [cmd_vel_fresh] * len(self.base_keys)
                         frame["action.delta.is_fresh"] = torch.tensor(delta_freshness, dtype=torch.bool)
 
-                        # Base velocity action (separate feature, inherently delta)
+                        # Base velocity also stored as standalone feature for inspection
                         if self.has_mobile_base:
                             frame["action.base"] = torch.tensor(latest_cmd_vel, dtype=torch.float32)
-                            cmd_vel_fresh = latest_cmd_vel_time > last_frame_time
                             frame["action.base.is_fresh"] = torch.full(
                                 (len(self.base_keys),), cmd_vel_fresh, dtype=torch.bool
                             )
@@ -616,7 +722,8 @@ class RosbagConversionNode(Node):
                     parts = morphology.get("parts", [])
 
                     self.action_features = []  # joint names (excludes mobile base)
-                    self.part_command_topics = set()  # topics carrying joint commands
+                    self.part_command_topics = set()  # topics carrying JointTrajectory commands
+                    self.part_state_topics = set()    # topics carrying JointTrajectoryControllerState
                     for part in parts:
                         part_info = morphology.get(part, {})
                         if part_info.get("is_actionable", False):
@@ -627,10 +734,19 @@ class RosbagConversionNode(Node):
                                 self.cmd_vel_topic = part_info.get("cmd_vel_topic", "/cmd_vel")
                                 self.odom_topic = part_info.get("odom_topic", "")
                             else:
-                                self.action_features.extend(part_info.get("joint_names", []))
+                                joints = part_info.get("joint_names", [])
+                                excluded = [j for j in joints if j in self.excluded_joints]
+                                if excluded:
+                                    self.get_logger().info(
+                                        f"Excluding mimic/unwanted joints from '{part}': {excluded}"
+                                    )
+                                self.action_features.extend(j for j in joints if j not in self.excluded_joints)
                                 cmd_topic = part_info.get("command_topic", "")
                                 if cmd_topic:
                                     self.part_command_topics.add(cmd_topic)
+                                state_topic = part_info.get("state_topic", "")
+                                if state_topic:
+                                    self.part_state_topics.add(state_topic)
 
                     if not self.action_features and not self.has_mobile_base:
                         self.get_logger().error("No actionable joints and no active mobile base found. Aborting.")
@@ -736,12 +852,30 @@ class RosbagConversionNode(Node):
             else:
                 unresolved_cameras.append(cam_name)
 
+        def _resolve_bag_group(meta_src: str, bag_group: str, task_name: str = "") -> str:
+            """Return first existing candidate for a bag group path (absolute or relative)."""
+            if not bag_group.startswith("/"):
+                candidates = [os.path.join(meta_src, bag_group)]
+            else:
+                tail = os.path.join(*bag_group.split(os.sep)[-2:]) if os.sep in bag_group else bag_group
+                candidates = [
+                    bag_group,
+                    os.path.join(meta_src, tail),
+                    os.path.join(meta_src, os.path.basename(bag_group)),
+                ]
+            if task_name:
+                candidates.append(os.path.join(meta_src, task_name))
+            for c in candidates:
+                if os.path.isdir(c):
+                    return c
+            return candidates[0]
+
         if unresolved_cameras:
             candidate_bag_dirs = []
             for _, task_info in all_tasks:
                 meta_src = task_info.get("_meta_source_dir", self.rosbag_directory)
                 bag_group = task_info.get("bag_path", task_info.get("bag_dir", ""))
-                group_dir = os.path.join(meta_src, bag_group) if not bag_group.startswith("/") else bag_group
+                group_dir = _resolve_bag_group(meta_src, bag_group)
                 if not os.path.isdir(group_dir):
                     continue
                 for ep in sorted(os.listdir(group_dir)):
@@ -856,19 +990,25 @@ class RosbagConversionNode(Node):
 
         joint_dim = len(self.action_features)
         base_dim = len(self.base_keys)
+        # Total action dim: joints + base velocity (appended so PI05 trains on both)
+        total_action_dim = joint_dim + base_dim
+        total_action_names = self.action_features + self.base_keys
+        # Total state dim: joints + odom base velocity (mirrors deploy observation.state)
+        total_state_dim = joint_dim + base_dim
+        total_state_names = self.action_features + self.base_keys
 
         features = {
-            # Joint action: commanded positions (absolute)
-            "action": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
-            "action.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
-            # Joint action delta: commanded - measured
-            "action.delta": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
-            "action.delta.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
-            # Joint state: measured positions from /joint_states
-            "observation.state": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
-            "observation.state.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
+            # Joint action: commanded positions (absolute) + base velocity appended
+            "action": {"dtype": "float32", "shape": (total_action_dim,), "names": total_action_names},
+            "action.is_fresh": {"dtype": "bool", "shape": (total_action_dim,), "names": None},
+            # Joint action delta: (commanded - measured) per joint, zeros for base dims
+            "action.delta": {"dtype": "float32", "shape": (total_action_dim,), "names": total_action_names},
+            "action.delta.is_fresh": {"dtype": "bool", "shape": (total_action_dim,), "names": None},
+            # Joint state: measured positions + odom base velocity (matches deploy observation)
+            "observation.state": {"dtype": "float32", "shape": (total_state_dim,), "names": total_state_names},
+            "observation.state.is_fresh": {"dtype": "bool", "shape": (total_state_dim,), "names": None},
         }
-        # Base velocity action (separate — already delta, different units from joint positions)
+        # Base velocity also kept as standalone feature for inspection / non-PI05 policies
         if self.has_mobile_base:
             features["action.base"] = {"dtype": "float32", "shape": (base_dim,), "names": self.base_keys}
             features["action.base.is_fresh"] = {"dtype": "bool", "shape": (base_dim,), "names": None}
@@ -891,20 +1031,30 @@ class RosbagConversionNode(Node):
                     "names": ["channels", "height", "width"],
                 }
 
-        # Resolve output root (mirrors LeRobot default logic) so we can check existence
+        # Dataset lives at lerobotdataset/<dataset_name>/ so each dataset has its own subfolder
         import shutil
-        from lerobot.utils.constants import HF_LEROBOT_HOME
-        dataset_root = self.output_directory if self.output_directory else HF_LEROBOT_HOME / self.dataset_name
+        dataset_root = self.output_directory / self.dataset_name
         if self.overwrite and dataset_root.exists():
             self.get_logger().warn(f"overwrite=true: deleting existing dataset at {dataset_root}")
             shutil.rmtree(dataset_root)
+        elif not self.overwrite and dataset_root.exists():
+            self.get_logger().info(
+                f"Dataset already exists at {dataset_root} and overwrite=false. "
+                "Skipping conversion."
+            )
+            if self.push_to_hub:
+                self.get_logger().info(f"Pushing existing dataset to HuggingFace Hub as '{self.dataset_name}'...")
+                existing = LeRobotDataset(self.dataset_name, root=dataset_root)
+                existing.push_to_hub(private=self.hub_private)
+                self.get_logger().info("Push to Hub completed!")
+            return
 
         # Create dataset
         dataset = LeRobotDataset.create(
             repo_id=self.dataset_name,
             fps=self.fps,
             features=features,
-            root=self.output_directory,
+            root=dataset_root,
             robot_type=robot_info.get("morphology", {}).get("type"),
             video_backend="auto",
             vcodec=self.vcodec,
@@ -915,19 +1065,23 @@ class RosbagConversionNode(Node):
         if all_users:
             dataset.meta.info["user_info"] = all_users if len(all_users) > 1 else all_users[0]
 
-        # Count total episodes for progress logging
+        # Count total episodes for progress logging — mirror the same fallback logic as the loop below.
+        def _count_episodes(group_dir: str) -> int:
+            if not os.path.isdir(group_dir):
+                return 0
+            return sum(
+                1 for ep in os.listdir(group_dir)
+                if os.path.isdir(os.path.join(group_dir, ep))
+                and any(f.endswith(".db3") or f.endswith(".mcap")
+                        for f in os.listdir(os.path.join(group_dir, ep)))
+            )
+
         total_episodes = 0
-        for _, task_info in all_tasks:
+        for task_name, task_info in all_tasks:
             meta_src = task_info.get("_meta_source_dir", self.rosbag_directory)
             bag_group = task_info.get("bag_path", task_info.get("bag_dir", ""))
-            group_dir = os.path.join(meta_src, bag_group) if not bag_group.startswith("/") else bag_group
-            if os.path.isdir(group_dir):
-                total_episodes += sum(
-                    1 for ep in os.listdir(group_dir)
-                    if os.path.isdir(os.path.join(group_dir, ep))
-                    and any(f.endswith(".db3") or f.endswith(".mcap")
-                            for f in os.listdir(os.path.join(group_dir, ep)))
-                )
+            group_dir = _resolve_bag_group(meta_src, bag_group, task_name)
+            total_episodes += _count_episodes(group_dir)
 
         current_episode_num = 0
 
@@ -935,16 +1089,41 @@ class RosbagConversionNode(Node):
         for _, (task_name, task_info) in enumerate(all_tasks):
             meta_src = task_info.get("_meta_source_dir", self.rosbag_directory)
             bag_group = task_info.get("bag_path", task_info.get("bag_dir", task_name))
-            group_dir = os.path.join(meta_src, bag_group) if not bag_group.startswith("/") else bag_group
+            group_dir = _resolve_bag_group(meta_src, bag_group, task_name)
 
             if not os.path.isdir(group_dir):
-                group_dir = os.path.join(meta_src, task_name)
-                if not os.path.isdir(group_dir):
-                    self.get_logger().warn(f"Directory not found: {group_dir}")
-                    continue
+                # Reconstruct the candidates list for the error message
+                if not bag_group.startswith("/"):
+                    candidates = [os.path.join(meta_src, bag_group), os.path.join(meta_src, task_name)]
+                else:
+                    tail = os.path.join(*bag_group.split(os.sep)[-2:]) if os.sep in bag_group else bag_group
+                    candidates = [
+                        bag_group,
+                        os.path.join(meta_src, tail),
+                        os.path.join(meta_src, os.path.basename(bag_group)),
+                        os.path.join(meta_src, task_name),
+                    ]
+                self.get_logger().warn(
+                    f"Task '{task_name}': bag directory not found. Tried: {candidates}. "
+                    "If bags were recorded on another machine, set rosbag_directory to the "
+                    "local root so relative paths resolve correctly."
+                )
+                self.skipped_bags.append({
+                    "bag": bag_group,
+                    "reason": "directory_not_found",
+                    "candidates_tried": candidates,
+                })
+                continue
 
             episodes_dict = task_info.get("episodes", {})
-            instruction = task_info.get("label", task_info.get("instructions", task_name))
+            raw_label = task_info.get("label", task_info.get("instructions", ""))
+            instruction = raw_label.strip() if isinstance(raw_label, str) else ""
+            if not instruction:
+                self.get_logger().error(
+                    f"Task '{task_name}' has an empty label. "
+                    "Set 'label' in recorded_bags_meta.yaml before converting. Aborting."
+                )
+                return
 
             for ep in sorted(os.listdir(group_dir)):
                 ep_path = os.path.join(group_dir, ep)
