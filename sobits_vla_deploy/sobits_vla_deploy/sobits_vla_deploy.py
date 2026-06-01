@@ -171,6 +171,9 @@ class LeRobotDeployNode(Node):
         self._shutdown_inference = False
 
         self._chunk_buffer = ActionChunkBuffer(self._aggregate_fn_name)
+        self._single_step_result: Optional[Dict[str, float]] = None
+        self._single_step_lock = Lock()
+        self._task_label: str = ''
 
         qos = QoSProfile(depth=1)
 
@@ -178,6 +181,20 @@ class LeRobotDeployNode(Node):
             Joy,
             self._joy_topic,
             self._on_joy,
+            qos,
+            callback_group=self._cb_group,
+        )
+        self._play_sub = self.create_subscription(
+            Bool,
+            '/vla/play',
+            self._on_play,
+            qos,
+            callback_group=self._cb_group,
+        )
+        self._task_sub = self.create_subscription(
+            String,
+            '/vla/task',
+            self._on_task,
             qos,
             callback_group=self._cb_group,
         )
@@ -543,6 +560,7 @@ class LeRobotDeployNode(Node):
         self._chunk_buffer.clear()
         if hasattr(self._policy, 'reset'):
             self._policy.reset()
+        self._task_label = request.label
         self.get_logger().info('Task label updated to {!r}.'.format(request.label))
         response.success = True
         response.message = 'succeeded'
@@ -561,6 +579,26 @@ class LeRobotDeployNode(Node):
                 self.get_logger().info('VLA execution stopped by gamepad stop button.')
             self._play_enabled = False
             self._chunk_buffer.clear()
+
+    def _on_play(self, msg: Bool) -> None:
+        if msg.data and not self._play_enabled:
+            self.get_logger().info('VLA execution started via /vla/play topic.')
+            self._play_enabled = True
+            with self._inference_cond:
+                self._inference_cond.notify_all()
+        elif not msg.data and self._play_enabled:
+            self.get_logger().info('VLA execution stopped via /vla/play topic.')
+            self._play_enabled = False
+            self._chunk_buffer.clear()
+
+    def _on_task(self, msg: String) -> None:
+        label = msg.data.strip()
+        if label:
+            self._chunk_buffer.clear()
+            if hasattr(self._policy, 'reset'):
+                self._policy.reset()
+            self._task_label = label
+            self.get_logger().info('Task label updated to {!r} via /vla/task topic.'.format(label))
 
     def _any_button_pressed(self, msg: Joy, button_indices: List[int]) -> bool:
         for idx in button_indices:
