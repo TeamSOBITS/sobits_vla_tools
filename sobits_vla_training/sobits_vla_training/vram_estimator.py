@@ -43,11 +43,21 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-POLICY_VRAM_GB: dict[str, float] = {
-    'smolvla': 8.0,
-    'pi0': 13.0,
-    'pi05': 13.5,
-    'pi0_fast': 11.0,
+# Static backbone footprint (weights + optimizer states, batch-independent).
+POLICY_BACKBONE_GB: dict[str, float] = {
+    'smolvla': 4.0,
+    'pi0': 10.0,
+    'pi05': 11.0,
+    'pi0_fast': 8.5,
+}
+
+# Activation memory per sample at batch_size=1, bf16, chunk_size=50, 2 cameras.
+# pi05/pi0 are PaliGemma-based: high activation cost due to vision encoder + action expert.
+POLICY_ACTIVATION_GB_PER_SAMPLE: dict[str, float] = {
+    'smolvla': 0.5,
+    'pi0': 1.1,
+    'pi05': 1.1,
+    'pi0_fast': 0.7,
 }
 
 _SYSTEM_OVERHEAD_GB = 0.8
@@ -67,7 +77,7 @@ def check_vram(
     policy_type : str
         One of the registered policy names.
     batch_size : int
-        Training batch size (scales estimate linearly above 8).
+        Training batch size.
     limit_gb : float
         Hard VRAM ceiling in gigabytes.
     verbose : bool
@@ -92,9 +102,10 @@ def check_vram(
     total_gb = torch.cuda.get_device_properties(device).total_memory / 1024 ** 3
     reserved_gb = torch.cuda.memory_reserved(device) / 1024 ** 3
 
-    base_policy_gb = POLICY_VRAM_GB.get(policy_type, 10.0)
-    activation_scale = max(1.0, batch_size / 8.0)
-    estimated_gb = (base_policy_gb * activation_scale) + _SYSTEM_OVERHEAD_GB + reserved_gb
+    # Backbone is constant regardless of batch size; only activations scale.
+    backbone_gb = POLICY_BACKBONE_GB.get(policy_type, 8.0)
+    act_per_sample_gb = POLICY_ACTIVATION_GB_PER_SAMPLE.get(policy_type, 0.6)
+    estimated_gb = backbone_gb + (act_per_sample_gb * batch_size) + _SYSTEM_OVERHEAD_GB + reserved_gb
 
     if verbose or estimated_gb > limit_gb:
         logger.info(
