@@ -737,30 +737,12 @@ class RosbagConversionNode(Node):
             else:
                 unresolved_cameras.append(cam_name)
 
-        def _resolve_bag_group(meta_src: str, bag_group: str, task_name: str = "") -> str:
-            """Return first existing candidate for a bag group path (absolute or relative)."""
-            if not bag_group.startswith("/"):
-                candidates = [os.path.join(meta_src, bag_group)]
-            else:
-                tail = os.path.join(*bag_group.split(os.sep)[-2:]) if os.sep in bag_group else bag_group
-                candidates = [
-                    bag_group,
-                    os.path.join(meta_src, tail),
-                    os.path.join(meta_src, os.path.basename(bag_group)),
-                ]
-            if task_name:
-                candidates.append(os.path.join(meta_src, task_name))
-            for c in candidates:
-                if os.path.isdir(c):
-                    return c
-            return candidates[0]
-
         if unresolved_cameras:
             candidate_bag_dirs = []
             for _, task_info in all_tasks:
                 meta_src = task_info.get("_meta_source_dir", self.rosbag_directory)
                 bag_group = task_info.get("bag_path", task_info.get("bag_dir", ""))
-                group_dir = _resolve_bag_group(meta_src, bag_group)
+                group_dir = os.path.join(meta_src, bag_group) if not bag_group.startswith("/") else bag_group
                 if not os.path.isdir(group_dir):
                     continue
                 for ep in sorted(os.listdir(group_dir)):
@@ -934,23 +916,19 @@ class RosbagConversionNode(Node):
         if all_users:
             dataset.meta.info["user_info"] = all_users if len(all_users) > 1 else all_users[0]
 
-        # Count total episodes for progress logging — mirror the same fallback logic as the loop below.
-        def _count_episodes(group_dir: str) -> int:
-            if not os.path.isdir(group_dir):
-                return 0
-            return sum(
-                1 for ep in os.listdir(group_dir)
-                if os.path.isdir(os.path.join(group_dir, ep))
-                and any(f.endswith(".db3") or f.endswith(".mcap")
-                        for f in os.listdir(os.path.join(group_dir, ep)))
-            )
-
+        # Count total episodes for progress logging
         total_episodes = 0
-        for task_name, task_info in all_tasks:
+        for _, task_info in all_tasks:
             meta_src = task_info.get("_meta_source_dir", self.rosbag_directory)
             bag_group = task_info.get("bag_path", task_info.get("bag_dir", ""))
-            group_dir = _resolve_bag_group(meta_src, bag_group, task_name)
-            total_episodes += _count_episodes(group_dir)
+            group_dir = os.path.join(meta_src, bag_group) if not bag_group.startswith("/") else bag_group
+            if os.path.isdir(group_dir):
+                total_episodes += sum(
+                    1 for ep in os.listdir(group_dir)
+                    if os.path.isdir(os.path.join(group_dir, ep))
+                    and any(f.endswith(".db3") or f.endswith(".mcap")
+                            for f in os.listdir(os.path.join(group_dir, ep)))
+                )
 
         current_episode_num = 0
 
@@ -958,41 +936,16 @@ class RosbagConversionNode(Node):
         for _, (task_name, task_info) in enumerate(all_tasks):
             meta_src = task_info.get("_meta_source_dir", self.rosbag_directory)
             bag_group = task_info.get("bag_path", task_info.get("bag_dir", task_name))
-            group_dir = _resolve_bag_group(meta_src, bag_group, task_name)
+            group_dir = os.path.join(meta_src, bag_group) if not bag_group.startswith("/") else bag_group
 
             if not os.path.isdir(group_dir):
-                # Reconstruct the candidates list for the error message
-                if not bag_group.startswith("/"):
-                    candidates = [os.path.join(meta_src, bag_group), os.path.join(meta_src, task_name)]
-                else:
-                    tail = os.path.join(*bag_group.split(os.sep)[-2:]) if os.sep in bag_group else bag_group
-                    candidates = [
-                        bag_group,
-                        os.path.join(meta_src, tail),
-                        os.path.join(meta_src, os.path.basename(bag_group)),
-                        os.path.join(meta_src, task_name),
-                    ]
-                self.get_logger().warn(
-                    f"Task '{task_name}': bag directory not found. Tried: {candidates}. "
-                    "If bags were recorded on another machine, set rosbag_directory to the "
-                    "local root so relative paths resolve correctly."
-                )
-                self.skipped_bags.append({
-                    "bag": bag_group,
-                    "reason": "directory_not_found",
-                    "candidates_tried": candidates,
-                })
-                continue
+                group_dir = os.path.join(meta_src, task_name)
+                if not os.path.isdir(group_dir):
+                    self.get_logger().warn(f"Directory not found: {group_dir}")
+                    continue
 
             episodes_dict = task_info.get("episodes", {})
-            raw_label = task_info.get("label", task_info.get("instructions", ""))
-            instruction = raw_label.strip() if isinstance(raw_label, str) else ""
-            if not instruction:
-                self.get_logger().error(
-                    f"Task '{task_name}' has an empty label. "
-                    "Set 'label' in recorded_bags_meta.yaml before converting. Aborting."
-                )
-                return
+            instruction = task_info.get("label", task_info.get("instructions", task_name))
 
             for ep in sorted(os.listdir(group_dir)):
                 ep_path = os.path.join(group_dir, ep)
