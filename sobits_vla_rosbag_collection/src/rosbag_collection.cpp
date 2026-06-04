@@ -48,6 +48,14 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     std::bind(&RosbagCollection::subtaskUpdateCallback, this, std::placeholders::_1,
       std::placeholders::_2));
 
+  status_pub_ = this->create_publisher<std_msgs::msg::String>(
+    this->get_name() + std::string("/vla_record_status"),
+    rclcpp::QoS(10));
+
+  status_timer_ = this->create_wall_timer(
+    std::chrono::seconds(1),
+    std::bind(&RosbagCollection::publishCurrentStatus, this));
+
   // Declare and get parameters
   // (1) Robot info parameters
   this->declare_parameter<std::string>("robot_info.name", "sobit_robot");
@@ -204,6 +212,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   // Init values
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;      // PAUSED, RECORDING, STOPPED, ERROR
   previous_state_ = current_state_;
+  publishStatus("idle");
 
   current_task_name_ = "default task";
   previous_task_name_ = current_task_name_;
@@ -320,6 +329,32 @@ std::string RosbagCollection::getTimestampString()
   std::ostringstream ss;
   ss << std::put_time(std::localtime(&time_t_now), "%Y%m%d_%H%M%S");
   return ss.str();
+}
+
+void RosbagCollection::publishStatus(const std::string & status)
+{
+  last_status_text_ = status;
+
+  if (!status_pub_) {
+    return;
+  }
+
+  std_msgs::msg::String msg;
+  msg.data = status;
+  status_pub_->publish(msg);
+}
+
+void RosbagCollection::publishCurrentStatus()
+{
+  if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
+    publishStatus("recording");
+  } else if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
+    publishStatus("paused");
+  } else if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::ERROR) {
+    publishStatus("error");
+  } else {
+    publishStatus(last_status_text_.empty() ? "idle" : last_status_text_);
+  }
 }
 
 void RosbagCollection::buildTopicList()
@@ -706,6 +741,7 @@ void RosbagCollection::createRosbag()
   max_duration_triggered_ = false;
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+  publishStatus("recording_started");
 
   // Configure rosbag2 transport options
   rosbag2_storage::StorageOptions storage_options;
@@ -750,6 +786,7 @@ void RosbagCollection::createRosbag()
         } catch (const std::exception & e) {
           RCLCPP_ERROR(this->get_logger(), "Error during bag recording: %s", e.what());
           current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+          publishStatus("error");
         }
   });
 
@@ -793,6 +830,7 @@ void RosbagCollection::removeRosbag()
           current_bag_path_.c_str(), e.what());
       previous_state_ = current_state_;
       current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+      publishStatus("error");
       throw std::runtime_error("Failed to remove bag directory");
     }
   }
@@ -805,6 +843,7 @@ void RosbagCollection::removeRosbag()
 
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
+  publishStatus("deleted");
 
   RCLCPP_INFO(this->get_logger(), "Rosbag removed successfully");
 }
@@ -820,6 +859,7 @@ bool RosbagCollection::saveRosbag()
     RCLCPP_WARN(this->get_logger(), "No rosbag process to terminate");
     previous_state_ = current_state_;
     current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
+    publishStatus("idle");
     return false;
   }
 
@@ -855,6 +895,7 @@ bool RosbagCollection::saveRosbag()
       std::filesystem::remove_all(current_bag_path_);
     }
     removeEpisodeFromYaml();
+    publishStatus("discarded");
     return false;
   }
 
@@ -866,10 +907,12 @@ bool RosbagCollection::saveRosbag()
       std::filesystem::remove_all(current_bag_path_);
     }
     removeEpisodeFromYaml();
+    publishStatus("discarded");
     return false;
   }
 
   updateEpisodeYaml();
+  publishStatus("saved");
 
   RCLCPP_INFO(this->get_logger(), "Rosbag saved successfully (duration: %.1fs)", duration_sec);
   return true;
@@ -1472,6 +1515,7 @@ void RosbagCollection::execute(
     RCLCPP_WARN(this->get_logger(),
         "Please set a task name via the vla_task_update service before starting a recording.");
     result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+    publishStatus("error");
     goal_handle->abort(result);
     return;
   }
@@ -1479,6 +1523,7 @@ void RosbagCollection::execute(
   if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::ERROR) {
     RCLCPP_WARN(this->get_logger(), "Cannot start/resume recording while in ERROR state");
     result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+    publishStatus("error");
     goal_handle->abort(result);
     return;
   }
@@ -1490,6 +1535,7 @@ void RosbagCollection::execute(
       RCLCPP_WARN(this->get_logger(), "Cannot start/resume recording while already in state: %d",
           current_state_);
       result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+      publishStatus("error");
       goal_handle->abort(result);
       return;
     }
@@ -1503,6 +1549,7 @@ void RosbagCollection::execute(
       if (recorder_node_) {
         recorder_node_->resume();
         current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+        publishStatus("resumed");
         result->status = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
         goal_handle->succeed(result);
         RCLCPP_INFO(this->get_logger(), "Recording resumed successfully");
@@ -1512,6 +1559,7 @@ void RosbagCollection::execute(
     if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
       RCLCPP_WARN(this->get_logger(), "Cannot pause while not recording");
       result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+      publishStatus("error");
       goal_handle->abort(result);
       return;
     }
@@ -1519,6 +1567,7 @@ void RosbagCollection::execute(
     if (recorder_node_) {
       recorder_node_->pause();
       current_state_ = sobits_interfaces::action::VlaRecordState_Result::PAUSED;
+      publishStatus("paused");
       result->status = sobits_interfaces::action::VlaRecordState_Result::PAUSED;
       goal_handle->succeed(result);
       RCLCPP_INFO(this->get_logger(), "Recording paused successfully");
@@ -1527,6 +1576,7 @@ void RosbagCollection::execute(
     if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
       RCLCPP_WARN(this->get_logger(), "Cannot resume while not paused");
       result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+      publishStatus("error");
       goal_handle->abort(result);
       return;
     }
@@ -1534,6 +1584,7 @@ void RosbagCollection::execute(
     if (recorder_node_) {
       recorder_node_->resume();
       current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+      publishStatus("resumed");
       result->status = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
       goal_handle->succeed(result);
       RCLCPP_INFO(this->get_logger(), "Recording resumed successfully");
@@ -1543,6 +1594,7 @@ void RosbagCollection::execute(
       RCLCPP_WARN(this->get_logger(),
           "Cannot save recording while not in RECORDING or PAUSED state");
       result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+      publishStatus("error");
       goal_handle->abort(result);
       return;
     }
@@ -1563,6 +1615,7 @@ void RosbagCollection::execute(
   } else {
     RCLCPP_ERROR(this->get_logger(), "Unknown command received: %d", goal->command);
     result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+    publishStatus("error");
     goal_handle->abort(result);
     return;
   }
@@ -1579,6 +1632,7 @@ void RosbagCollection::taskUpdateCallback(
     RCLCPP_WARN(this->get_logger(), "Cannot update task name while recording is in progress");
     response->success = false;
     response->message = "Cannot update task name while recording is in progress";
+    publishStatus("error");
     return;
   }
 
@@ -1617,6 +1671,7 @@ void RosbagCollection::taskUpdateCallback(
   response->success = true;
   response->message = "Task name updated successfully and rosbag YAML file updated";
   task_has_been_set_ = true;
+  publishStatus("task_set: " + current_task_name_);
 }
 
 void RosbagCollection::subtaskUpdateCallback(

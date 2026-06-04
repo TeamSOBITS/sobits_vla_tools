@@ -32,6 +32,7 @@
   <depend>sensor_msgs</depend>
   <depend>rcl_interfaces</depend>
   <depend>sobits_interfaces</depend>
+  <depend>std_msgs</depend>
   <depend>ros2bag</depend>
   <depend>rosbag2</depend>
   <depend>rosbag2_compression</depend>
