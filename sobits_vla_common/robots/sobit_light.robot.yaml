@@ -1,0 +1,99 @@
+schema_version: 1
+robot_id: sobit_light
+
+joint_states_topic: /sobit_light/joint_states
+
+groups:
+  - name: head
+    command_topic: /sobit_light/head_joint_controller/joint_trajectory
+    command_action: /sobit_light/head_joint_controller/follow_joint_trajectory
+    max_joint_delta: 0.10
+    active: true
+    joints:
+      - ros_name: head_yaw_joint
+        feature: head_yaw_joint
+      - ros_name: head_pitch_joint
+        feature: head_pitch_joint
+
+  - name: manipulator
+    command_topic: /sobit_light/arm_joint_controller/joint_trajectory
+    command_action: /sobit_light/arm_joint_controller/follow_joint_trajectory
+    max_joint_delta: 0.15
+    active: true
+    joints:
+      - ros_name: arm_shoulder_roll_joint
+        feature: arm_shoulder_roll_joint
+      - ros_name: arm_shoulder_pitch_joint
+        feature: arm_shoulder_pitch_joint
+      - ros_name: arm_shoulder_pitch_sub_joint
+        feature: arm_shoulder_pitch_sub_joint
+      - ros_name: arm_elbow_pitch_joint
+        feature: arm_elbow_pitch_joint
+      - ros_name: arm_forearm_roll_joint
+        feature: arm_forearm_roll_joint
+      - ros_name: arm_wrist_pitch_joint
+        feature: arm_wrist_pitch_joint
+      - ros_name: arm_wrist_roll_joint
+        feature: arm_wrist_roll_joint
+
+  - name: end_effector
+    command_topic: /sobit_light/hand_joint_controller/joint_trajectory
+    command_action: /sobit_light/hand_joint_controller/follow_joint_trajectory
+    max_joint_delta: 0.30
+    active: true
+    joints:
+      - ros_name: hand_joint
+        feature: hand_joint
+      - ros_name: hand_sub_joint
+        feature: hand_sub_joint
+
+mobile_base:
+  command_topic: /sobit_light/manual_control/cmd_vel
+  odom_topic: /sobit_light/odometry/odometry
+  has_vel_x: true
+  has_vel_y: false
+  has_vel_z: false
+  has_vel_theta: true
+  max_vel_x: 0.0
+  max_vel_y: 0.0
+  max_vel_z: 0.0
+  max_vel_theta: 0.0
+  features: [x.vel, theta.vel]
+
+sensors:
+  cameras:
+    - name: head_camera
+      compressed_topic: /sobit_light/head_camera/color/image_raw/compressed
+      raw_topic: /sobit_light/head_camera/color/image_raw
+      info_topic: /sobit_light/head_camera/color/camera_info
+      encoding: ""
+      compressed: true
+      active: true
+    - name: hand_camera
+      compressed_topic: /sobit_light/hand_camera/color/image_raw/compressed
+      raw_topic: /sobit_light/hand_camera/color/image_raw
+      info_topic: /sobit_light/hand_camera/color/camera_info
+      encoding: ""
+      compressed: true
+      active: true
+    - name: camera_front
+      compressed_topic: /sobit_light/front_camera/image_raw/compressed
+      raw_topic: /sobit_light/front_camera/image_raw
+      info_topic: /sobit_light/front_camera/camera_info
+      encoding: ""
+      compressed: true
+      active: false
+    - name: camera_rear
+      compressed_topic: /sobit_light/back_camera/image_raw/compressed
+      raw_topic: /sobit_light/back_camera/image_raw
+      info_topic: /sobit_light/back_camera/camera_info
+      encoding: ""
+      compressed: true
+      active: false
+
+ee_poses: []
+
+excluded_joints:
+  - hand_sub_joint
+  - base_l_drive_wheel_joint
+  - base_r_drive_wheel_joint

@@ -1,0 +1,159 @@
+schema_version: 1
+robot_id: sobit_home
+
+joint_states_topic: /sobit_home/joint_states
+
+groups:
+  - name: head
+    command_topic: /sobit_home/head_position_controller/joint_trajectory
+    command_action: /sobit_home/head_position_controller/follow_joint_trajectory
+    max_joint_delta: 0.10
+    active: true
+    joints:
+      - ros_name: head_pan_joint
+        feature: head_pan_joint
+      - ros_name: head_tilt_joint
+        feature: head_tilt_joint
+
+  - name: body
+    command_topic: /sobit_home/body_position_controller/joint_trajectory
+    command_action: /sobit_home/body_position_controller/follow_joint_trajectory
+    max_joint_delta: 0.02
+    active: true
+    joints:
+      - ros_name: body_lift_joint
+        feature: body_lift_joint
+
+  - name: arm_left
+    command_topic: /sobit_home/arm_left_position_controller/joint_trajectory
+    command_action: /sobit_home/arm_left_position_controller/follow_joint_trajectory
+    max_joint_delta: 0.15
+    active: true
+    joints:
+      - ros_name: arm_left_shoulder_tilt_joint
+        feature: arm_left_shoulder_tilt_joint
+      - ros_name: arm_left_upper_roll_joint
+        feature: arm_left_upper_roll_joint
+      - ros_name: arm_left_upper_flex_joint
+        feature: arm_left_upper_flex_joint
+      - ros_name: arm_left_elbow_joint
+        feature: arm_left_elbow_joint
+      - ros_name: arm_left_wrist_tilt_joint
+        feature: arm_left_wrist_tilt_joint
+      - ros_name: arm_left_wrist_roll_joint
+        feature: arm_left_wrist_roll_joint
+
+  - name: arm_right
+    command_topic: /sobit_home/arm_right_position_controller/joint_trajectory
+    command_action: /sobit_home/arm_right_position_controller/follow_joint_trajectory
+    max_joint_delta: 0.15
+    active: false
+    joints:
+      - ros_name: arm_right_shoulder_tilt_joint
+        feature: arm_right_shoulder_tilt_joint
+      - ros_name: arm_right_upper_roll_joint
+        feature: arm_right_upper_roll_joint
+      - ros_name: arm_right_upper_flex_joint
+        feature: arm_right_upper_flex_joint
+      - ros_name: arm_right_elbow_joint
+        feature: arm_right_elbow_joint
+      - ros_name: arm_right_wrist_tilt_joint
+        feature: arm_right_wrist_tilt_joint
+      - ros_name: arm_right_wrist_roll_joint
+        feature: arm_right_wrist_roll_joint
+
+  - name: hand_left
+    command_topic: /sobit_home/hand_left_position_controller/joint_trajectory
+    command_action: /sobit_home/hand_left_position_controller/follow_joint_trajectory
+    max_joint_delta: 0.30
+    active: true
+    joints:
+      - ros_name: hand_left_finger_l_mcp_joint
+        feature: hand_left_finger_l_mcp_joint
+      - ros_name: hand_left_finger_l_pip_joint
+        feature: hand_left_finger_l_pip_joint
+      - ros_name: hand_left_finger_l_dip_joint
+        feature: hand_left_finger_l_dip_joint
+      - ros_name: hand_left_finger_c_mcp_joint
+        feature: hand_left_finger_c_mcp_joint
+      - ros_name: hand_left_finger_c_ip_joint
+        feature: hand_left_finger_c_ip_joint
+      - ros_name: hand_left_finger_r_pip_joint
+        feature: hand_left_finger_r_pip_joint
+      - ros_name: hand_left_finger_r_dip_joint
+        feature: hand_left_finger_r_dip_joint
+
+  - name: hand_right
+    command_topic: /sobit_home/hand_right_position_controller/joint_trajectory
+    command_action: /sobit_home/hand_right_position_controller/follow_joint_trajectory
+    max_joint_delta: 0.30
+    active: false
+    joints:
+      - ros_name: hand_right_finger_l_mcp_joint
+        feature: hand_right_finger_l_mcp_joint
+      - ros_name: hand_right_finger_l_pip_joint
+        feature: hand_right_finger_l_pip_joint
+      - ros_name: hand_right_finger_l_dip_joint
+        feature: hand_right_finger_l_dip_joint
+      - ros_name: hand_right_finger_c_mcp_joint
+        feature: hand_right_finger_c_mcp_joint
+      - ros_name: hand_right_finger_c_ip_joint
+        feature: hand_right_finger_c_ip_joint
+      - ros_name: hand_right_finger_r_pip_joint
+        feature: hand_right_finger_r_pip_joint
+      - ros_name: hand_right_finger_r_dip_joint
+        feature: hand_right_finger_r_dip_joint
+
+mobile_base:
+  command_topic: /sobit_home/cmd_vel
+  odom_topic: /sobit_home/odom
+  has_vel_x: true
+  has_vel_y: true
+  has_vel_z: false
+  has_vel_theta: true
+  max_vel_x: 0.0
+  max_vel_y: 0.0
+  max_vel_z: 0.0
+  max_vel_theta: 0.0
+  features: [x.vel, y.vel, theta.vel]
+
+sensors:
+  cameras:
+    - name: head_camera
+      compressed_topic: /sobit_home/head_camera/color/image_raw/compressed
+      raw_topic: /sobit_home/head_camera/color/image_raw
+      info_topic: /sobit_home/head_camera/color/camera_info
+      encoding: ""
+      compressed: true
+      active: true
+    - name: hand_left_camera
+      compressed_topic: /sobit_home/hand_left_camera/color/image_raw/compressed
+      raw_topic: /sobit_home/hand_left_camera/color/image_raw
+      info_topic: /sobit_home/hand_left_camera/color/camera_info
+      encoding: ""
+      compressed: true
+      active: true
+    - name: hand_right_camera
+      compressed_topic: /sobit_home/hand_right_camera/color/image_raw/compressed
+      raw_topic: /sobit_home/hand_right_camera/color/image_raw
+      info_topic: /sobit_home/hand_right_camera/color/camera_info
+      encoding: ""
+      compressed: true
+      active: false
+
+ee_poses:
+  - name: left
+    source_frame: hand_left_end_effector_link
+    target_frame: base_footprint
+
+excluded_joints:
+  - hand_left_finger_r_mcp_joint
+  - hand_right_finger_r_mcp_joint
+  - wheel_steer_f_l_joint
+  - wheel_steer_f_r_joint
+  - wheel_steer_b_l_joint
+  - wheel_steer_b_r_joint
+  - wheel_drive_f_l_joint
+  - wheel_drive_f_r_joint
+  - wheel_drive_b_l_joint
+  - wheel_drive_b_r_joint
