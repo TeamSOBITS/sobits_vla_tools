@@ -26,6 +26,7 @@
       device: "cuda"
       # Enable automatic mixed precision (pi0/pi05/pi0_fast ignore this; SmolVLA uses it).
       use_amp: true
+      use_relative_actions: false
 
     runtime:
       # Control publish frequency [Hz]. Must be <= policy chunk_size * 1/action_horizon.
