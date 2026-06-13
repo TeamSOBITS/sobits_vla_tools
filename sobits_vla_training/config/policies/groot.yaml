@@ -1,0 +1,60 @@
+# GR00T N1.5 training defaults.
+# All fields map 1-to-1 to GrootConfig dataclass fields (lerobot 0.5.1).
+#
+# VERSION NOTE: lerobot 0.5.1 ports GR00T N1.5-3B only. N1.6/N1.7 use a
+# different backbone (Cosmos-Reason2) and are fine-tuned via NVIDIA's
+# Isaac-GR00T repo (gr00t/experiment/launch_finetune.py), which consumes the
+# LeRobot *dataset format* but not the lerobot training pipeline.
+#
+# REQUIREMENT: flash-attn must be installed (CUDA only):
+#   pip install flash-attn --no-build-isolation
+#
+# FREEZING: GR00T uses its own tune_* flags (NOT lerobot PEFT, NOT
+# freeze_vision_encoder). The default post-training recipe tunes only the
+# projector + diffusion action head on top of the frozen VLM. Built-in LoRA
+# is available via lora_rank > 0 (applies to the LLM).
+
+policy_type: groot
+
+# Weights come from base_model_path below, not from a lerobot checkpoint.
+pretrained_path: ""
+
+base_model_path: "nvidia/GR00T-N1.5-3B"
+tokenizer_assets_repo: "lerobot/eagle2hg-processor-groot-n1p5"
+
+# Custom robots use the new_embodiment tag (Isaac-GR00T convention).
+embodiment_tag: "new_embodiment"
+
+# --- Action chunking ---
+chunk_size: 50
+n_action_steps: 50
+n_obs_steps: 1
+
+# --- Dimension padding (GR00T pads state to 64, action to 32) ---
+max_state_dim: 64
+max_action_dim: 32
+
+# --- Vision ---
+image_size: [224, 224]
+
+# --- Fine-tuning scope (GR00T-native flags) ---
+tune_llm: false
+tune_visual: false
+tune_projector: true
+tune_diffusion_model: true
+
+# --- GR00T built-in LoRA (0 = disabled; applies to the LLM) ---
+lora_rank: 0
+lora_alpha: 16
+lora_dropout: 0.1
+lora_full_model: false
+
+# --- Optimisation (GR00T preset) ---
+# NOTE: get_scheduler_preset() hardcodes a 10k-step cosine decay with 5%
+# warmup — keep training.steps at 10000 (also Isaac-GR00T's default
+# max_steps) so the LR schedule matches the run length.
+optimizer_lr: 1.0e-4
+optimizer_weight_decay: 1.0e-5
+warmup_ratio: 0.05
+
+use_bf16: true
