@@ -1,0 +1,71 @@
+/**:
+  ros__parameters:
+    # =========================================================================
+    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — ACT
+    #
+    # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_act
+    # Dataset : k-valentin/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Policy  : ACT (~80M, ResNet18 + transformer, VAE) — trained FROM SCRATCH
+    # Recipe  : per HF act docs — defaults work well; batch 8+ and ~100k steps.
+    #           ACT ignores the language instruction (single-task only) and
+    #           normalizes with MEAN_STD, not quantiles.
+    # =========================================================================
+
+    policy: act
+
+    dataset:
+      repo_id: "k-valentin/sobit_home-pickup_the_block-left-abs-gazebo"
+      num_workers: 4
+      rename_map: []
+
+    checkpoint:
+      output_dir: "sobit_home_pickup_block_act"
+      resume: false
+      overwrite: true
+      # ACT trains from scratch — no pretrained policy checkpoint.
+      pretrained_path: ""
+      save_freq: 10000
+      save_checkpoint: true
+
+    training:
+      # HF docs: ~100k steps ≈ a few hours on a single GPU (ACT steps are fast).
+      steps: 100000
+      # Docs say start at 8; the 5090 affords 16 even with the native-resolution
+      # 1920x1200 hand camera (ACT does not resize images internally).
+      batch_size: 16
+      seed: 1000
+      # ACT preset: AdamW lr=1e-5 (constant, no scheduler), weight_decay=1e-4.
+      use_policy_training_preset: true
+      log_freq: 200
+      eval_freq: 5000
+
+    num_gpus: 1
+
+    wandb:
+      enable: true
+      project: "sobits_vla_training"
+      entity: ""
+      run_name: "sobit_home-pickup_block-left-abs-act"
+      notes: "ACT from-scratch on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
+      tags:
+        - act
+        - sobit_home
+        - pickup_block
+        - gazebo
+
+    hub:
+      push_to_hub: true
+      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_act"
+      private: false
+
+    peft:
+      # ACT is 80M params — always full training; LoRA is meaningless here.
+      method_type: ""
+
+    policy_overrides:
+      # 50 steps @ 10 fps = 5 s, consistent with the deploy pipeline
+      # (the ALOHA default of 100 assumes 50 Hz control).
+      chunk_size: 50
+      n_action_steps: 50
+      use_vae: true
+      kl_weight: 10.0

@@ -1,0 +1,92 @@
+/**:
+  ros__parameters:
+    # =========================================================================
+    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0
+    #
+    # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi0
+    # Dataset : k-valentin/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Policy  : PI0 (PaliGemma 2B + Gemma 300M action expert, flow matching)
+    # Base    : lerobot/pi0_base (per HF pi0 docs)
+    # Recipe  : LoRA r=16 — same family/recipe as the proven pi05 run.
+    #           Defaults come from config/policies/pi0.yaml; only deltas here.
+    # =========================================================================
+
+    policy: pi0
+
+    dataset:
+      repo_id: "k-valentin/sobit_home-pickup_the_block-left-abs-gazebo"
+      num_workers: 4
+      rename_map: []
+
+    checkpoint:
+      output_dir: "sobit_home_pickup_block_pi0"
+      resume: false
+      overwrite: true
+      pretrained_path: "lerobot/pi0_base"
+      save_freq: 5000
+      save_checkpoint: true
+
+    training:
+      steps: 30000
+      # RTX 5090 32 GB: batch 16 requires gradient_checkpointing (see overrides).
+      # lerobot has NO gradient accumulation — effective batch = batch_size.
+      batch_size: 16
+      seed: 1000
+      use_policy_training_preset: true
+      log_freq: 100
+      # No effect without a gym env — kept for parity with the pi05 config.
+      eval_freq: 5000
+
+    num_gpus: 1
+
+    wandb:
+      enable: true
+      project: "sobits_vla_training"
+      entity: ""
+      run_name: "sobit_home-pickup_block-left-abs-pi0"
+      notes: "PI0 fine-tune on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
+      tags:
+        - pi0
+        - sobit_home
+        - pickup_block
+        - gazebo
+
+    hub:
+      push_to_hub: true
+      # New policy type → its own repo (never mix policies/semantics in one repo).
+      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_pi0"
+      private: false
+
+    peft:
+      method_type: "LORA"
+      r: 16
+      lora_alpha: 32
+      lora_dropout: 0.05
+      # Empty = PI0's built-in default targets:
+      #   gemma_expert self_attn (q,v)_proj + state/action projection layers.
+      target_modules: ""
+      full_training_modules: []
+
+    policy_overrides:
+      max_state_dim: 32
+      max_action_dim: 32
+      chunk_size: 50
+      n_action_steps: 50
+      dtype: "bfloat16"
+      # Moot under LoRA (all base params frozen) but keeps vision tower in eval mode.
+      freeze_vision_encoder: true
+      train_expert_only: false
+      # Required at batch 16 on 32 GB; composes with compile (use_reentrant=False).
+      gradient_checkpointing: true
+      compile_model: true
+      use_relative_actions: false
+      relative_exclude_joints:
+        - base_x
+        - base_y
+        - base_theta
+      # LoRA LR: ~4x the full-FT preset (2.5e-5), same reasoning as the pi05 run.
+      optimizer_lr: 1.0e-4
+      optimizer_weight_decay: 0.01
+      scheduler_warmup_steps: 500
+      scheduler_decay_steps: 30000
+      scheduler_decay_lr: 1.0e-5
