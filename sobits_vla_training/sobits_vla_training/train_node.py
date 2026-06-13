@@ -40,6 +40,7 @@ for parameter introspection and clean shutdown via Ctrl-C / SIGTERM.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import signal
 import threading
 from typing import Any
@@ -76,49 +77,127 @@ def _patch_bool_quantile_normalization() -> None:
     _NormalizationMixin._apply_transform = _patched
 
 
+def _patch_pi0fast_peft_targets() -> None:
+    """PI0FastPolicy lacks _get_default_peft_targets in lerobot 0.5.1, so LoRA
+    training (peft.method_type: LORA with empty target_modules) raises
+    ValueError at wrap_with_peft. Provide the natural default: LoRA on the
+    PaliGemma language-model attention q/v projections. pi0_fast has no action
+    expert or action projections — actions are FAST tokens decoded through the
+    LM head — so the language model is the only sensible adaptation target.
+    The patch is skipped automatically if a future lerobot version adds its own.
+    """
+    try:
+        from lerobot.policies.pi0_fast.modeling_pi0_fast import PI0FastPolicy
+        qualname = getattr(PI0FastPolicy._get_default_peft_targets, '__qualname__', '')
+        if not qualname.startswith('PI0FastPolicy'):
+            def _targets(self) -> dict:
+                return {
+                    'target_modules': r'(.*\.language_model\..*\.self_attn\.(q|v)_proj)',
+                    'modules_to_save': [],
+                }
+            PI0FastPolicy._get_default_peft_targets = _targets
+            logger.info('Patched PI0FastPolicy._get_default_peft_targets (LM q/v projections).')
+    except ImportError:
+        pass
+
+
+def _patch_processor_registry() -> None:
+    """Register 'relative_actions_processor' as an alias for 'delta_actions_processor' for compatibility."""
+    try:
+        from lerobot.processor.pipeline import ProcessorStepRegistry
+        if 'delta_actions_processor' in ProcessorStepRegistry._registry:
+            ProcessorStepRegistry._registry['relative_actions_processor'] = ProcessorStepRegistry._registry['delta_actions_processor']
+            logger.info("Registered alias 'relative_actions_processor' -> 'delta_actions_processor'.")
+    except Exception as e:
+        logger.warning(f"Could not register relative_actions_processor alias: {e}")
+
+
 def _patch_pi05_action_dim_padding() -> None:
-    """Zero-pad action projection weights when max_action_dim > pretrained checkpoint dim.
+    """Zero-pad or truncate projection weights when action/state dims differ from pre-trained weights.
 
-    When max_action_dim is increased (e.g. 32→34 to add base x,y,θ), the pretrained
-    action_in_proj.weight (1024x32) and action_out_proj.weight/bias (32x1024 / 32) no
-    longer match the model's shapes (1024x34, 34x1024, 34). PyTorch load_state_dict
-    raises a size-mismatch error, which the from_pretrained outer try/except catches by
-    returning a fully random model — losing all pretrained weights.
-
-    This patch intercepts _fix_pytorch_state_dict_keys (called just before load_state_dict)
-    and pads the extra columns/rows with zeros, so pretrained weights load for dims 0..N-1
-    and only the new dimensions start from zero.
+    Prevents PyTorch load_state_dict mismatch crashes which cause LeRobot to fall back
+    to fully randomized weights.
     """
     import torch
-    from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 
-    orig_fix = PI05Policy._fix_pytorch_state_dict_keys
+    def make_patched_fix(orig_fix):
+        def _patched_fix(self, state_dict, model_config):
+            fixed = orig_fix(self, state_dict, model_config)
+            
+            # Action dimension remapping
+            model_action_dim = self.model.action_in_proj.in_features
+            
+            # State dimension remapping (PI0 has state_proj, PI05 does not)
+            model_state_dim = None
+            if hasattr(self.model, 'state_proj'):
+                model_state_dim = self.model.state_proj.in_features
 
-    def _patched_fix(self, state_dict, model_config):
-        fixed = orig_fix(self, state_dict, model_config)
-        model_action_dim = self.model.action_in_proj.in_features
+            for key in list(fixed.keys()):
+                val = fixed[key]
+                
+                # action_in_proj.weight: (width, ckpt_dim) → (width, model_dim)
+                if key.endswith('action_in_proj.weight') and val.ndim == 2:
+                    if val.shape[1] < model_action_dim:
+                        extra = model_action_dim - val.shape[1]
+                        pad = torch.zeros(val.shape[0], extra, dtype=val.dtype, device=val.device)
+                        fixed[key] = torch.cat([val, pad], dim=1)
+                    elif val.shape[1] > model_action_dim:
+                        fixed[key] = val[:, :model_action_dim]
+                
+                # action_out_proj.weight: (ckpt_dim, width) → (model_dim, width)
+                elif key.endswith('action_out_proj.weight') and val.ndim == 2:
+                    if val.shape[0] < model_action_dim:
+                        extra = model_action_dim - val.shape[0]
+                        pad = torch.zeros(extra, val.shape[1], dtype=val.dtype, device=val.device)
+                        fixed[key] = torch.cat([val, pad], dim=0)
+                    elif val.shape[0] > model_action_dim:
+                        fixed[key] = val[:model_action_dim, :]
+                
+                # action_out_proj.bias: (ckpt_dim,) → (model_dim,)
+                elif key.endswith('action_out_proj.bias') and val.ndim == 1:
+                    if val.shape[0] < model_action_dim:
+                        extra = model_action_dim - val.shape[0]
+                        pad = torch.zeros(extra, dtype=val.dtype, device=val.device)
+                        fixed[key] = torch.cat([val, pad], dim=0)
+                    elif val.shape[0] > model_action_dim:
+                        fixed[key] = val[:model_action_dim]
+                        
+                # state_proj.weight: (width, ckpt_dim) → (width, model_dim)
+                elif key.endswith('state_proj.weight') and val.ndim == 2 and model_state_dim is not None:
+                    if val.shape[1] < model_state_dim:
+                        extra = model_state_dim - val.shape[1]
+                        pad = torch.zeros(val.shape[0], extra, dtype=val.dtype, device=val.device)
+                        fixed[key] = torch.cat([val, pad], dim=1)
+                    elif val.shape[1] > model_state_dim:
+                        fixed[key] = val[:, :model_state_dim]
+                        
+            return fixed
+        return _patched_fix
 
-        for key in list(fixed.keys()):
-            val = fixed[key]
-            # action_in_proj.weight: (width, ckpt_dim) → (width, model_dim)
-            if key.endswith('action_in_proj.weight') and val.ndim == 2 and val.shape[1] < model_action_dim:
-                extra = model_action_dim - val.shape[1]
-                pad = torch.zeros(val.shape[0], extra, dtype=val.dtype, device=val.device)
-                fixed[key] = torch.cat([val, pad], dim=1)
-            # action_out_proj.weight: (ckpt_dim, width) → (model_dim, width)
-            elif key.endswith('action_out_proj.weight') and val.ndim == 2 and val.shape[0] < model_action_dim:
-                extra = model_action_dim - val.shape[0]
-                pad = torch.zeros(extra, val.shape[1], dtype=val.dtype, device=val.device)
-                fixed[key] = torch.cat([val, pad], dim=0)
-            # action_out_proj.bias: (ckpt_dim,) → (model_dim,)
-            elif key.endswith('action_out_proj.bias') and val.ndim == 1 and val.shape[0] < model_action_dim:
-                extra = model_action_dim - val.shape[0]
-                pad = torch.zeros(extra, dtype=val.dtype, device=val.device)
-                fixed[key] = torch.cat([val, pad], dim=0)
+    # Intercept PI05 Policy if available
+    try:
+        from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+        orig_fix_pi05 = PI05Policy._fix_pytorch_state_dict_keys
+        PI05Policy._fix_pytorch_state_dict_keys = make_patched_fix(orig_fix_pi05)
+    except ImportError:
+        pass
 
-        return fixed
+    # Intercept PI0 Policy if available
+    try:
+        from lerobot.policies.pi0.modeling_pi0 import PI0Policy
+        orig_fix_pi = PI0Policy._fix_pytorch_state_dict_keys
+        PI0Policy._fix_pytorch_state_dict_keys = make_patched_fix(orig_fix_pi)
+    except ImportError:
+        pass
 
-    PI05Policy._fix_pytorch_state_dict_keys = _patched_fix
+    # Intercept PI0Fast Policy if available
+    try:
+        from lerobot.policies.pi0_fast.modeling_pi0_fast import PI0FastPolicy
+        orig_fix_pi_fast = PI0FastPolicy._fix_pytorch_state_dict_keys
+        PI0FastPolicy._fix_pytorch_state_dict_keys = make_patched_fix(orig_fix_pi_fast)
+    except ImportError:
+        pass
+
 
 
 class TrainNode(Node):
@@ -146,8 +225,6 @@ class TrainNode(Node):
         self.declare_parameter(
             'dataset.repo_id', '', _p('HF Hub repo_id or local path to LeRobotDataset'))
         self.declare_parameter(
-            'dataset.val_split', 0.1, _p('Fraction of episodes for validation'))
-        self.declare_parameter(
             'dataset.num_workers', 4, _p('DataLoader worker count'))
         self.declare_parameter(
             'dataset.rename_map', [], _p('Feature rename map {old: new}'))
@@ -169,8 +246,6 @@ class TrainNode(Node):
             'training.steps', 100000, _p('Total gradient update steps'))
         self.declare_parameter(
             'training.batch_size', 32, _p('Per-GPU batch size'))
-        self.declare_parameter(
-            'training.grad_accum', 1, _p('Gradient accumulation steps'))
         self.declare_parameter(
             'training.seed', 1000, _p('Random seed'))
         self.declare_parameter(
@@ -196,22 +271,13 @@ class TrainNode(Node):
             'wandb.notes', '', _p('W&B run notes'))
 
         self.declare_parameter(
-            'hub.push_on_finish', True, _p('Push model to HF Hub after training'))
+            'hub.push_to_hub', True, _p('Push final model to HF Hub after training'))
         self.declare_parameter(
             'hub.repo_id', '', _p('HF Hub target repo_id for push'))
         self.declare_parameter(
             'hub.private', False, _p('Make Hub repo private'))
-        self.declare_parameter(
-            'hub.push_best', True, _p('Push best checkpoint (lowest val loss)'))
 
-        self.declare_parameter(
-            'vram.limit_gb', 15.5, _p('VRAM limit in GB (training aborts if exceeded)'))
-        self.declare_parameter(
-            'vram.verbose', True, _p('Log VRAM estimate even when passing'))
-
-        # Policy override sub-parameters. ROS 2 only loads YAML values for declared
-        # parameters, so every key that may appear under policy_overrides: in the YAML
-        # must be declared here. make_policy_config filters to valid fields per policy.
+        # Policy override sub-parameters
         _po = 'policy_overrides.'
         self.declare_parameter(_po + 'max_state_dim', 32)
         self.declare_parameter(_po + 'max_action_dim', 32)
@@ -230,6 +296,7 @@ class TrainNode(Node):
         self.declare_parameter(_po + 'use_peft', False)  # True = load existing adapter; keep False
         self.declare_parameter(_po + 'tokenizer_max_length', 200)
         self.declare_parameter(_po + 'use_relative_actions', False)
+        self.declare_parameter(_po + 'relative_exclude_joints', ['gripper'])
         self.declare_parameter(_po + 'optimizer_lr', 2.5e-5)
         self.declare_parameter(_po + 'optimizer_weight_decay', 0.01)
         self.declare_parameter(_po + 'optimizer_grad_clip_norm', 1.0)
@@ -255,19 +322,18 @@ class TrainNode(Node):
         """Read all declared parameters into a flat dict keyed by dotted name."""
         names = [
             'policy',
-            'dataset.repo_id', 'dataset.val_split', 'dataset.num_workers',
+            'dataset.repo_id', 'dataset.num_workers',
             'dataset.rename_map',
             'checkpoint.output_dir', 'checkpoint.resume', 'checkpoint.overwrite',
             'checkpoint.pretrained_path', 'checkpoint.save_freq',
             'checkpoint.save_checkpoint',
-            'training.steps', 'training.batch_size', 'training.grad_accum',
+            'training.steps', 'training.batch_size',
             'training.seed', 'training.use_policy_training_preset',
             'training.log_freq', 'training.eval_freq',
             'num_gpus',
             'wandb.enable', 'wandb.project', 'wandb.entity',
             'wandb.run_name', 'wandb.notes',
-            'hub.push_on_finish', 'hub.repo_id', 'hub.private', 'hub.push_best',
-            'vram.limit_gb', 'vram.verbose',
+            'hub.push_to_hub', 'hub.repo_id', 'hub.private',
             'peft.method_type', 'peft.r', 'peft.lora_alpha', 'peft.lora_dropout',
             'peft.target_modules', 'peft.full_training_modules',
         ]
@@ -279,22 +345,28 @@ class TrainNode(Node):
             except Exception:
                 pass
 
-        # Collect policy_overrides.* sub-parameters from YAML.
-        # ROS 2 parses nested YAML dicts as sub-parameters (policy_overrides.max_action_dim,
-        # policy_overrides.chunk_size, …) rather than a single dict value, so we discover
-        # them dynamically and reassemble the dict here.
+        # Collect policy_overrides
         po: dict[str, Any] = {}
         try:
-            result = self.list_parameters(prefixes=['policy_overrides'], depth=2)
-            for pname in result.names:
+            overrides = getattr(self, '_parameter_overrides', None) or {}
+            for pname, param in overrides.items():
                 if pname.startswith('policy_overrides.'):
-                    key = pname[len('policy_overrides.'):]
-                    try:
-                        po[key] = self.get_parameter(pname).value
-                    except Exception:
-                        pass
+                    po[pname[len('policy_overrides.'):]] = param.value
         except Exception as exc:
-            self.get_logger().warning(f'policy_overrides discovery failed: {exc}')
+            self.get_logger().warning(f'policy_overrides read failed: {exc}')
+
+        if not po:
+            try:
+                result = self.list_parameters(prefixes=['policy_overrides'], depth=2)
+                for pname in result.names:
+                    if pname.startswith('policy_overrides.'):
+                        key = pname[len('policy_overrides.'):]
+                        try:
+                            po[key] = self.get_parameter(pname).value
+                        except Exception:
+                            pass
+            except Exception as exc:
+                self.get_logger().warning(f'policy_overrides discovery failed: {exc}')
         params['policy_overrides'] = po
 
         return params
@@ -321,42 +393,146 @@ class TrainNode(Node):
             self._shutdown_event.set()
             rclpy.shutdown()
 
+    @staticmethod
+    def _load_dataset_info(repo_id: str) -> dict | None:
+        """Read info.json from the local dataset cache without instantiating LeRobotDataset."""
+        try:
+            from lerobot.utils.constants import HF_LEROBOT_HOME
+            candidate = HF_LEROBOT_HOME / repo_id / 'meta' / 'info.json'
+            if not candidate.exists():
+                candidate = Path(repo_id) / 'meta' / 'info.json'
+            if not candidate.exists():
+                from huggingface_hub import hf_hub_download
+                candidate = Path(
+                    hf_hub_download(repo_id, 'meta/info.json', repo_type='dataset')
+                )
+            import json
+            with open(candidate) as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def _preflight_dataset_checks(self, params: dict) -> None:
+        """Run dataset-aware pre-flight checks that require info.json."""
+        repo_id: str = params.get('dataset.repo_id', '')
+        po: dict = params.get('policy_overrides', {})
+
+        info = self._load_dataset_info(repo_id)
+        if info is None:
+            self.get_logger().warn(
+                f'Could not read meta/info.json for dataset "{repo_id}" — '
+                'skipping dataset-aware pre-flight checks.'
+            )
+            return
+
+        features = info.get('features', {})
+        action_feature = features.get('action', {})
+        action_names: list[str] = action_feature.get('names') or []
+        action_shape: list[int] = action_feature.get('shape') or []
+        actual_action_dim: int = action_shape[0] if action_shape else len(action_names)
+
+        # max_action_dim / max_state_dim vs actual dataset dim
+        max_action_dim: int = po.get('max_action_dim', 32)
+        max_state_dim: int = po.get('max_state_dim', 32)
+        if actual_action_dim > 0:
+            if max_action_dim < actual_action_dim:
+                raise RuntimeError(
+                    f'max_action_dim={max_action_dim} < dataset action dim={actual_action_dim} '
+                    f'for "{repo_id}" — joints would be silently truncated during training. '
+                    f'Set max_action_dim >= {actual_action_dim} in policy_overrides.'
+                )
+            if max_state_dim < actual_action_dim:
+                raise RuntimeError(
+                    f'max_state_dim={max_state_dim} < dataset state dim={actual_action_dim} '
+                    f'for "{repo_id}" — state would be silently truncated during training. '
+                    f'Set max_state_dim >= {actual_action_dim} in policy_overrides.'
+                )
+            self.get_logger().info(
+                f'Dim pre-flight passed: actual={actual_action_dim} '
+                f'max_action_dim={max_action_dim} max_state_dim={max_state_dim}'
+            )
+
+        # relative_exclude_joints validation against actual joint names
+        if po.get('use_relative_actions', False) and action_names:
+            exclude: list[str] = po.get('relative_exclude_joints', ['gripper'])
+            if exclude == ['gripper']:
+                self.get_logger().warn(
+                    'use_relative_actions=true but relative_exclude_joints is the default '
+                    '[\"gripper\"], which matches no joint in SOBIT HOME. '
+                    'Velocity joints (base_x, base_y, base_theta) will be delta-converted. '
+                    'Set relative_exclude_joints explicitly in policy_overrides.'
+                )
+            unknown = [j for j in exclude if j not in action_names]
+            if unknown:
+                self.get_logger().warn(
+                    f'relative_exclude_joints contains names not found in dataset action '
+                    f'feature names — these joints will not be excluded from delta conversion: '
+                    f'{unknown}. Dataset action names: {action_names}'
+                )
+        elif po.get('use_relative_actions', False) and not action_names:
+            # Fall back to the original default-only check when names are unavailable
+            exclude = po.get('relative_exclude_joints', ['gripper'])
+            if exclude == ['gripper']:
+                self.get_logger().warn(
+                    'use_relative_actions=true but relative_exclude_joints appears to be the '
+                    'default [\"gripper\"], which matches no joint in SOBIT HOME. '
+                    'Velocity joints (base_x, base_y, base_theta) will be delta-converted. '
+                    'Set relative_exclude_joints explicitly in policy_overrides if this is unintended.'
+                )
+
     def _run_training(self) -> None:
         params = self._collect_params()
 
         policy_type: str = params.get('policy', 'smolvla')
         self.get_logger().info(f'Policy: {policy_type}')
 
-        from sobits_vla_training.vram_estimator import check_vram
-        check_vram(
-            policy_type=policy_type,
-            batch_size=params.get('training.batch_size', 32),
-            limit_gb=params.get('vram.limit_gb', 15.5),
-            verbose=params.get('vram.verbose', True),
-        )
+        self._preflight_dataset_checks(params)
+
+        from sobits_vla_training.config_builder import find_package_src_dir, build_accelerator, build_train_config
+
+        out_dir_raw = params.get('checkpoint.output_dir', '')
+        package_src_dir = find_package_src_dir()
+
+        if not out_dir_raw:
+            out = package_src_dir / 'outputs'
+        else:
+            raw_path = Path(out_dir_raw).expanduser()
+            if raw_path.is_absolute():
+                out = raw_path
+            else:
+                if raw_path.parts and raw_path.parts[0] == 'outputs':
+                    out = (package_src_dir / raw_path).resolve()
+                else:
+                    out = (package_src_dir / 'outputs' / raw_path).resolve()
 
         if params.get('checkpoint.overwrite', False) and not params.get('checkpoint.resume', False):
             import shutil
-            from pathlib import Path
-            out = Path(params.get('checkpoint.output_dir', '')).expanduser().resolve()
-            if out.is_dir():
+            # Safety guard: only delete if it's a sub-directory and not CWD, parent CWD, or root directory
+            if out.is_dir() and out != Path.cwd() and out != Path.cwd().parent and out != Path('/'):
                 shutil.rmtree(out)
                 self.get_logger().info(f'Overwrite: removed existing output dir {out}')
 
-        from sobits_vla_training.config_builder import build_accelerator, build_train_config
         train_cfg, peft_extra = build_train_config(params)
 
         num_gpus: int = params.get('num_gpus', 1)
         use_amp: bool = getattr(train_cfg.policy, 'use_amp', False)
         accelerator = build_accelerator(num_gpus=num_gpus, use_amp=use_amp)
 
-        # Inject lora_alpha / lora_dropout into peft config so lerobot_train
-        # picks them up via dataclasses.asdict(cfg.peft) → wrap_with_peft.
         if train_cfg.peft is not None and peft_extra:
             import dataclasses as _dc
-            for key, val in peft_extra.items():
-                if key not in {f.name for f in _dc.fields(train_cfg.peft)}:
-                    object.__setattr__(train_cfg.peft, key, val)
+            from lerobot.configs.default import PeftConfig as _PeftConfig
+            _known = {f.name for f in _dc.fields(train_cfg.peft)}
+            _new_fields = [(k, type(v), _dc.field(default=v))
+                           for k, v in peft_extra.items() if k not in _known]
+            if _new_fields:
+                _ExtendedPeft = _dc.make_dataclass(
+                    'ExtendedPeftConfig',
+                    _new_fields,
+                    bases=(_PeftConfig,),
+                )
+                _base = _dc.asdict(train_cfg.peft)
+                _base.update(peft_extra)
+                train_cfg.peft = _ExtendedPeft(**_base)
             targets = (
                 'policy default' if not train_cfg.peft.target_modules
                 else train_cfg.peft.target_modules
@@ -376,6 +552,8 @@ class TrainNode(Node):
 
         _patch_bool_quantile_normalization()
         _patch_pi05_action_dim_padding()
+        _patch_pi0fast_peft_targets()
+        _patch_processor_registry()
 
         from lerobot.scripts.lerobot_train import train
         train(train_cfg, accelerator=accelerator)
@@ -383,10 +561,12 @@ class TrainNode(Node):
         self.get_logger().info('Training complete.')
 
         hub_repo_id: str = params.get('hub.repo_id', '')
-        if params.get('hub.push_on_finish', True) and hub_repo_id:
+        if params.get('hub.push_to_hub', True) and hub_repo_id:
             self.get_logger().info(f'Model pushed to HF Hub: {hub_repo_id}')
-        elif params.get('hub.push_on_finish', True) and not hub_repo_id:
-            self.get_logger().info('hub.repo_id not set — skipping Hub push.')
+        elif not hub_repo_id:
+            self.get_logger().info('hub.repo_id not set — Hub push skipped.')
+        else:
+            self.get_logger().info('hub.push_to_hub=false — Hub push skipped.')
 
 
 def main(args=None) -> None:
