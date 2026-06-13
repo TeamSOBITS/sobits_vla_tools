@@ -23,6 +23,9 @@
     # Frames exceeding this threshold are flagged in the logs.
     sync_threshold: 0.1
 
+    # Tolerance margin (seconds) to accept frames arriving slightly early due to scheduling jitter.
+    downsample_tolerance: 0.015
+
     # If true, push the finalized dataset to HuggingFace Hub using `dataset_name` as the repo ID.
     # Requires HF credentials (run: huggingface-cli login).
     push_to_hub: false
