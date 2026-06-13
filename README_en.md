@@ -329,6 +329,7 @@ Robot-specific preset example: [conversion_settings_sobit_home.yaml](./sobits_vl
 | --------- | ------- | ----------- |
 | `fps` | `10` | Target dataset frame rate |
 | `sync_threshold` | `0.1` | Max temporal gap (seconds) between synced sensors |
+| `downsample_tolerance` | `0.015` | Tolerance margin (seconds) to accept frames arriving early due to scheduling jitter |
 | `primary_camera` | `head_camera` | Camera used as sync trigger |
 | `cameras` | `head_camera, hand_left_camera, hand_right_camera` | Cameras included in the dataset |
 | `ee_pose.enabled` | `false` | Enable end-effector pose extraction |
@@ -445,11 +446,32 @@ This allows multiple controllers to trigger play/stop in the same runtime.
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
+<!-- TODO -->
+## TODO
+
+### Full support for `relative_exclude_joints`
+
+The `sobits_vla_rosbag_conversion` and `sobits_vla_deploy` packages do not yet explicitly handle the `relative_exclude_joints` parameter.
+
+**Current state and reasoning:**
+
+- **Conversion package (`sobits_vla_rosbag_conversion`):** The relative action conversion (delta subtraction) is applied only to joint positions. Mobile base velocities (`base_x`, `base_y`, `base_theta`) are appended to the action vector after the delta step, so they are excluded implicitly by code structure. This is sufficient for the current SOBIT HOME configuration.
+- **Deploy package (`sobits_vla_deploy`):** The postprocessor (`absolute_actions_processor`) uses the mask saved in `policy_postprocessor.json` loaded from the model repository, which correctly reflects the exclusions from training time. The manual delta fallback path hardcodes exclusion of base keys only and does not read `relative_exclude_joints` from the policy config.
+
+**Future work:**
+
+Different robot morphologies may require different exclusion sets — for example, velocity-controlled wheels, binary gripper joints, or passive joints that should never be delta-converted. The following should be implemented when supporting new morphologies:
+
+- `sobits_vla_rosbag_conversion`: Add a `relative_exclude_joints` parameter to the YAML config so that joints to skip during delta conversion can be specified explicitly rather than relying on code structure.
+- `sobits_vla_deploy`: Update the manual delta fallback path to read `relative_exclude_joints` from the loaded policy config, so that deployment without a postprocessor file still applies the correct exclusions.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+
 <!-- ACKNOWLEDGMENTS -->
 ## Acknowledgments
 
 - [LeRobot](https://github.com/huggingface/lerobot) — Dataset format and training framework
-<!-- - [SmolVLA](https://huggingface.co/HuggingFaceTB/SmolVLA-256) — VLA model architecture -->
 - [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/) — Robot middleware
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
