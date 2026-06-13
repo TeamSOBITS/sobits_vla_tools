@@ -62,6 +62,19 @@ _REGISTRY: dict[str, dict] = {
         'config_class': 'PI0FastConfig',
         'yaml': 'pi0_fast.yaml',
     },
+    'act': {
+        'config_module': 'lerobot.policies.act.configuration_act',
+        'config_class': 'ACTConfig',
+        'yaml': 'act.yaml',
+    },
+    # GR00T N1.5 only — N1.6/N1.7 are fine-tuned via NVIDIA's Isaac-GR00T repo
+    # (different backbone, Cosmos-Reason2); lerobot 0.5.1 ports N1.5-3B.
+    # Requires flash-attn: pip install flash-attn --no-build-isolation
+    'groot': {
+        'config_module': 'lerobot.policies.groot.configuration_groot',
+        'config_class': 'GrootConfig',
+        'yaml': 'groot.yaml',
+    },
 }
 
 _POLICIES_DIR: Path | None = None
@@ -150,6 +163,9 @@ def make_policy_config(
 
     valid_fields = {f.name for f in fields(ConfigClass)}
     filtered = {k: v for k, v in merged.items() if k in valid_fields}
+
+    if 'device' in valid_fields:
+        filtered.setdefault('device', device)
 
     cfg = ConfigClass(**filtered)
     cfg.device = device
