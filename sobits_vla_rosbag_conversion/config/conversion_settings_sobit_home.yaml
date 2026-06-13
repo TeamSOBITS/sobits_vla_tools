@@ -20,6 +20,9 @@
     # Max allowed temporal gap (seconds) between sensor readings per frame.
     sync_threshold: 0.1
 
+    # Tolerance margin (seconds) to accept frames arriving slightly early due to scheduling jitter.
+    downsample_tolerance: 0.015
+
     push_to_hub: true
     hub_private: true
     overwrite: false
@@ -51,7 +54,7 @@
 
     # End-effector pose via TF tree.
     ee_pose:
-      enabled: true
+      enabled: false
       names: ["left", "right"]
       source_frames: ["hand_left_end_effector_link", "hand_right_end_effector_link"]
       target_frames: ["base_link", "base_link"]
