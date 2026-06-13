@@ -5,6 +5,7 @@
       policy_class: "lerobot.policies.pi05.modeling_pi05.PI05Policy"
       device: "cuda"
       use_amp: false
+      use_relative_actions: false
 
     runtime:
       control_hz: 6.0
