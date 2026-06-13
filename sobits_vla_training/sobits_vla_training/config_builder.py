@@ -45,6 +45,41 @@ from .policy_registry import make_policy_config
 logger = logging.getLogger(__name__)
 
 
+def find_package_src_dir() -> Path:
+    current_file = Path(__file__).resolve()
+    
+    # Check if 'build' or 'install' or 'site-packages' or 'dist-packages' is in the path parts
+    in_workspace_build_or_install = any(
+        part in current_file.parts 
+        for part in ('build', 'install', 'site-packages', 'dist-packages')
+    )
+    
+    if not in_workspace_build_or_install:
+        # We might be running directly from the source tree
+        direct_parent = current_file.parent.parent
+        if (direct_parent / 'package.xml').exists():
+            return direct_parent
+
+    # Try walking up to find a workspace root containing 'src'
+    for p in current_file.parents:
+        if (p / 'src').is_dir():
+            src_dir = p / 'src'
+            # Look for a directory containing package.xml and named 'sobits_vla_training'
+            for path in src_dir.rglob('package.xml'):
+                if path.parent.name == 'sobits_vla_training':
+                    return path.parent
+            break
+            
+    # Fallback to get_package_share_directory if available
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        return Path(get_package_share_directory('sobits_vla_training'))
+    except Exception:
+        pass
+        
+    return current_file.parent.parent
+
+
 def _resolve_pretrained_path(raw: str) -> Path | str:
     """Return a Path for local files, or pass through HF Hub repo_id strings."""
     if not raw:
@@ -84,11 +119,15 @@ def build_train_config(params: dict[str, Any]):
         policy_overrides['pretrained_path'] = _resolve_pretrained_path(raw_pretrained)
 
     hub_repo_id: str = params.get('hub.repo_id', '') or ''
-    if hub_repo_id:
+    push_to_hub: bool = bool(params.get('hub.push_to_hub', True))
+    if hub_repo_id and push_to_hub:
         policy_overrides['repo_id'] = hub_repo_id
         policy_overrides['push_to_hub'] = True
+        policy_overrides['private'] = bool(params.get('hub.private', False))
     else:
         policy_overrides['push_to_hub'] = False
+        if hub_repo_id:
+            policy_overrides['repo_id'] = hub_repo_id
 
     policy_cfg = make_policy_config(
         policy_type=policy_type,
@@ -110,8 +149,20 @@ def build_train_config(params: dict[str, Any]):
         notes=params.get('wandb.notes', '') or '',
     )
 
-    output_dir_raw: str = params.get('checkpoint.output_dir', './outputs/train')
-    output_dir = Path(output_dir_raw).expanduser().resolve()
+    output_dir_raw = params.get('checkpoint.output_dir', '')
+    package_src_dir = find_package_src_dir()
+
+    if not output_dir_raw:
+        output_dir = package_src_dir / 'outputs'
+    else:
+        raw_path = Path(output_dir_raw).expanduser()
+        if raw_path.is_absolute():
+            output_dir = raw_path
+        else:
+            if raw_path.parts and raw_path.parts[0] == 'outputs':
+                output_dir = (package_src_dir / raw_path).resolve()
+            else:
+                output_dir = (package_src_dir / 'outputs' / raw_path).resolve()
 
     rename_map: dict = params.get('dataset.rename_map', {}) or {}
 
