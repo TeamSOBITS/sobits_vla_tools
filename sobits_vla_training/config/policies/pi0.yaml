@@ -3,7 +3,9 @@
 
 policy_type: pi0
 
-pretrained_path: "lerobot/pi0"
+# HF pi0 docs: fine-tune from lerobot/pi0_base (lerobot/pi0 also exists but
+# pi0_base is the documented fine-tuning base; lerobot/pi0_libero for Libero).
+pretrained_path: "lerobot/pi0_base"
 
 # --- Action chunking ---
 chunk_size: 50
