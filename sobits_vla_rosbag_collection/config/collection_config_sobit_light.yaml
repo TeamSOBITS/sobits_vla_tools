@@ -1,0 +1,59 @@
+/**:
+  ros__parameters:
+    # Morphology (joint groups, command topics, sensors, mobile_base) is loaded
+    # from sobits_vla_common/robots/sobit_light.robot.yaml via robot_descriptor_id.
+    # This is the single source of truth shared across collection, conversion,
+    # training, and deploy. Do NOT duplicate joint/topic lists here.
+    robot_descriptor_id: "sobit_light"
+
+    # User information for contact
+    user_info:
+      name: ""
+      location: ""
+      email: ""
+
+    # ROS bag recording configuration
+    rosbag_config:
+      # Path to the directory where the recorded bag files will be saved.
+      # If left empty (""), the launcher resolves it to the `rosbags` folder
+      # inside `sobits_vla_rosbag_collection`.
+      record_directory: ""
+      # Minimum episode duration in seconds. Episodes shorter than this are
+      # rejected on save (likely accidental). Set to 0 to disable.
+      min_episode_duration: 1.0
+      # Maximum episode duration in seconds. Recording is auto-stopped when
+      # exceeded (prevents runaway recordings). Set to 0 to disable.
+      max_episode_duration: 0.0
+      # Maximum acceptable drift (seconds) between the ROS clock and wall clock
+      # per monitor interval. Detects sim_time jumps or NTP corrections.
+      # Set to 0.0 to disable. Default 1.0s.
+      timestamp_jump_threshold: 1.0
+      # Minimum free disk space (MB) before warning/stopping recording.
+      # Default 2048 MB (2 GB). Set to 0 to disable.
+      min_disk_space_mb: 2048
+      # Expected sensor publish rate (Hz) for live FPS monitoring during recording.
+      # Warns if any camera or joint_states topic drops below 80% of this rate.
+      # Set to 0 to disable monitoring.
+      expected_sensor_fps: 10
+      # Additional topics to record beyond those inferred from the descriptor.
+      additional_topics:
+        - /sobit_light/velocity_controller/commands
+        - /sobit_light/wheel_odometry/wheel_odometry
+        - /sobit_light/odometry/odometry
+        - /sobit_light/joy
+        - /tf
+        - /tf_static
+      # Additional services to record
+      additional_services:
+        - ""
+      # Additional actions to record
+      additional_actions:
+        - ""
+      # Format for the recorded bag files (e.g., "mcap", "sqlite3")
+      conversion_format: "mcap"
+      # Compression mode ("none", "file", "message")
+      compression_mode: "none"
+      # If compression is enabled, the compression format ("zstd" or "lz4")
+      compression_format: "zstd"
+      # RMW serialization format ("cdr" or "rmw_fastrtps_cpp")
+      rmw_serialization_format: "cdr"

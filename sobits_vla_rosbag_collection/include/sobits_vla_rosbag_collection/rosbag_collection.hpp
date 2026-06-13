@@ -1,6 +1,10 @@
+#ifndef SOBITS_VLA_ROSBAG_COLLECTION__ROSBAG_COLLECTION_HPP_
+#define SOBITS_VLA_ROSBAG_COLLECTION__ROSBAG_COLLECTION_HPP_
+
 #include <rcl_interfaces/msg/parameter_type.hpp>
 #include <sobits_interfaces/srv/vla_update_task.hpp>
 #include <sobits_interfaces/action/vla_record_state.hpp>
+#include <sobits_interfaces/srv/vla_command.hpp>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/executors/single_threaded_executor.hpp>
@@ -19,19 +23,12 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
-// #include <sys/wait.h>   // For waitpid, WIFEXITED, WIFSIGNALED
-// #include <unistd.h>     // For fork, execl, _exit
-// #include <iostream>     // For std::cerr
-// #include <filesystem>   // For std::filesystem operations
-// #include <algorithm>    // For std::replace, std::transform
-// #include <fstream>      // For std::ofstream
-// #include <string>       // For std::string
-// #include <vector>       // For std::vector
-// #include <thread>       // For std::this_thread::sleep_for
-// #include <chrono>       // For std::chrono::seconds
+#include <memory>
 
 namespace sobits_vla
 {
+class RecordingMonitor;
+class BagMetadataManager;
 
 class RobotInfo
 {
@@ -146,6 +143,16 @@ private:
   rclcpp_action::Server<sobits_interfaces::action::VlaRecordState>::SharedPtr record_action_server_;
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr task_update_service_;
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr subtask_update_service_;
+  rclcpp::Service<sobits_interfaces::srv::VlaCommand>::SharedPtr command_service_;
+
+  void handleVlaCommand(
+    const std::shared_ptr<sobits_interfaces::srv::VlaCommand::Request> request,
+    std::shared_ptr<sobits_interfaces::srv::VlaCommand::Response> response);
+
+  uint8_t mapStateToActionToSrv(uint8_t action_state);
+
+  std::unique_ptr<RecordingMonitor> recording_monitor_;
+  std::unique_ptr<BagMetadataManager> bag_metadata_manager_;
 
   std::shared_ptr<rosbag2_transport::Recorder> recorder_node_;
   std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> recorder_executor_;
@@ -204,3 +211,5 @@ private:
 };
 
 } // namespace sobits_vla
+
+#endif // SOBITS_VLA_ROSBAG_COLLECTION__ROSBAG_COLLECTION_HPP_

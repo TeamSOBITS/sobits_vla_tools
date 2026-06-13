@@ -26,6 +26,7 @@ find_package(sobits_interfaces REQUIRED)
 find_package(yaml_cpp_vendor REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(rosbag2_transport REQUIRED)
+find_package(sobits_vla_common REQUIRED)
 
 
 # Find libraries
@@ -33,15 +34,14 @@ include_directories(include)
 
 # Library
 add_library(${PROJECT_NAME} SHARED
-  src/gamepad_clt.cpp
+  src/robot_descriptor_loader.cpp
+  src/recording_monitor.cpp
+  src/bag_metadata_manager.cpp
+  src/topic_builder.cpp
   src/rosbag_collection.cpp
 )
 
 # Link libraries
-rclcpp_components_register_node(${PROJECT_NAME}
-  PLUGIN "sobits_vla::GamepadClient"
-  EXECUTABLE gamepad_clt_node
-)
 rclcpp_components_register_node(${PROJECT_NAME}
   PLUGIN "sobits_vla::RosbagCollection"
   EXECUTABLE rosbag_collection_node
@@ -58,6 +58,7 @@ ament_target_dependencies(${PROJECT_NAME}
   "sobits_interfaces"
   "yaml_cpp_vendor"
   "rosbag2_transport"
+  "sobits_vla_common"
 )
 
 install(TARGETS ${PROJECT_NAME}

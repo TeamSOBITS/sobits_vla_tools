@@ -1,0 +1,29 @@
+/**:
+  ros__parameters:
+    # Shared gamepad defaults for the GamepadClient node (sobits_vla_common).
+    # Loaded by both the collection and deploy launch files. The GamepadClient
+    # translates button presses into sobits_interfaces/srv/VlaCommand requests
+    # sent to the command_service below.
+    gamepad:
+      # Service the GamepadClient calls (advertised by collection AND deploy).
+      command_service: "/vla/command"
+      # Active controller profile (selects which button_mapping block is used).
+      controller: "quest"
+      # Cooldown between accepted button presses (seconds).
+      button_cooldown_duration: 0.5
+      dualshock4:
+        button_mapping:
+          record: 7
+          pause: 7
+          save: 6
+          delete: 6
+          play: 7
+          stop: 7
+      quest:
+        button_mapping:
+          record: 4
+          pause: 4
+          save: 5
+          delete: 5
+          play: 4
+          stop: 4
