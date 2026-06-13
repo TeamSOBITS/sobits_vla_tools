@@ -1,4 +1,5 @@
 from glob import glob
+
 from setuptools import find_packages, setup
 
 package_name = 'sobits_vla_rosbag_conversion'
@@ -19,7 +20,7 @@ setup(
     maintainer='VALENTIN Keith',
     maintainer_email='kvalentincardenas@gmail.com',
     description='ROS packages for SOBITS VLA Rosbag Conversion.',
-    license='BSD',
+    license='BSD-3-Clause',
     extras_require={
         'test': [
             'pytest',
@@ -27,7 +28,10 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'ros2bag_to_lerobotdataset = sobits_vla_rosbag_conversion.ros2bag_to_lerobotdataset:main',
+            (
+                'ros2bag_to_lerobotdataset = '
+                'sobits_vla_rosbag_conversion.ros2bag_to_lerobotdataset:main'
+            ),
         ],
     },
 )
