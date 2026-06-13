@@ -13,6 +13,18 @@
 
     policy: act
 
+    robot:
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true
+
     dataset:
       repo_id: "k-valentin/sobit_home-pickup_the_block-left-abs-gazebo"
       num_workers: 4

@@ -27,6 +27,18 @@
 
     policy: pi0_fast
 
+    robot:
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true
+
     dataset:
       repo_id: "k-valentin/sobit_home-pickup_the_block-left-abs-gazebo"
       num_workers: 4
@@ -80,8 +92,6 @@
       full_training_modules: []
 
     policy_overrides:
-      max_state_dim: 32
-      max_action_dim: 32
       # HF docs LIBERO recipe: chunk 10 / execute 10 ("similar to the original
       # OpenPI implementation"). At 10 fps this is 1 s of motion per chunk.
       chunk_size: 10
@@ -91,10 +101,6 @@
       gradient_checkpointing: true
       compile_model: true
       use_relative_actions: false
-      relative_exclude_joints:
-        - base_x
-        - base_y
-        - base_theta
       # LoRA LR: ~4x the full-FT preset, consistent with the pi0/pi05 recipe.
       optimizer_lr: 1.0e-4
       optimizer_weight_decay: 0.01

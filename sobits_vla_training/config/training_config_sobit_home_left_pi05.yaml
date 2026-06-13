@@ -13,6 +13,18 @@
 
     policy: pi05
 
+    robot:
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true
+
     # =========================================================================
     # Dataset
     # =========================================================================
@@ -137,12 +149,6 @@
     # =========================================================================
     # These override the base values in config/policies/pi05.yaml.
     policy_overrides:
-      # PI0.5 base uses max_state_dim=32 / max_action_dim=32 internally.
-      # Keep these at 32 to avoid truncating pre-trained projection weights.
-      # The normalizer handles the mapping from the actual 19 features to the
-      # 32-dim padded space automatically.
-      max_state_dim: 32
-      max_action_dim: 32
 
       # --- Action chunking ---
       # 50 steps at 10 fps = 5 s of predicted motion per inference call.
@@ -214,10 +220,6 @@
       # Training relative actions against absolute-space q01/q99 stats (as the
       # Jun 8 runs did) produces degenerate normalization and a broken policy.
       use_relative_actions: false
-      relative_exclude_joints:
-        - base_x
-        - base_y
-        - base_theta
 
       # --- Optimisation ---
       # NOTE: these ARE used even with use_policy_training_preset: true —
