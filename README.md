@@ -19,11 +19,47 @@ SOBITS VLA Toolsは，SOBITS自作ロボットをVision-Language-Action（VLA）
 
 | パッケージ | 説明 |
 | ---------- | ---- |
+| [sobits_vla_common](./sobits_vla_common/) | 共有ライブラリ：ロボットディスクリプタのスキーマ/ローダ、ポリシーレジストリ、lerobot 0.5.1互換パッチ、`new_robot`スキャフォルダ、`GamepadClient`ノード |
 | [sobits_vla_rosbag_collection](./sobits_vla_rosbag_collection/) | ゲームパッドによるマルチモーダルrosbag記録（リアルタイム品質監視付き） |
 | [sobits_vla_rosbag_conversion](./sobits_vla_rosbag_conversion/) | rosbagを[LeRobot](https://github.com/huggingface/lerobot)データセット形式に変換 |
-| [sobits_vla_training](./sobits_vla_training/) | モデル学習ユーティリティ（TBD） |
-| [sobits_vla_deploy](./sobits_vla_deploy/) | ロボット制御用リアルタイムVLA推論ノード（TBD） |
+| [sobits_vla_training](./sobits_vla_training/) | VLAポリシー（pi05, pi0, pi0_fast, smolvla, ACT, GR00T）をlerobotで学習・ファインチューニング |
+| [sobits_vla_deploy](./sobits_vla_deploy/) | ロボット制御用リアルタイムVLA推論ノード（非同期チャンク＋RTC） |
 | [sobits_vla_visualization](./sobits_vla_visualization/) | データセット・推論の可視化（TBD） |
+
+4つのパイプライン段階すべてが、単一の**ロボットディスクリプタ**（`sobits_vla_common/robots/<robot_id>.robot.yaml`）からロボットのモルフォロジを読み込みます。これは関節グループ・コマンドトピック・センサー・移動ベースの唯一の真実源です。下記 [ロボットディスクリプタ](#ロボットディスクリプタ) を参照。
+
+<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+
+
+<!-- ROBOT DESCRIPTOR -->
+## ロボットディスクリプタ
+
+ロボットディスクリプタ（`sobits_vla_common/robots/<robot_id>.robot.yaml`）はロボットのモルフォロジの唯一の真実源です。収集（C++）・変換・学習・デプロイのすべてが、段階ごとの設定にジョイント/トピックを重複定義する代わりに、これを読み込みます。
+
+定義内容：
+- `groups` — 関節グループ（`command_topic`, `command_action`, `max_joint_delta`, `active`, 順序付き`joints`：`ros_name` → データセット`feature`）
+- `mobile_base` — 任意の`cmd_vel`/`odom`インターフェース（`has_vel_*` / `max_vel_*` / `features`）
+- `sensors.cameras` — 名前・compressed/raw/info トピック・エンコーディング・activeフラグ
+- `ee_poses` — 任意のTFエンドエフェクタ姿勢
+- `excluded_joints` — 特徴ベクトルから除外するmimic/車輪/受動関節
+
+各設定は `descriptor_id`（deploy/training）または `robot_descriptor_id`（collection/conversion）で参照し、`active_groups` / `active_cameras` / `active_mobile_base` でサブセットを選択します。新ロボット＋Nポリシーの追加＝各段階を編集する代わりに**ディスクリプタ1つ＋モデルのみの設定N個**で済みます。
+
+### 新ロボットのスキャフォルド
+
+```bash
+ros2 run sobits_vla_common new_robot \
+  --robot_id sobit_mini --dof 7 --cameras head,hand_left --mobile_base diff \
+  --gen_collection_config
+```
+
+全トピック/関節フィールドに `# TODO:` マーカー付きのコメント済み `<robot_id>.robot.yaml`（と任意で収集設定）を生成します。編集後に検証：
+
+```bash
+ros2 run sobits_vla_common new_robot --robot_id sobit_mini --validate_only
+```
+
+`# TODO` プレースホルダや未解決の `arm_joint<N>` 名が残っている間は検証失敗（exit 1）します。
 
 <p align="right">(<a href="#readme-top">上に戻る</a>)</p>
 
@@ -91,7 +127,7 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
 
 | 引数 | デフォルト | 説明 |
 | ---- | ---------- | ---- |
-| `robot_name` | （必須） | ロボット名 — `record_settings_<robot_name>.yaml`設定ファイルと一致する必要あり |
+| `robot_name` | （必須） | ロボット名 — `collection_config_<robot_name>.yaml`設定ファイルと一致する必要あり |
 | `record_directory` | `<package_share>/rosbags` | rosbagエピソードの保存先の絶対パス |
 
 #### ゲームパッド操作
@@ -102,7 +138,7 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
 | Save | 現在のエピソードを保存 |
 | Save（停止中） | 最後に保存したエピソードを削除（取り消し） |
 
-ボタンマッピングは[gamepad_settings.yaml](./sobits_vla_rosbag_collection/config/gamepad_settings.yaml)で設定します．
+ボタンマッピングは[gamepad_config.yaml](./sobits_vla_rosbag_collection/config/gamepad_config.yaml)で設定します．
 現在のコントローラープロファイルは`quest`，`dualshock4`，`keyboard`に対応しています．
 
 #### 記録品質モニタリング
@@ -120,18 +156,20 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
 
 #### 設定
 
-ロボット固有設定: `config/record_settings_<robot_name>.yaml`
+ロボット固有設定: `config/collection_config_<robot_name>.yaml`
 
 本リポジトリで主に使う設定:
-- `config/record_settings_sobit_home.yaml`
-- `config/record_settings_sobit_light.yaml`
+- `config/collection_config_sobit_home.yaml`
+- `config/collection_config_sobit_light.yaml`
+
+モルフォロジ（関節グループ・コマンドトピック・センサー・移動ベース）はここには**ありません**。`robot_descriptor_id`経由で[ロボットディスクリプタ](#ロボットディスクリプタ)から読み込まれます。収集設定は記録パラメータのみを持ちます:
 
 | グループ | 主要パラメータ |
 | -------- | -------------- |
-| ロボット形態 | `parts`, `joint_names`, `is_actionable`, `joint_states_topic` |
-| センサー | カメラトピック, LiDAR, IMU |
-| 記録 | `topics_to_record`, 圧縮形式/モード |
-| モニタリング | `expected_sensor_fps`, `min_disk_space_warning_gb`, `min_episode_duration` |
+| ディスクリプタ | `robot_descriptor_id`（`<id>.robot.yaml`を選択） |
+| ユーザ情報 | `user_info.name` / `location` / `email` |
+| 記録 | `additional_topics`, `conversion_format`, 圧縮形式/モード |
+| モニタリング | `expected_sensor_fps`, `min_disk_space_mb`, `min_episode_duration`, `max_episode_duration`, `timestamp_jump_threshold` |
 
 #### SOBIT HOME の起動
 
@@ -299,14 +337,14 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
 
 ```bash
 ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
-  config_file:=conversion_settings.yaml \
+  config_file:=conversion_config.yaml \
   rosbag_directory:=/path/to/rosbags \
   dataset_name:=MyDataset
 ```
 
 | 引数 | デフォルト | 説明 |
 | ---- | ---------- | ---- |
-| `config_file` | `conversion_settings.yaml` | 変換設定ファイル（ロボットに応じて切り替え） |
+| `config_file` | `conversion_config.yaml` | 変換設定ファイル（ロボットに応じて切り替え） |
 | `rosbag_directory` | （収集パッケージから） | 記録済みrosbagエピソードのパス |
 | `recorded_bags_meta_file` | `<rosbag_directory>/recorded_bags_meta.yaml` | 収集時のメタデータファイル |
 | `dataset_name` | （設定から） | 出力データセット名 |
@@ -322,12 +360,15 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 
 #### 設定
 
-設定ファイル: [conversion_settings.yaml](./sobits_vla_rosbag_conversion/config/conversion_settings.yaml)
+設定ファイル: [conversion_config.yaml](./sobits_vla_rosbag_conversion/config/conversion_config.yaml)
 
-ロボット別プリセット例: [conversion_settings_sobit_home.yaml](./sobits_vla_rosbag_conversion/config/conversion_settings_sobit_home.yaml)
+ロボット別プリセット例: [conversion_config_sobit_home.yaml](./sobits_vla_rosbag_conversion/config/conversion_config_sobit_home.yaml)
+
+`robot_descriptor_id`を設定すると[ロボットディスクリプタ](#ロボットディスクリプタ)から`excluded_joints`とカメラ選択を駆動します。空の場合はレガシーなインラインの`excluded_joints` / `cameras`キーを使用します。
 
 | パラメータ | デフォルト | 説明 |
 | ---------- | ---------- | ---- |
+| `robot_descriptor_id` | `""` | 関節/カメラ選択用に`<id>.robot.yaml`を選択（空＝インラインキー使用） |
 | `fps` | `10` | ターゲットデータセットフレームレート |
 | `sync_threshold` | `0.1` | 同期センサー間の最大時間差（秒） |
 | `downsample_tolerance` | `0.015` | スケジューリングジッターによるフレームの早期到達を許容する時間差（秒） |
@@ -344,8 +385,27 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 
 **パッケージ:** [sobits_vla_training](./sobits_vla_training/)
 
+LeRobotデータセット上でVLAポリシーをlerobot 0.5.1により学習・ファインチューニングします。対応ポリシー：`pi05`, `pi0`, `pi0_fast`, `smolvla`, `act`, `groot`。PEFT/LoRA・Hubプッシュ・W&BログはすべてポリシーごとのYAMLで設定します。
+
+#### launchによる起動
+
+```bash
+ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi05
+```
+
+`robot:=<name>`でパッケージの`config/`から`training_config_<name>.yaml`を選択します。
+
+#### 設定ファイル構成
+
+各`training_config_*.yaml`の内容:
+- `policy` — ポリシー種別（対応6種のいずれか）
+- `robot` — `descriptor_id` ＋ `active_groups` / `active_cameras` / `active_mobile_base`。学習器はディスクリプタのactive関節＋移動ベース特徴から`max_state_dim` / `max_action_dim`を導出します（手動設定不要）
+- `dataset` / `training` / `checkpoint` / `wandb` / `hub` — 標準的なlerobotの設定項目
+- `peft` — LoRAメソッド/ターゲット（`method_type`が空＝フルファインチューニング）
+- `policy_overrides` — ポリシーのlerobot設定の任意フィールド（イントロスペクションで適用、未知キーは警告）
+
 > [!NOTE]
-> TBD — 学習ユーティリティは開発中です．
+> GR00T（`groot`）は明示的な`max_state_dim: 64` / `max_action_dim: 32`を保持し、lerobot PEFTの代わりに独自の`tune_*`凍結フラグを使用します。`flash-attn`が必要です。
 
 <p align="right">(<a href="#readme-top">上に戻る</a>)</p>
 
@@ -360,10 +420,10 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 
 ```bash
 ros2 run sobits_vla_deploy sobits_vla_deploy.py --ros-args \
-  --params-file $(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/robot_config.yaml
+  --params-file $(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/deploy_config.yaml
 ```
 
-ロボット別設定を使う場合は，`robot_config_<robot_name>.yaml`を指定してください（例: `robot_config_sobit_home.yaml`）．
+ロボット別設定を使う場合は，`deploy_config_<robot_name>.yaml`を指定してください（例: `deploy_config_sobit_home.yaml`）．
 
 #### launchによる起動
 
@@ -375,40 +435,41 @@ ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py
 
 ```bash
 ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py \
-  config_file:=$(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/robot_config_sobit_home.yaml
+  config_file:=$(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/deploy_config_sobit_home.yaml
 ```
 
 #### 設定ファイル構成
 
-- 汎用テンプレート: [robot_config.yaml](./sobits_vla_deploy/config/robot_config.yaml)
-- ロボット別プリセット例: [robot_config_sobit_home.yaml](./sobits_vla_deploy/config/robot_config_sobit_home.yaml)
+- 汎用テンプレート（レガシーなインライン形式）: [deploy_config.yaml](./sobits_vla_deploy/config/deploy_config.yaml)
+- ロボット別プリセット: [deploy_config_sobit_home_left.yaml](./sobits_vla_deploy/config/deploy_config_sobit_home_left.yaml)
 
-`robot`直下（`robot.name`でロボット名を指定）で以下を設定できます:
-- `joint_states_topic` と `odom_topic`
-- 複数の関節軌道コントローラグループ
-- モバイルベース指令トピックと特徴量
-- カメラトピックと画像エンコーディング
+デプロイノードは**ロボットディスクリプタ**からモルフォロジを読み込み，タスクごとにサブセットを選択します:
 
-#### 複数コントローラー対応（gamepad）
+```yaml
+robot:
+  descriptor_id: sobit_home              # sobits_vla_common/robots/sobit_home.robot.yaml を読み込む
+  active_groups: [head, body, arm_left, hand_left]
+  active_cameras: [head_camera, hand_left_camera]
+  active_mobile_base: true
+```
 
-デプロイ側gamepad設定は，コントローラーごとのボタンマッピングに対応しています．
+コマンドトピック・関節・`max_joint_delta`・移動ベース・カメラトピックはすべてディスクリプタ由来です（インラインのジョイント/トピック一覧は不要）。`descriptor_id`が空の場合は`deploy_config.yaml`に示すレガシーなインライン`robot.*`スキーマにフォールバックします。`model` / `runtime` / `rtc`セクションはデプロイ設定に残ります。
+
+#### ゲームパッドによるplay/stop
+
+play/stopは共有`GamepadClient`ノード（`sobits_vla_common`）が駆動し，デプロイノードの`VlaCommand`**サービス**を呼び出します（`/joy`を直接購読しません）。ボタンマッピングとサービス名は`sobits_vla_common/config/gamepad_config.yaml`にあります:
 
 ```yaml
 gamepad:
-  topic: /joy
-  name: quest
-  controllers: [quest, dualshock4]
+  command_service: "/vla/command"        # デプロイノードが提供するサービス
+  controller: quest
   quest:
-    button_mapping:
-      play: 4
-      stop: 5
+    button_mapping: { play: 4, stop: 4 }
   dualshock4:
-    button_mapping:
-      play: 7
-      stop: 6
+    button_mapping: { play: 7, stop: 7 }
 ```
 
-この設定により，複数コントローラーから同一ノードのplay/stop制御が可能です．
+`/vla/play`（Bool）と`/vla/task`（String）トピックはプログラム制御用に引き続き利用可能です。
 
 <p align="right">(<a href="#readme-top">上に戻る</a>)</p>
 

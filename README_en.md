@@ -19,11 +19,47 @@ SOBITS VLA Tools is a monorepo providing the full pipeline for controlling SOBIT
 
 | Package | Description |
 | ------- | ----------- |
+| `sobits_vla_common` | Shared library: robot descriptor schema/loader, policy registry, lerobot 0.5.1 compat patches, `new_robot` scaffolder, and the `GamepadClient` node |
 | `sobits_vla_rosbag_collection` | Gamepad-triggered multi-modal rosbag recording with live quality monitoring |
 | `sobits_vla_rosbag_conversion` | Converts rosbags into [LeRobot](https://github.com/huggingface/lerobot) dataset format |
-| `sobits_vla_training` | Model training utilities (TBD) |
-| `sobits_vla_deploy` | Real-time VLA inference node for robot control (TBD) |
+| `sobits_vla_training` | Trains/fine-tunes VLA policies (pi05, pi0, pi0_fast, smolvla, ACT, GR00T) via lerobot |
+| `sobits_vla_deploy` | Real-time VLA inference node for robot control (async chunking + RTC) |
 | `sobits_vla_visualization` | Dataset and inference visualization (TBD) |
+
+All four pipeline stages read robot morphology from a single **robot descriptor** (`sobits_vla_common/robots/<robot_id>.robot.yaml`) — the one source of truth for joint groups, command topics, sensors, and mobile base. See [Robot Descriptor](#robot-descriptor) below.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+
+<!-- ROBOT DESCRIPTOR -->
+## Robot Descriptor
+
+A robot descriptor (`sobits_vla_common/robots/<robot_id>.robot.yaml`) is the single source of truth for a robot's morphology. Collection (C++), conversion, training, and deploy all load it instead of duplicating joint/topic lists across per-stage configs.
+
+It defines:
+- `groups` — joint groups, each with `command_topic`, `command_action`, `max_joint_delta`, `active`, and ordered `joints` (`ros_name` → dataset `feature`)
+- `mobile_base` — optional `cmd_vel`/`odom` interface with `has_vel_*` / `max_vel_*` / `features`
+- `sensors.cameras` — name, compressed/raw/info topics, encoding, active flag
+- `ee_poses` — optional TF end-effector poses
+- `excluded_joints` — mimic/wheel/passive joints to drop from feature vectors
+
+Each pipeline config references it by `descriptor_id` (deploy/training) or `robot_descriptor_id` (collection/conversion), then picks a subset via `active_groups` / `active_cameras` / `active_mobile_base`. Adding a new robot + N policies = **1 descriptor + N model-only configs** instead of editing every stage.
+
+### Scaffold a new robot
+
+```bash
+ros2 run sobits_vla_common new_robot \
+  --robot_id sobit_mini --dof 7 --cameras head,hand_left --mobile_base diff \
+  --gen_collection_config
+```
+
+Generates a commented `<robot_id>.robot.yaml` (and optional collection config) with `# TODO:` markers on every topic/joint field. Validate after editing:
+
+```bash
+ros2 run sobits_vla_common new_robot --robot_id sobit_mini --validate_only
+```
+
+Validation fails (exit 1) while `# TODO` placeholders or unresolved `arm_joint<N>` names remain.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -91,7 +127,7 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
 
 | Argument | Default | Description |
 | -------- | ------- | ----------- |
-| `robot_name` | (required) | Robot name — must match a `record_settings_<robot_name>.yaml` config file |
+| `robot_name` | (required) | Robot name — must match a `collection_config_<robot_name>.yaml` config file |
 | `record_directory` | `<package_share>/rosbags` | Absolute path where rosbag episodes are saved |
 
 #### Gamepad Controls
@@ -101,7 +137,7 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
 | Record/Pause | Start recording / Pause / Resume |
 | Save/Delete | Save current episode / Delete last saved episode (if not recording) |
 
-Button mappings are configured in [gamepad_settings.yaml](./sobits_vla_rosbag_collection/config/gamepad_settings.yaml).
+Button mappings are configured in [gamepad_config.yaml](./sobits_vla_rosbag_collection/config/gamepad_config.yaml).
 Supported controller profiles currently include `quest`, `dualshock4`, and `keyboard`.
 
 #### Recording Quality Monitors
@@ -119,18 +155,20 @@ The collection node monitors data quality in real-time during recording:
 
 #### Configuration
 
-Robot-specific config: `config/record_settings_<robot_name>.yaml`
+Robot-specific config: `config/collection_config_<robot_name>.yaml`
 
 For this repository, the main presets are:
-- `config/record_settings_sobit_home.yaml`
-- `config/record_settings_sobit_light.yaml`
+- `config/collection_config_sobit_home.yaml`
+- `config/collection_config_sobit_light.yaml`
+
+Morphology (joint groups, command topics, sensors, mobile base) is **not** here — it is loaded from the [robot descriptor](#robot-descriptor) via `robot_descriptor_id`. The collection config only holds recording params:
 
 | Group | Key Parameters |
 | ----- | -------------- |
-| Robot morphology | `parts`, `joint_names`, `is_actionable`, `joint_states_topic` |
-| Sensors | Camera topics, LiDAR, IMU |
-| Recording | `topics_to_record`, compression format/mode |
-| Monitoring | `expected_sensor_fps`, `min_disk_space_warning_gb`, `min_episode_duration` |
+| Descriptor | `robot_descriptor_id` (selects `<id>.robot.yaml`) |
+| User info | `user_info.name` / `location` / `email` |
+| Recording | `additional_topics`, `conversion_format`, compression format/mode |
+| Monitoring | `expected_sensor_fps`, `min_disk_space_mb`, `min_episode_duration`, `max_episode_duration`, `timestamp_jump_threshold` |
 
 #### Launching SOBIT HOME
 
@@ -298,14 +336,14 @@ Converts raw rosbag recordings into [LeRobot](https://github.com/huggingface/ler
 
 ```bash
 ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
-  config_file:=conversion_settings.yaml \
+  config_file:=conversion_config.yaml \
   rosbag_directory:=/path/to/rosbags \
   dataset_name:=MyDataset
 ```
 
 | Argument | Default | Description |
 | -------- | ------- | ----------- |
-| `config_file` | `conversion_settings.yaml` | Conversion config file (switch per robot profile) |
+| `config_file` | `conversion_config.yaml` | Conversion config file (switch per robot profile) |
 | `rosbag_directory` | (from collection package) | Path to recorded rosbag episodes |
 | `recorded_bags_meta_file` | `<rosbag_directory>/recorded_bags_meta.yaml` | Metadata file from collection |
 | `dataset_name` | (from config) | Output dataset name |
@@ -321,12 +359,15 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 
 #### Configuration
 
-Config file: [conversion_settings.yaml](./sobits_vla_rosbag_conversion/config/conversion_settings.yaml)
+Config file: [conversion_config.yaml](./sobits_vla_rosbag_conversion/config/conversion_config.yaml)
 
-Robot-specific preset example: [conversion_settings_sobit_home.yaml](./sobits_vla_rosbag_conversion/config/conversion_settings_sobit_home.yaml)
+Robot-specific preset example: [conversion_config_sobit_home.yaml](./sobits_vla_rosbag_conversion/config/conversion_config_sobit_home.yaml)
+
+Set `robot_descriptor_id` to drive `excluded_joints` and camera selection from the [robot descriptor](#robot-descriptor); otherwise the legacy inline `excluded_joints` / `cameras` keys are used.
 
 | Parameter | Default | Description |
 | --------- | ------- | ----------- |
+| `robot_descriptor_id` | `""` | Selects `<id>.robot.yaml` for joint/camera selection (empty = use inline keys) |
 | `fps` | `10` | Target dataset frame rate |
 | `sync_threshold` | `0.1` | Max temporal gap (seconds) between synced sensors |
 | `downsample_tolerance` | `0.015` | Tolerance margin (seconds) to accept frames arriving early due to scheduling jitter |
@@ -343,8 +384,27 @@ Robot-specific preset example: [conversion_settings_sobit_home.yaml](./sobits_vl
 
 **Package:** [sobits_vla_training](./sobits_vla_training/)
 
+Trains/fine-tunes a VLA policy on a LeRobot dataset via lerobot 0.5.1. Supported policies: `pi05`, `pi0`, `pi0_fast`, `smolvla`, `act`, `groot`. PEFT/LoRA, Hub push, and W&B logging are configured per YAML.
+
+#### Launch
+
+```bash
+ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi05
+```
+
+`robot:=<name>` selects `training_config_<name>.yaml` from the package `config/`.
+
+#### Config layout
+
+Each `training_config_*.yaml` carries:
+- `policy` — policy type (one of the supported six)
+- `robot` — `descriptor_id` + `active_groups` / `active_cameras` / `active_mobile_base`; the trainer derives `max_state_dim` / `max_action_dim` from the descriptor's active joints + mobile-base features (so they need not be hand-set)
+- `dataset` / `training` / `checkpoint` / `wandb` / `hub` — standard lerobot knobs
+- `peft` — LoRA method/targets (empty `method_type` = full fine-tune)
+- `policy_overrides` — any field of the policy's lerobot config (introspected; unknown keys warn)
+
 > [!NOTE]
-> TBD — Training utilities are under development.
+> GR00T (`groot`) keeps explicit `max_state_dim: 64` / `max_action_dim: 32` and uses its own `tune_*` freezing flags instead of lerobot PEFT. Requires `flash-attn`.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -359,10 +419,10 @@ Runs real-time VLA inference on the robot with async chunk execution and RTC-ena
 
 ```bash
 ros2 run sobits_vla_deploy sobits_vla_deploy.py --ros-args \
-  --params-file $(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/robot_config.yaml
+  --params-file $(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/deploy_config.yaml
 ```
 
-To use a robot-specific setup, pass a `robot_config_<robot_name>.yaml` file (for example, `robot_config_sobit_home.yaml`).
+To use a robot-specific setup, pass a `deploy_config_<robot_name>.yaml` file (for example, `deploy_config_sobit_home.yaml`).
 
 #### Launch
 
@@ -374,40 +434,41 @@ With a robot-specific config:
 
 ```bash
 ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py \
-  config_file:=$(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/robot_config_sobit_home.yaml
+  config_file:=$(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/deploy_config_sobit_home.yaml
 ```
 
 #### Config layout
 
-- Generic template: [robot_config.yaml](./sobits_vla_deploy/config/robot_config.yaml)
-- Robot-specific preset example: [robot_config_sobit_home.yaml](./sobits_vla_deploy/config/robot_config_sobit_home.yaml)
+- Generic template (legacy inline format): [deploy_config.yaml](./sobits_vla_deploy/config/deploy_config.yaml)
+- Robot-specific preset: [deploy_config_sobit_home_left.yaml](./sobits_vla_deploy/config/deploy_config_sobit_home_left.yaml)
 
-The deploy node uses a flat robot config under `robot` (selected by `robot.name`) and supports:
-- joint state and odom topics
-- multiple joint trajectory controller groups
-- optional mobile base command features
-- camera topics and encodings
+The deploy node reads morphology from the **robot descriptor** and selects a subset per task:
 
-#### Multi-controller gamepad mapping
+```yaml
+robot:
+  descriptor_id: sobit_home              # loads sobits_vla_common/robots/sobit_home.robot.yaml
+  active_groups: [head, body, arm_left, hand_left]
+  active_cameras: [head_camera, hand_left_camera]
+  active_mobile_base: true
+```
 
-Deploy now supports controller-specific mappings:
+Command topics, joints, `max_joint_delta`, mobile-base, and camera topics all come from the descriptor — no inline joint/topic lists. (If `descriptor_id` is empty, the node falls back to the legacy inline `robot.*` schema shown in `deploy_config.yaml`.) The `model` / `runtime` / `rtc` sections stay in the deploy config.
+
+#### Gamepad play/stop
+
+Play/stop is driven by the shared `GamepadClient` node (`sobits_vla_common`), which calls the deploy node's `VlaCommand` **service** (no direct `/joy` subscription). Button mappings and the service name live in `sobits_vla_common/config/gamepad_config.yaml`:
 
 ```yaml
 gamepad:
-  topic: /joy
-  name: quest
-  controllers: [quest, dualshock4]
+  command_service: "/vla/command"        # service the deploy node advertises
+  controller: quest
   quest:
-    button_mapping:
-      play: 4
-      stop: 5
+    button_mapping: { play: 4, stop: 4 }
   dualshock4:
-    button_mapping:
-      play: 7
-      stop: 6
+    button_mapping: { play: 7, stop: 7 }
 ```
 
-This allows multiple controllers to trigger play/stop in the same runtime.
+`/vla/play` (Bool) and `/vla/task` (String) topics remain available for programmatic control.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
