@@ -13,8 +13,6 @@
     dataset:
       # HuggingFace Hub repo_id or absolute local path to a LeRobotDataset.
       repo_id: ""
-      # Fraction of episodes reserved for validation [0.0 – 1.0].
-      val_split: 0.1
       # Number of parallel DataLoader workers (0 = main thread only).
       num_workers: 4
       # Optional feature rename map: {"old_key": "new_key"}.
@@ -48,8 +46,6 @@
       steps: 100000
       # Batch size per GPU.
       batch_size: 32
-      # Gradient accumulation steps (effective_batch = batch_size * grad_accum * n_gpus).
-      grad_accum: 1
       # Random seed for reproducibility.
       seed: 1000
       # Use policy config's built-in optimizer / scheduler presets (recommended: true).
@@ -88,23 +84,13 @@
     # HuggingFace Hub push
     # =========================================================================
     hub:
-      # Push the final model to HF Hub after training completes.
-      push_on_finish: true
+      # Push the FINAL-step model to HF Hub after training (no best-checkpoint selection).
+      push_to_hub: true
       # Target repo on HF Hub (e.g. "team-sobits/sobit_home_smolvla").
       repo_id: ""
       # Make the Hub repo private.
       private: false
-      # Push the best checkpoint (lowest val loss) instead of the final step.
-      push_best: true
 
-    # =========================================================================
-    # VRAM pre-flight gate
-    # =========================================================================
-    vram:
-      # Abort training if estimated peak VRAM exceeds this limit [GB].
-      limit_gb: 15.5
-      # Print VRAM estimate even when it passes the gate.
-      verbose: true
 
     # =========================================================================
     # Policy-specific overrides
