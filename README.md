@@ -330,6 +330,7 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 | ---------- | ---------- | ---- |
 | `fps` | `10` | ターゲットデータセットフレームレート |
 | `sync_threshold` | `0.1` | 同期センサー間の最大時間差（秒） |
+| `downsample_tolerance` | `0.015` | スケジューリングジッターによるフレームの早期到達を許容する時間差（秒） |
 | `primary_camera` | `head_camera` | 同期トリガーとして使用するカメラ |
 | `cameras` | `head_camera, hand_left_camera, hand_right_camera` | データセットに含めるカメラ |
 | `ee_pose.enabled` | `false` | エンドエフェクター姿勢抽出を有効化 |
@@ -445,11 +446,32 @@ gamepad:
 <p align="right">(<a href="#readme-top">上に戻る</a>)</p>
 
 
+<!-- TODO -->
+## TODO
+
+### `relative_exclude_joints` の完全サポート
+
+現在，`sobits_vla_rosbag_conversion` および `sobits_vla_deploy` パッケージでは `relative_exclude_joints` パラメータを明示的に扱っていません．
+
+**現状と理由:**
+
+- **変換パッケージ (`sobits_vla_rosbag_conversion`):** 相対アクション変換（デルタ変換）はジョイント位置のみに適用され，ベース速度（`base_x`, `base_y`, `base_theta`）はコード構造上，変換後に追加されるため自動的に除外されます．現在のSOBIT HOMEの構成では，これで十分です．
+- **デプロイパッケージ (`sobits_vla_deploy`):** 後処理器（`absolute_actions_processor`）はモデルリポジトリから読み込まれた `policy_postprocessor.json` に保存されたマスクを使用するため，学習時の除外設定が正しく反映されます．手動デルタ補正のフォールバックパスはベースキーのみを除外するハードコードになっており，`relative_exclude_joints` を参照していません．
+
+**将来の対応:**
+
+異なるロボット形態（モーフォロジー）では，除外すべきジョイントが異なる場合があります（例: 速度制御のホイール，バイナリ制御のグリッパー，受動ジョイントなど）．以下の対応を将来的に実装する必要があります：
+
+- `sobits_vla_rosbag_conversion`: `relative_exclude_joints` パラメータをYAML設定に追加し，デルタ変換のスキップ対象を明示的に指定できるようにする．
+- `sobits_vla_deploy`: 手動デルタ補正のフォールバックパスで，ポリシー設定の `relative_exclude_joints` を読み取り，後処理器なしでデプロイする場合にも正しく除外できるようにする．
+
+<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+
+
 <!-- 参考文献 -->
 ## 参考文献
 
 - [LeRobot](https://github.com/huggingface/lerobot) — データセット形式と学習フレームワーク
-<!-- - [SmolVLA](https://huggingface.co/HuggingFaceTB/SmolVLA-256) — VLAモデルアーキテクチャ -->
 - [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/) — ロボットミドルウェア
 
 <p align="right">(<a href="#readme-top">上に戻る</a>)</p>
