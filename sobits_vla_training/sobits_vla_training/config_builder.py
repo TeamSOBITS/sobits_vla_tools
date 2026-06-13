@@ -40,20 +40,20 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .policy_registry import make_policy_config
+from sobits_vla_common.policy_registry import make_policy_config
 
 logger = logging.getLogger(__name__)
 
 
 def find_package_src_dir() -> Path:
     current_file = Path(__file__).resolve()
-    
+
     # Check if 'build' or 'install' or 'site-packages' or 'dist-packages' is in the path parts
     in_workspace_build_or_install = any(
-        part in current_file.parts 
+        part in current_file.parts
         for part in ('build', 'install', 'site-packages', 'dist-packages')
     )
-    
+
     if not in_workspace_build_or_install:
         # We might be running directly from the source tree
         direct_parent = current_file.parent.parent
@@ -69,14 +69,14 @@ def find_package_src_dir() -> Path:
                 if path.parent.name == 'sobits_vla_training':
                     return path.parent
             break
-            
+
     # Fallback to get_package_share_directory if available
     try:
         from ament_index_python.packages import get_package_share_directory
         return Path(get_package_share_directory('sobits_vla_training'))
     except Exception:
         pass
-        
+
     return current_file.parent.parent
 
 
@@ -113,6 +113,47 @@ def build_train_config(params: dict[str, Any]):
     device: str = _infer_device(params.get('num_gpus', 1))
 
     policy_overrides: dict = params.get('policy_overrides', {}) or {}
+
+    desc_id = params.get('robot.descriptor_id', '')
+    if desc_id:
+        from sobits_vla_common.robot_descriptor import load_robot_descriptor
+        desc = load_robot_descriptor(desc_id)
+
+        active_groups = params.get('robot.active_groups', [])
+        if not active_groups:
+            active_groups = [g.name for g in desc.active_groups]
+        active_mobile_base = params.get('robot.active_mobile_base', True)
+
+        active_joint_features = []
+        for g in desc.groups:
+            if g.name in active_groups:
+                active_joint_features.extend([j.feature for j in g.joints])
+
+        active_base_features = []
+        if desc.mobile_base and active_mobile_base:
+            base_map = {
+                'x.vel': 'base_x',
+                'y.vel': 'base_y',
+                'z.vel': 'base_z',
+                'theta.vel': 'base_theta'
+            }
+            active_base_features = [
+                base_map[f] for f in desc.mobile_base.features
+                if f in base_map
+            ]
+
+        total_dim = len(active_joint_features) + len(active_base_features)
+
+        if 'max_state_dim' not in policy_overrides:
+            policy_overrides['max_state_dim'] = max(32, total_dim)
+        if 'max_action_dim' not in policy_overrides:
+            policy_overrides['max_action_dim'] = max(32, total_dim)
+
+        if (
+            policy_overrides.get('use_relative_actions', False)
+            and 'relative_exclude_joints' not in policy_overrides
+        ):
+            policy_overrides['relative_exclude_joints'] = active_base_features
 
     raw_pretrained = params.get('checkpoint.pretrained_path', '')
     if raw_pretrained:

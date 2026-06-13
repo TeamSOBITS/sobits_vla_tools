@@ -23,6 +23,7 @@
 
   <buildtool_depend>ament_python</buildtool_depend>
 
+  <depend>sobits_vla_common</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>rclpy</exec_depend>
