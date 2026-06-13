@@ -6,12 +6,13 @@
   <name>sobits_vla_training</name>
   <version>0.1.0</version>
   <description>
-    ROS packages for SOBITS VLA Training.
+    ROS 2 package for fine-tuning VLA policies (SmolVLA, PI0, PI05, PI0_fast)
+    on LeRobot datasets collected with sobits_vla_rosbag_collection.
   </description>
 
   <maintainer email="kvalentincardenas@gmail.com">VALENTIN Keith</maintainer>
 
-  <license>BSD</license>
+  <license>BSD-3-Clause</license>
 
   <url type="website">https://home.soka.ac.jp/~choi/index.html</url>
   <url type="repository">https://github.com/TeamSOBITS/sobits_vla_tools</url>
@@ -20,14 +21,16 @@
   <author email="team.sobits@gmail.com">Team SOBITS</author>
   <author email="kvalentincardenas@gmail.com">VALENTIN Keith</author>
 
-  <buildtool_depend>ament_cmake</buildtool_depend>
-  
-  <!-- <depend>TODO</depend> -->
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rclpy</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
   <export>
-    <build_type>ament_cmake</build_type>
+    <build_type>ament_python</build_type>
   </export>
 </package>

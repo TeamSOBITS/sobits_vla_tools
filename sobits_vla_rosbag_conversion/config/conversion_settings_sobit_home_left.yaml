@@ -24,8 +24,10 @@
     downsample_tolerance: 0.015
 
     push_to_hub: true
-    hub_private: true
-    overwrite: false
+    hub_private: false
+    overwrite: true
+
+    use_relative_actions: false
 
     # Skip frames where no joint exceeds this velocity (rad/s). 0.0 = disabled.
     skip_static_threshold: 0.0
@@ -55,9 +57,9 @@
     # End-effector pose via TF tree.
     ee_pose:
       enabled: false
-      names: ["left", "right"]
-      source_frames: ["hand_left_end_effector_link", "hand_right_end_effector_link"]
-      target_frames: ["base_link", "base_link"]
+      names: ["left"]
+      source_frames: ["hand_left_end_effector_link"]
+      target_frames: ["base_link"]
 
     # Camera configuration for sobit_home.
     # primary = sync trigger camera (one frame assembled per primary image).
@@ -66,5 +68,5 @@
     cameras:
       skip: false
       primary: "head_camera"
-      names: ["head_camera", "hand_left_camera", "hand_right_camera"]
-      compressed: [true, true, true]
+      names: ["head_camera", "hand_left_camera"]
+      compressed: [true, true]

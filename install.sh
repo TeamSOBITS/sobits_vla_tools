@@ -4,6 +4,34 @@ set -e
 
 echo "╔══╣ Install: SOBITS VLA TOOLS (STARTING) ╠══╗"
 
+# Keep track of the current directory
+DIR=`pwd`
+
+cd ../
+
+# Download required packages
+ros_packages=(
+    "sobits_interfaces"
+)
+
+# Clone all packages
+for ((i = 0; i < ${#ros_packages[@]}; i++)) {
+    echo "Clonning: ${ros_packages[i]}"
+    git clone --recurse-submodules -b $ROS_DISTRO-devel https://github.com/TeamSOBITS/${ros_packages[i]}
+
+    # Check if install.sh exists in each package
+    if [ -f ${ros_packages[i]}/install.sh ]; then
+        echo "Running install.sh in ${ros_packages[i]}."
+        cd ${ros_packages[i]}
+        bash install.sh
+        cd ..
+    fi
+}
+
+# Go back to previous directory
+cd ${DIR}
+
+
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 WORKSPACE_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 
@@ -48,7 +76,8 @@ rosdep install --from-paths sobits_vla_tools --ignore-src -r -y
 
 PYTHON_PACKAGES=(
     "huggingface_hub"
-    "lerobot${LEROBOT_VERSION_SPEC}"
+    "lerobot[transformers-dep]${LEROBOT_VERSION_SPEC}"
+    "peft"
     "numpy${NUMPY_VERSION_SPEC}"
     "numexpr${NUMEXPR_VERSION_SPEC}"
     "bottleneck${BOTTLENECK_VERSION_SPEC}"

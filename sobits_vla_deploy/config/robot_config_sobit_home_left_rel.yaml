@@ -1,28 +1,43 @@
 /**:
   ros__parameters:
     model:
-      repo_id: ""
+      # RELATIVE-actions model (HF docs flow): trained on
+      # left-abs-relstats-gazebo with use_relative_actions: true. The pushed
+      # preprocessor delta_actions_processor and postprocessor
+      # absolute_actions_processor are both ENABLED — the node re-anchors each
+      # predicted chunk to the state observed at inference time.
+      repo_id: "k-valentin/sobit_home_pickup_block_left_rel_pi05"
       policy_class: "lerobot.policies.pi05.modeling_pi05.PI05Policy"
       device: "cuda"
       use_amp: false
-      use_relative_actions: false
+      use_relative_actions: true
+      default_task_label: "Pick up the block"
+      dataset_repo_id: ""
 
     runtime:
-      control_hz: 6.0
+      # Must match dataset fps (10).
+      control_hz: 10.0
       actions_per_chunk: 50
-      chunk_size_threshold: 0.6
-      aggregate_fn_name: weighted_average
+      chunk_size_threshold: 0.5
+      # Non-RTC chunk handling: newest = clean replacement at overlaps.
+      aggregate_fn_name: newest
       async_enabled: true
       single_step_mode: false
-      max_joint_delta_per_step: 0.15
+      # NOTE: joint rate limiting is configured per group via
+      # robot.groups.<group>.max_joint_delta (rad): commands are clamped to
+      # measured_position +- max_joint_delta each cycle.
 
     rtc:
-      # PI05 does not expose predict_action_chunk — keep disabled to avoid spurious warnings.
+      # DISABLED for relative mode: RTC guidance compares chunks in model
+      # space, but relative chunks are anchored to DIFFERENT reference states
+      # (the robot moves between inferences) — the guided prefix double-counts
+      # progress after re-anchoring. Evaluate rel without RTC first; a
+      # reference-shift correction can be implemented if rel + RTC is wanted.
       enabled: false
-      execution_horizon: 6
+      execution_horizon: 16
       max_guidance_weight: 10.0
       prefix_attention_schedule: EXP
-      inference_delay: 4
+      inference_delay: 5
       debug: false
 
     robot:
@@ -36,11 +51,14 @@
           - head
           - body
           - left_arm
-          - right_arm
+          # - right_arm
           - left_hand
-          - right_hand
+          # - right_hand
         head:
           command_topic: "/sobit_home/head_position_controller/joint_trajectory"
+          # Max command offset from measured position (rad). At 10 Hz this
+          # bounds effective speed to ~0.10 × 10 = 1.0 rad/s.
+          max_joint_delta: 0.10
           joints_ros:
             - head_pan_joint
             - head_tilt_joint
@@ -49,12 +67,17 @@
             - head_tilt_joint
         body:
           command_topic: "/sobit_home/body_position_controller/joint_trajectory"
+          # body_lift barely moves in the dataset (~0.008 rad span) — keep it slow.
+          max_joint_delta: 0.02
           joints_ros:
             - body_lift_joint
           features:
             - body_lift_joint
         left_arm:
           command_topic: "/sobit_home/arm_left_position_controller/joint_trajectory"
+          # Max offset from measured position: ~1.5 rad/s effective at 10 Hz —
+          # above normal task speed, below chunk-boundary jump magnitude.
+          max_joint_delta: 0.15
           joints_ros:
             - arm_left_shoulder_tilt_joint
             - arm_left_upper_roll_joint
@@ -87,6 +110,10 @@
             - arm_right_wrist_roll_joint
         left_hand:
           command_topic: "/sobit_home/hand_left_position_controller/joint_trajectory"
+          # Fingers close quickly during grasp — allow faster steps. When the
+          # fingers stall on the block, commands stay <= 0.30 rad beyond the
+          # measured position, which still maintains grip force.
+          max_joint_delta: 0.30
           joints_ros:
             - hand_left_finger_l_mcp_joint
             - hand_left_finger_l_pip_joint
@@ -134,7 +161,7 @@
         names:
           - head_camera
           - hand_left_camera
-          - hand_right_camera
+          # - hand_right_camera
         default_encoding: rgb8
         # Dataset collected from compressed topics — subscribe to CompressedImage.
         default_compressed: true

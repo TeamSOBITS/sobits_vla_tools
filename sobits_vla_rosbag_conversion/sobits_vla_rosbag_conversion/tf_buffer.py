@@ -25,9 +25,17 @@ class _DynamicEntry:
         self.matrices.insert(idx, mat)
 
     def query(self, stamp_ns: int) -> tuple[str, np.ndarray] | None:
-        """Return (parent, matrix) for the latest entry at or before *stamp_ns*."""
+        """Return (parent, matrix) for the latest entry at or before *stamp_ns*.
+
+        If stamp_ns precedes all recorded entries (e.g. first bag frame arrives before
+        the first /tf message in message order), fall back to the earliest entry so that
+        static-ish transforms (robot description, fixed joints) still resolve rather than
+        causing a spurious lookup failure.
+        """
         idx = bisect.bisect_right(self.stamps, stamp_ns) - 1
         if idx < 0:
+            if self.stamps:
+                return self.parents[0], self.matrices[0]
             return None
         return self.parents[idx], self.matrices[idx]
 

@@ -26,11 +26,17 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+# Required for PI05 bfloat16 model loading on CUDA without OOM.
+# Set before any child process is spawned so it is inherited.
+os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
 
 
 def _str_to_bool(value: str) -> bool:
@@ -39,6 +45,21 @@ def _str_to_bool(value: str) -> bool:
 
 def _create_deploy_node(context, *args, **kwargs):
     config_file = LaunchConfiguration('config_file').perform(context)
+    robot_config = LaunchConfiguration('robot_config').perform(context).strip()
+
+    # robot_config is a filename stem inside the package's config/ dir.
+    # If provided it takes precedence over config_file.
+    if robot_config:
+        from ament_index_python.packages import get_package_share_directory
+        import os
+        pkg_config_dir = os.path.join(
+            get_package_share_directory('sobits_vla_deploy'), 'config'
+        )
+        # Accept with or without .yaml extension
+        if not robot_config.endswith('.yaml'):
+            robot_config += '.yaml'
+        config_file = os.path.join(pkg_config_dir, robot_config)
+
     robot_name = LaunchConfiguration('robot_name').perform(context)
     node_name = LaunchConfiguration('node_name').perform(context)
     use_sim_time = _str_to_bool(LaunchConfiguration('use_sim_time').perform(context))
@@ -61,7 +82,7 @@ def _create_deploy_node(context, *args, **kwargs):
     return [
         Node(
             package='sobits_vla_deploy',
-            executable='sobits_vla_deploy.py',
+            executable='sobits_vla_deploy',
             name=node_name,
             namespace=robot_name,
             output='screen',
@@ -85,9 +106,17 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             DeclareLaunchArgument(
+                'robot_config',
+                default_value='',
+                description=(
+                    'Config filename (with or without .yaml) inside the package config/ dir. '
+                    'e.g. robot_config_sobit_home  — takes precedence over config_file.'
+                ),
+            ),
+            DeclareLaunchArgument(
                 'config_file',
                 default_value=default_config,
-                description='Path to deploy parameter YAML file.',
+                description='Absolute path to deploy parameter YAML. Ignored when robot_config is set.',
             ),
             DeclareLaunchArgument(
                 'robot_name',

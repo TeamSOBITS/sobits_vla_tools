@@ -1,28 +1,47 @@
 /**:
   ros__parameters:
     model:
-      repo_id: ""
-      policy_class: "lerobot.policies.pi05.modeling_pi05.PI05Policy"
+      # SmolVLA (450M) FULL fine-tune with UNFROZEN VLM + vision (the LeKiwi
+      # ablation recipe) on left-abs-gazebo. Full-model repo (no adapter);
+      # runs float32 at deploy (registry cast_bf16=false) — only ~1.8 GB VRAM.
+      # NOTE: smolvla has no action_feature_names — the node maps actions
+      # positionally, which is correct because the robot.groups order below
+      # matches the dataset feature order exactly. Do not reorder groups.
+      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_smolvla_vlmft"
+      policy_class: "lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy"
       device: "cuda"
       use_amp: false
       use_relative_actions: false
+      default_task_label: "Pick up the block"
+      dataset_repo_id: ""
 
     runtime:
-      control_hz: 6.0
+      # Must match dataset fps (10).
+      control_hz: 10.0
       actions_per_chunk: 50
-      chunk_size_threshold: 0.6
-      aggregate_fn_name: weighted_average
+      # SmolVLA inference is fast (~50-150 ms for 450M fp32) — the queue
+      # refills quickly; 0.5 gives frequent replans with large margin.
+      chunk_size_threshold: 0.5
+      aggregate_fn_name: newest
       async_enabled: true
+      # single_step_mode: true is viable for smolvla if maximum reactivity is
+      # wanted (inference fits well inside the 100 ms tick on this GPU).
       single_step_mode: false
-      max_joint_delta_per_step: 0.15
+      # NOTE: joint rate limiting is configured per group via
+      # robot.groups.<group>.max_joint_delta (rad): commands are clamped to
+      # measured_position +- max_joint_delta each cycle.
 
     rtc:
-      # PI05 does not expose predict_action_chunk — keep disabled to avoid spurious warnings.
-      enabled: false
-      execution_horizon: 6
+      # SmolVLA fully supports RTC in lerobot 0.5.1 (rtc_config field,
+      # init_rtc_processor, predict_action_chunk with inference_delay /
+      # prev_chunk_left_over).
+      enabled: true
+      # Low latency -> small frozen prefix; ~2-3 steps cover 150-300 ms.
+      execution_horizon: 10
       max_guidance_weight: 10.0
       prefix_attention_schedule: EXP
-      inference_delay: 4
+      # Floor; the LatencyTracker adapts upward from measurements.
+      inference_delay: 2
       debug: false
 
     robot:
@@ -36,11 +55,14 @@
           - head
           - body
           - left_arm
-          - right_arm
+          # - right_arm
           - left_hand
-          - right_hand
+          # - right_hand
         head:
           command_topic: "/sobit_home/head_position_controller/joint_trajectory"
+          # Max command offset from measured position (rad). At 10 Hz this
+          # bounds effective speed to ~0.10 × 10 = 1.0 rad/s.
+          max_joint_delta: 0.10
           joints_ros:
             - head_pan_joint
             - head_tilt_joint
@@ -49,12 +71,17 @@
             - head_tilt_joint
         body:
           command_topic: "/sobit_home/body_position_controller/joint_trajectory"
+          # body_lift barely moves in the dataset (~0.008 rad span) — keep it slow.
+          max_joint_delta: 0.02
           joints_ros:
             - body_lift_joint
           features:
             - body_lift_joint
         left_arm:
           command_topic: "/sobit_home/arm_left_position_controller/joint_trajectory"
+          # Max offset from measured position: ~1.5 rad/s effective at 10 Hz —
+          # above normal task speed, below chunk-boundary jump magnitude.
+          max_joint_delta: 0.15
           joints_ros:
             - arm_left_shoulder_tilt_joint
             - arm_left_upper_roll_joint
@@ -87,6 +114,10 @@
             - arm_right_wrist_roll_joint
         left_hand:
           command_topic: "/sobit_home/hand_left_position_controller/joint_trajectory"
+          # Fingers close quickly during grasp — allow faster steps. When the
+          # fingers stall on the block, commands stay <= 0.30 rad beyond the
+          # measured position, which still maintains grip force.
+          max_joint_delta: 0.30
           joints_ros:
             - hand_left_finger_l_mcp_joint
             - hand_left_finger_l_pip_joint
@@ -134,7 +165,7 @@
         names:
           - head_camera
           - hand_left_camera
-          - hand_right_camera
+          # - hand_right_camera
         default_encoding: rgb8
         # Dataset collected from compressed topics — subscribe to CompressedImage.
         default_compressed: true

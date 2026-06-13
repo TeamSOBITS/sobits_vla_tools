@@ -1,0 +1,57 @@
+# PI0_fast policy training defaults.
+# Distilled tokenized variant of PI0 — much faster inference, similar quality.
+
+policy_type: pi0_fast
+
+pretrained_path: "lerobot/pi0fast-base"
+
+# --- Action chunking ---
+chunk_size: 50
+n_action_steps: 50
+n_obs_steps: 1
+
+# --- Dimension padding ---
+max_state_dim: 32
+max_action_dim: 32
+
+# --- Model ---
+paligemma_variant: "gemma_2b"
+action_expert_variant: "gemma_300m"
+dtype: "bfloat16"
+
+# --- Action tokenization (FAST) ---
+max_action_tokens: 256
+temperature: 0.0
+# Other PI0FastConfig fields available as overrides:
+#   max_decoding_steps, fast_skip_tokens, validate_action_token_prefix,
+#   use_kv_cache, text_tokenizer_name, action_tokenizer_name
+
+# --- Vision ---
+image_resolution: [224, 224]
+empty_cameras: 0
+
+# --- Fine-tuning scope ---
+# NOTE: PI0FastConfig has NO freeze_vision_encoder / train_expert_only fields
+# (pi0_fast is a single PaliGemma decoding FAST tokens — no action expert).
+# Use LoRA (peft.method_type: LORA) to restrict trainable parameters; the
+# default LoRA targets are the LM attention q/v projections (patched in
+# train_node._patch_pi0fast_peft_targets).
+gradient_checkpointing: true
+
+# --- Optimisation ---
+optimizer_lr: 2.5e-5
+optimizer_betas: [0.9, 0.95]
+optimizer_eps: 1.0e-8
+optimizer_weight_decay: 0.01
+optimizer_grad_clip_norm: 1.0
+
+# --- LR schedule ---
+scheduler_warmup_steps: 1000
+scheduler_decay_steps: 30000
+scheduler_decay_lr: 2.5e-6
+
+# --- Mixed precision ---
+use_amp: false
+
+# --- Compilation ---
+compile_model: false

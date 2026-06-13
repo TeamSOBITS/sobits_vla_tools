@@ -1,0 +1,49 @@
+# ACT (Action Chunking with Transformers) training defaults.
+# All fields map 1-to-1 to ACTConfig dataclass fields.
+#
+# ACT trains FROM SCRATCH (~80M params, ResNet18 vision backbone with ImageNet
+# weights) — there is no pretrained policy checkpoint. It is the recommended
+# lerobot starter policy: fast training, data-efficient (~50 demos).
+#
+# CAVEATS vs the pi-family:
+#  - NO language conditioning: the task instruction is ignored. Fine for a
+#    single-task dataset; useless for multi-task.
+#  - Images are processed at NATIVE resolution (no internal resize) — the
+#    1920x1200 hand camera is expensive; consider lowering camera resolution
+#    at conversion time if VRAM or speed becomes a problem.
+#  - Normalization is MEAN_STD (not quantiles) for state/action/images.
+
+policy_type: act
+
+# From scratch — leave empty (ResNet18 ImageNet weights load automatically).
+pretrained_path: ""
+
+# --- Action chunking ---
+# lerobot/ALOHA default is 100 @ 50 Hz (= 2 s). Our dataset is 10 fps, so
+# 50 steps = 5 s, matching the rest of the SOBITS pipeline (deploy expects
+# actions_per_chunk <= chunk_size).
+chunk_size: 50
+n_action_steps: 50
+n_obs_steps: 1
+
+# --- Architecture (lerobot defaults) ---
+vision_backbone: "resnet18"
+pretrained_backbone_weights: "ResNet18_Weights.IMAGENET1K_V1"
+dim_model: 512
+n_heads: 8
+dim_feedforward: 3200
+n_encoder_layers: 4
+n_decoder_layers: 1
+
+# --- VAE (style variable) ---
+use_vae: true
+latent_dim: 32
+n_vae_encoder_layers: 4
+kl_weight: 10.0
+
+dropout: 0.1
+
+# --- Optimisation (ACT preset: constant LR, no scheduler) ---
+optimizer_lr: 1.0e-5
+optimizer_weight_decay: 1.0e-4
+optimizer_lr_backbone: 1.0e-5
