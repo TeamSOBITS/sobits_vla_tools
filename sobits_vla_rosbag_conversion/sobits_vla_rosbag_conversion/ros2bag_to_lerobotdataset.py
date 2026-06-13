@@ -50,6 +50,39 @@ _ensure_runtime_dependencies()
 from rosbags.highlevel import AnyReader
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
+
+def _patch_uint8_quantile_stats() -> None:
+    """Guard against lerobot 0.5.1's uint8 overflow in RunningQuantileStats.
+
+    Images reach RunningQuantileStats.update() as raw uint8 [0, 255]
+    (sample_images loads uint8 to save memory; the /255 happens AFTER stats).
+    NumPy squaring of uint8 wraps mod 256 (255**2 -> 1), making
+    mean_of_squares < mean**2, variance negative, and std clamped to 0.0 —
+    which breaks image normalization downstream with NaN/inf.
+
+    The fix also exists as a direct edit in our lerobot src checkout, but a
+    pip (re)install of lerobot would silently revert it — this wrapper makes
+    every conversion independent of which lerobot copy is installed. It is
+    idempotent: if the underlying update() already casts, the extra cast here
+    is a no-op.
+    """
+    try:
+        from lerobot.datasets.compute_stats import RunningQuantileStats
+
+        _orig_update = RunningQuantileStats.update
+
+        def _patched_update(self, batch):
+            if np.issubdtype(batch.dtype, np.integer):
+                batch = batch.astype(np.float64)
+            return _orig_update(self, batch)
+
+        RunningQuantileStats.update = _patched_update
+    except Exception:
+        pass  # compute_stats layout changed — assume upstream fixed it
+
+
+_patch_uint8_quantile_stats()
+
 try:
     from PIL import Image as PILImage
 except Exception:
@@ -70,10 +103,13 @@ class RosbagConversionNode(Node):
         self.declare_parameter('fps', 10)
         self.declare_parameter('vcodec', 'auto')
         self.declare_parameter('sync_threshold', 0.1)
+        self.declare_parameter('downsample_tolerance', 0.015)
         self.declare_parameter('push_to_hub', False)
         self.declare_parameter('hub_private', False)
         self.declare_parameter('overwrite', False)
+        self.declare_parameter('use_relative_actions', False)
         self.declare_parameter('skip_static_threshold', 0.0)
+        self.declare_parameter('excluded_joints', [''])
         self.declare_parameter('ee_pose.enabled', False)
         self.declare_parameter('ee_pose.target_frame', 'base_link')
         self.declare_parameter('ee_pose.source_frame', 'hand_palm_link')
@@ -93,10 +129,14 @@ class RosbagConversionNode(Node):
         self.fps = self.get_parameter('fps').get_parameter_value().integer_value
         self.vcodec = self.get_parameter('vcodec').get_parameter_value().string_value
         self.sync_threshold = self.get_parameter('sync_threshold').get_parameter_value().double_value
+        self.downsample_tolerance = self.get_parameter('downsample_tolerance').get_parameter_value().double_value
         self.push_to_hub = self.get_parameter('push_to_hub').get_parameter_value().bool_value
         self.hub_private = self.get_parameter('hub_private').get_parameter_value().bool_value
         self.overwrite = self.get_parameter('overwrite').get_parameter_value().bool_value
+        self.use_relative_actions = self.get_parameter('use_relative_actions').get_parameter_value().bool_value
         self.skip_static_threshold = self.get_parameter('skip_static_threshold').get_parameter_value().double_value
+        raw_excluded = self.get_parameter('excluded_joints').get_parameter_value().string_array_value
+        self.excluded_joints = [j for j in raw_excluded if j]
         self.ee_pose_enabled = self.get_parameter('ee_pose.enabled').get_parameter_value().bool_value
         # Build ee_configs: list of (name, source_frame, target_frame)
         _ee_names   = [n for n in self.get_parameter('ee_pose.names').get_parameter_value().string_array_value if n]
@@ -282,45 +322,122 @@ class RosbagConversionNode(Node):
                 return False
         return True
 
+    def _interpolate_vector(self, series, target_time, dim):
+        """Linearly interpolates a time-series list of (t, list_of_floats) at target_time."""
+        if not series:
+            return [0.0] * dim
+        if len(series) == 1:
+            return series[0][1]
+
+        import bisect
+        times = [s[0] for s in series]
+        idx = bisect.bisect_right(times, target_time)
+
+        if idx == 0:
+            return series[0][1]
+        if idx == len(series):
+            return series[-1][1]
+
+        t_prev, val_prev = series[idx - 1]
+        t_next, val_next = series[idx]
+
+        dt = t_next - t_prev
+        if dt <= 0.0:
+            return val_prev
+
+        alpha = (target_time - t_prev) / dt
+        return [(1.0 - alpha) * val_prev[j] + alpha * val_next[j] for j in range(dim)]
+
+    def _interpolate_dict(self, series, target_time, keys):
+        """Linearly interpolates a time-series list of (t, dict_of_floats) at target_time."""
+        if not series:
+            return {k: 0.0 for k in keys}
+        if len(series) == 1:
+            return {k: series[0][1].get(k, 0.0) for k in keys}
+
+        import bisect
+        times = [s[0] for s in series]
+        idx = bisect.bisect_right(times, target_time)
+
+        if idx == 0:
+            return {k: series[0][1].get(k, 0.0) for k in keys}
+        if idx == len(series):
+            return {k: series[-1][1].get(k, 0.0) for k in keys}
+
+        t_prev, dict_prev = series[idx - 1]
+        t_next, dict_next = series[idx]
+
+        dt = t_next - t_prev
+        if dt <= 0.0:
+            return {k: dict_prev.get(k, 0.0) for k in keys}
+
+        alpha = (target_time - t_prev) / dt
+        res = {}
+        for k in keys:
+            v_prev = dict_prev.get(k, 0.0)
+            v_next = dict_next.get(k, 0.0)
+            res[k] = (1.0 - alpha) * v_prev + alpha * v_next
+        return res
+
+    def _get_nearest_image(self, series, target_time):
+        """Returns the nearest image (rawdata, msgtype, t) to target_time in the series."""
+        if not series:
+            return None, None, 0.0
+        if len(series) == 1:
+            return series[0][1], series[0][2], series[0][0]
+
+        import bisect
+        times = [s[0] for s in series]
+        idx = bisect.bisect_right(times, target_time)
+
+        if idx == 0:
+            return series[0][1], series[0][2], series[0][0]
+        if idx == len(series):
+            return series[-1][1], series[-1][2], series[-1][0]
+
+        t_prev, raw_prev, type_prev = series[idx - 1]
+        t_next, raw_next, type_next = series[idx]
+
+        if abs(target_time - t_prev) < abs(target_time - t_next):
+            return raw_prev, type_prev, t_prev
+        else:
+            return raw_next, type_next, t_next
+
+    def _any_arrived_in_interval(self, series, t_start, t_end):
+        """Returns True if any message in the series arrived in the interval (t_start, t_end]."""
+        if not series:
+            return False
+        import bisect
+        times = [s[0] for s in series]
+        idx = bisect.bisect_right(times, t_start)
+        if idx < len(times) and times[idx] <= t_end:
+            return True
+        return False
+
     # Episode extraction
     def _extract_episode_data(self, bag_folder, subtasks_map, instruction):
         """
         Iterate over the bag and return a list of (timestamp, frame) tuples.
         Uses connection-level topic filter (O1) and cached topic_to_cam (O2).
         """
-        frames = []
-        skipped_static = 0
-        skipped_tf = 0
-        skipped_img_decode = 0
-        images = {cam_name: None for cam_name in self.camera_topics.keys()}
-        image_times = {cam_name: 0.0 for cam_name in self.camera_topics.keys()}
-        latest_joint_state = None
-        latest_joint_velocity = None
-        latest_joint_time = 0.0
-        latest_cmd_vel = [0.0] * len(self.base_keys) if self.has_mobile_base else None
-        latest_cmd_vel_time = 0.0
-        # Per-joint commanded positions and timestamps (from JointTrajectory messages)
-        commanded_joints = {}       # {joint_name: position}
-        commanded_joints_time = {}  # {joint_name: timestamp}
+        # Buffers for time-series data
+        joint_states_series = []          # list of (t, dict_pos, dict_vel)
+        cmd_vel_series = []               # list of (t, list_vel)
+        odom_series = []                  # list of (t, list_vel)
+        cmd_joints_series = []            # list of (t, dict_pos)
+        cam_series = {cam_name: [] for cam_name in self.camera_topics.keys()} # cam_name -> list of (t, rawdata, connection)
 
-        # EE pose tracking — one prev_pose entry per configured EE
-        prev_ee_poses = {name: None for name, _, _ in self.ee_configs}
+        tf_tree = OfflineTFTree() if self.ee_pose_enabled else None
 
         # Compute wanted topic set and filter connections
         wanted = set(self.camera_topics.values()) | {self.joint_states_topic}
         wanted |= self.part_command_topics  # JointTrajectory topics (required for action)
         if self.has_mobile_base and self.cmd_vel_topic:
             wanted.add(self.cmd_vel_topic)
+        if self.has_mobile_base and self.odom_topic:
+            wanted.add(self.odom_topic)
         if self.ee_pose_enabled:
             wanted |= {"/tf", "/tf_static"}
-
-        last_frame_time = 0.0  # timestamp of the last assembled frame (for freshness)
-        min_frame_interval = 1.0 / self.fps if self.fps > 0 else 0.0  # downsampling interval
-        skipped_downsample = 0
-
-        sync_deltas = []
-
-        tf_tree = OfflineTFTree() if self.ee_pose_enabled else None
 
         with AnyReader([Path(bag_folder)]) as reader:
             # Pre-validate topics — log each missing topic with its purpose
@@ -364,13 +481,11 @@ class RosbagConversionNode(Node):
 
                 if topic == self.joint_states_topic:
                     msg = reader.deserialize(rawdata, connection.msgtype)
+                    t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
                     joint_pos = dict(zip(msg.name, msg.position))
                     velocity_values = getattr(msg, 'velocity', [])
                     joint_vel = dict(zip(msg.name, velocity_values)) if len(velocity_values) > 0 else {}
-                    t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-                    latest_joint_state = [joint_pos.get(feat, 0.0) for feat in self.action_features]
-                    latest_joint_velocity = [joint_vel.get(feat, 0.0) for feat in self.action_features]
-                    latest_joint_time = t_sec
+                    joint_states_series.append((t_sec, joint_pos, joint_vel))
 
                 elif tf_tree is not None and topic in ("/tf", "/tf_static"):
                     msg = reader.deserialize(rawdata, connection.msgtype)
@@ -378,184 +493,301 @@ class RosbagConversionNode(Node):
 
                 elif topic in self.part_command_topics:
                     msg = reader.deserialize(rawdata, connection.msgtype)
-                    # JointTrajectory messages carry commanded positions
                     if hasattr(msg, 'joint_names') and hasattr(msg, 'points') and len(msg.points) > 0:
-                        target_point = msg.points[-1]  # final waypoint = target
+                        target_point = msg.points[-1]
                         t_cmd = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') and msg.header.stamp.sec > 0 else t_bag
-                        for jn, pos in zip(msg.joint_names, target_point.positions):
-                            commanded_joints[jn] = pos
-                            commanded_joints_time[jn] = t_cmd
+                        commanded_joints = dict(zip(msg.joint_names, target_point.positions))
+                        cmd_joints_series.append((t_cmd, commanded_joints))
 
                 elif topic == self.cmd_vel_topic and self.has_mobile_base:
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') else t_bag
                     if self.has_cmd_vel_y and self.has_cmd_vel_z:
-                        latest_cmd_vel = [msg.linear.x, msg.linear.y, msg.linear.z, msg.angular.z]
+                        cmd_vel = [msg.linear.x, msg.linear.y, msg.linear.z, msg.angular.z]
                     elif self.has_cmd_vel_y:
-                        latest_cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z]
+                        cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z]
                     elif self.has_cmd_vel_z:
-                        latest_cmd_vel = [msg.linear.x, msg.linear.z, msg.angular.z]
+                        cmd_vel = [msg.linear.x, msg.linear.z, msg.angular.z]
                     else:
-                        latest_cmd_vel = [msg.linear.x, msg.angular.z]
-                    latest_cmd_vel_time = t_sec
+                        cmd_vel = [msg.linear.x, msg.angular.z]
+                    cmd_vel_series.append((t_sec, cmd_vel))
+
+                elif topic == self.odom_topic and self.has_mobile_base:
+                    msg = reader.deserialize(rawdata, connection.msgtype)
+                    t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 if hasattr(msg, 'header') else t_bag
+                    linear_x = msg.twist.twist.linear.x
+                    linear_y = msg.twist.twist.linear.y
+                    linear_z = msg.twist.twist.linear.z
+                    angular_z = msg.twist.twist.angular.z
+                    if self.has_cmd_vel_y and self.has_cmd_vel_z:
+                        odom_vel = [linear_x, linear_y, linear_z, angular_z]
+                    elif self.has_cmd_vel_y:
+                        odom_vel = [linear_x, linear_y, angular_z]
+                    elif self.has_cmd_vel_z:
+                        odom_vel = [linear_x, linear_z, angular_z]
+                    else:
+                        odom_vel = [linear_x, angular_z]
+                    odom_series.append((t_sec, odom_vel))
 
                 elif topic in self.topic_to_cam:
                     cam_name = self.topic_to_cam[topic]
                     msg = reader.deserialize(rawdata, connection.msgtype)
-                    try:
-                        img = self._decode_image_message(msg)
-                        if img is None:
-                            skipped_img_decode += 1
-                            if skipped_img_decode <= 3:
-                                self.get_logger().warn(
-                                    f"Image decode returned None: topic={topic}, msgtype={connection.msgtype}"
-                                )
-                            continue
-                    except Exception as e:
-                        skipped_img_decode += 1
-                        if skipped_img_decode <= 3:
-                            self.get_logger().warn(
-                                f"Image decode exception: topic={topic}, msgtype={connection.msgtype}, error={e}"
-                            )
-                        continue
                     t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+                    cam_series[cam_name].append((t_sec, rawdata, connection))
+
+        if not cam_series[self.primary_camera]:
+            self.get_logger().error(f"Bag '{bag_folder}' contains no primary camera images.")
+            return None
+        if not joint_states_series:
+            self.get_logger().error(f"Bag '{bag_folder}' contains no joint states.")
+            return None
+
+        # Sort all buffers by timestamp to ensure binary search works
+        joint_states_series.sort(key=lambda x: x[0])
+        cmd_vel_series.sort(key=lambda x: x[0])
+        odom_series.sort(key=lambda x: x[0])
+        cmd_joints_series.sort(key=lambda x: x[0])
+        for cam_name in cam_series:
+            cam_series[cam_name].sort(key=lambda x: x[0])
+
+        # Separate pos and vel for joints to simplify interpolation dict helper
+        joint_pos_series = [(s[0], s[1]) for s in joint_states_series]
+        joint_vel_series = [(s[0], s[2]) for s in joint_states_series]
+
+        frames = []
+        skipped_static = 0
+        skipped_tf = 0
+        skipped_img_decode = 0
+        skipped_downsample = 0
+        sync_deltas = []
+
+        last_frame_time = 0.0
+        min_frame_interval = 1.0 / self.fps if self.fps > 0 else 0.0
+
+        # EE pose tracking — one prev_pose entry per configured EE
+        prev_ee_poses = {name: None for name, _, _ in self.ee_configs}
+
+        for t_sec, primary_raw, primary_conn in cam_series[self.primary_camera]:
+            # Downsample: enforce minimum interval between frames (with tolerance for jitter)
+            if min_frame_interval > 0.0 and last_frame_time > 0.0:
+                if (t_sec - last_frame_time) < (min_frame_interval - self.downsample_tolerance):
+                    skipped_downsample += 1
+                    continue
+
+            # Fetch secondary camera images at nearest time
+            images = {}
+            image_times = {self.primary_camera: t_sec}
+            decoding_failed = False
+
+            # First decode primary camera
+            try:
+                msg_prim = reader.deserialize(primary_raw, primary_conn.msgtype)
+                img_prim = self._decode_image_message(msg_prim)
+                if img_prim is None:
+                    decoding_failed = True
+                else:
+                    images[self.primary_camera] = img_prim
+            except Exception:
+                decoding_failed = True
+
+            if decoding_failed:
+                skipped_img_decode += 1
+                continue
+
+            for cam_name in self.camera_topics.keys():
+                if cam_name == self.primary_camera:
+                    continue
+                raw_img, conn_img, t_img = self._get_nearest_image(cam_series[cam_name], t_sec)
+                if raw_img is None:
+                    decoding_failed = True
+                    break
+                try:
+                    msg_img = reader.deserialize(raw_img, conn_img.msgtype)
+                    img = self._decode_image_message(msg_img)
+                    if img is None:
+                        decoding_failed = True
+                        break
                     images[cam_name] = img
-                    image_times[cam_name] = t_sec
+                    image_times[cam_name] = t_img
+                except Exception:
+                    decoding_failed = True
+                    break
 
-                    # Snapshot trigger: primary camera
-                    if cam_name == self.primary_camera and latest_joint_state is not None:
-                        if any(v is None for v in images.values()):
-                            continue
-                        if self.has_mobile_base and latest_cmd_vel is None:
-                            continue
+            if decoding_failed:
+                skipped_img_decode += 1
+                continue
 
-                        # Sync checks
-                        img_times = list(image_times.values())
-                        max_camera_diff = max(img_times) - min(img_times)
-                        joint_diff = abs(image_times[self.primary_camera] - latest_joint_time)
-                        cmd_vel_diff = abs(image_times[self.primary_camera] - latest_cmd_vel_time) if self.has_mobile_base else 0.0
-                        max_sync = max(max_camera_diff, joint_diff, cmd_vel_diff)
+            # Check sync difference for other cameras
+            img_times = list(image_times.values())
+            max_camera_diff = max(img_times) - min(img_times)
 
-                        if max_sync > self.sync_threshold:
+            # Interpolate joint state
+            joint_pos = self._interpolate_dict(joint_pos_series, t_sec, self.action_features)
+            joint_vel = self._interpolate_dict(joint_vel_series, t_sec, self.action_features)
+
+            # Check if we have active base
+            if self.has_mobile_base:
+                cmd_vel = self._interpolate_vector(cmd_vel_series, t_sec, len(self.base_keys))
+                odom_vel = self._interpolate_vector(odom_series, t_sec, len(self.base_keys))
+            else:
+                cmd_vel = None
+                odom_vel = None
+
+            # Check sync differences (using nearest message timestamps for sync warning logs only)
+            import bisect
+            def get_closest_t(series, target):
+                if not series:
+                    return target
+                times = [s[0] for s in series]
+                idx = bisect.bisect_left(times, target)
+                if idx == 0:
+                    return times[0]
+                if idx == len(times):
+                    return times[-1]
+                if abs(times[idx] - target) < abs(times[idx - 1] - target):
+                    return times[idx]
+                return times[idx - 1]
+
+            closest_joint_t = get_closest_t(joint_states_series, t_sec)
+            joint_diff = abs(t_sec - closest_joint_t)
+
+            closest_cmd_vel_t = get_closest_t(cmd_vel_series, t_sec) if self.has_mobile_base else t_sec
+            cmd_vel_diff = abs(t_sec - closest_cmd_vel_t) if self.has_mobile_base else 0.0
+
+            closest_odom_t = get_closest_t(odom_series, t_sec) if self.has_mobile_base else t_sec
+            odom_diff = abs(t_sec - closest_odom_t) if self.has_mobile_base else 0.0
+
+            max_sync = max(max_camera_diff, joint_diff, cmd_vel_diff, odom_diff)
+            if max_sync > self.sync_threshold:
+                self.get_logger().warn(
+                    f"Sync threshold exceeded at t={t_sec:.3f}s: cam_diff={max_camera_diff:.3f}s, "
+                    f"joint_diff={joint_diff:.3f}s, cmd_vel_diff={cmd_vel_diff:.3f}s, "
+                    f"odom_diff={odom_diff:.3f}s"
+                )
+            sync_deltas.append(max_sync)
+
+            # Skip static frames: skip if no joint velocity exceeds threshold
+            if self.skip_static_threshold > 0.0:
+                joint_vel_vals = [joint_vel[f] for f in self.action_features]
+                if not np.any(np.abs(joint_vel_vals) > self.skip_static_threshold):
+                    skipped_static += 1
+                    continue
+
+            # State: measured joint positions
+            state = [joint_pos[feat] for feat in self.action_features]
+
+            # Action: commanded joint positions
+            action = []
+            action_freshness = []
+            for i, feat in enumerate(self.action_features):
+                # Filter to only contain commands for this specific joint
+                cmd_series_for_feat = [(t, d) for t, d in cmd_joints_series if feat in d]
+                if cmd_series_for_feat and t_sec >= cmd_series_for_feat[0][0]:
+                    cmd_val = self._interpolate_dict(cmd_series_for_feat, t_sec, [feat])[feat]
+                    action.append(cmd_val)
+                else:
+                    # Fall back to future measured state (t_sec + 1.0/fps) to ensure valid actions/deltas
+                    t_next = t_sec + (1.0 / self.fps if self.fps > 0 else 0.1)
+                    next_joint_pos = self._interpolate_dict(joint_pos_series, t_next, [feat])
+                    action.append(next_joint_pos[feat])
+
+            # Freshness masks: did any message arrive in (last_frame_time, t_sec]?
+            t_start = last_frame_time if last_frame_time > 0.0 else t_sec - (1.0 / self.fps if self.fps > 0 else 0.1)
+
+            # If use_relative_actions is True, subtract joint state from joint action to get the delta command
+            if self.use_relative_actions:
+                action = [act_val - st_val for act_val, st_val in zip(action, state)]
+
+            joint_dim = len(self.action_features)
+            state_fresh = self._any_arrived_in_interval(joint_states_series, t_start, t_sec)
+
+            # Action freshness (joints)
+            for feat in self.action_features:
+                cmd_series_for_feat = [(t, d) for t, d in cmd_joints_series if feat in d]
+                if cmd_series_for_feat:
+                    feat_fresh = self._any_arrived_in_interval(cmd_series_for_feat, t_start, t_sec)
+                else:
+                    # If action falls back to state, its freshness matches state freshness
+                    feat_fresh = state_fresh
+                action_freshness.append(feat_fresh)
+
+            if self.has_mobile_base:
+                state = state + list(odom_vel)
+                action = action + list(cmd_vel)
+                odom_fresh = self._any_arrived_in_interval(odom_series, t_start, t_sec)
+                state_freshness = [state_fresh] * joint_dim + [odom_fresh] * len(self.base_keys)
+                cmd_vel_fresh = self._any_arrived_in_interval(cmd_vel_series, t_start, t_sec)
+                action_freshness = action_freshness + [cmd_vel_fresh] * len(self.base_keys)
+            else:
+                state_freshness = [state_fresh] * joint_dim
+
+            frame = {
+                "task": instruction,
+                "action": torch.tensor(action, dtype=torch.float32),
+                "observation.state": torch.tensor(state, dtype=torch.float32),
+                # NOTE: auxiliary keys (action.is_fresh, action.delta,
+                # action.base, observation.state.is_fresh) are intentionally
+                # NOT included.  LeRobot tags anything starting with "action"
+                # as ACTION and includes it in the PI0.5 denoising loss.
+                # Including booleans and redundant representations here caused
+                # training failure.
+            }
+
+            # End-effector pose via TF chain (supports multiple EEs)
+            if tf_tree is not None:
+                stamp_ns = int(t_sec * 1e9)
+                ee_failed = False
+                for ee_name, ee_src, ee_tgt in self.ee_configs:
+                    ee_mat = tf_tree.resolve(ee_tgt, ee_src, stamp_ns)
+                    if ee_mat is None:
+                        skipped_tf += 1
+                        if skipped_tf <= 5:
                             self.get_logger().warn(
-                                f"Sync threshold exceeded: cam_diff={max_camera_diff:.3f}s, "
-                                f"joint_diff={joint_diff:.3f}s, cmd_vel_diff={cmd_vel_diff:.3f}s"
+                                f"TF lookup failed: '{ee_src}' → '{ee_tgt}' "
+                                f"at t={t_sec:.3f}s. Skipping frame."
                             )
-                        sync_deltas.append(max_sync)
+                        ee_failed = True
+                        break
+                    ee_abs = mat_to_pose6d(ee_mat)
+                    prev = prev_ee_poses[ee_name]
+                    if prev is not None:
+                        for ax in range(3, 6):
+                            diff = ee_abs[ax] - prev[ax]
+                            if diff > np.pi:
+                                ee_abs[ax] -= 2 * np.pi
+                            elif diff < -np.pi:
+                                ee_abs[ax] += 2 * np.pi
+                        ee_rel = ee_abs - prev
+                    else:
+                        ee_rel = np.zeros(6, dtype=np.float32)
+                    key = f"observation.ee_pose.{ee_name}" if ee_name else "observation.ee_pose"
+                    frame[key] = torch.from_numpy(ee_abs.copy())
+                    frame[f"{key}.delta"] = torch.from_numpy(ee_rel)
+                    prev_ee_poses[ee_name] = ee_abs.copy()
+                if ee_failed:
+                    continue
 
-                        # Downsample: enforce minimum interval between frames
-                        if min_frame_interval > 0.0 and last_frame_time > 0.0:
-                            if (t_sec - last_frame_time) < min_frame_interval:
-                                skipped_downsample += 1
-                                continue
+            if not self.skip_cameras:
+                for c_name in self.camera_topics.keys():
+                    img_arr = np.ascontiguousarray(images[c_name].transpose(2, 0, 1))
+                    frame[f"observation.images.{c_name}"] = torch.from_numpy(img_arr)
 
-                        # Skip static frames: skip if no joint velocity exceeds threshold
-                        if self.skip_static_threshold > 0.0 and latest_joint_velocity is not None:
-                            if not np.any(np.abs(latest_joint_velocity) > self.skip_static_threshold):
-                                skipped_static += 1
-                                continue
+            # Subtask annotation
+            if self.all_subtasks_list and subtasks_map:
+                current_subtask_idx = 0
+                for _, st_info in (subtasks_map.items() if isinstance(subtasks_map, dict) else {}):
+                    start_t = st_info.get("start_timestamp", -1.0) if isinstance(st_info, dict) else -1.0
+                    end_t = st_info.get("end_timestamp", float('inf')) if isinstance(st_info, dict) else float('inf')
+                    if end_t == 0.0:
+                        end_t = float('inf')
+                    if start_t <= t_sec <= end_t:
+                        label = st_info.get("label", "") if isinstance(st_info, dict) else ""
+                        current_subtask_idx = self.subtask_label_to_idx.get(label, 0)
+                        break
+                frame["subtask_index"] = torch.tensor([current_subtask_idx], dtype=torch.int64)
 
-                        # State: measured joint positions only (no cmd_vel)
-                        state = latest_joint_state
-                        # Action: commanded joint positions, fall back to measured if not yet received
-                        action = [
-                            commanded_joints.get(feat, latest_joint_state[i])
-                            for i, feat in enumerate(self.action_features)
-                        ]
-                        frame = {
-                            "task": instruction,
-                            "action": torch.tensor(action, dtype=torch.float32),
-                            "observation.state": torch.tensor(state, dtype=torch.float32),
-                        }
-
-                        # Freshness masks
-                        joint_dim = len(self.action_features)
-                        state_fresh = latest_joint_time > last_frame_time
-                        frame["observation.state.is_fresh"] = torch.full(
-                            (joint_dim,), state_fresh, dtype=torch.bool
-                        )
-
-                        # Per-joint action freshness based on individual command timestamps
-                        action_freshness = [
-                            commanded_joints_time.get(feat, 0.0) > last_frame_time
-                            for feat in self.action_features
-                        ]
-                        frame["action.is_fresh"] = torch.tensor(action_freshness, dtype=torch.bool)
-
-                        # Delta action: commanded - measured per joint
-                        delta = [action[i] - state[i] for i in range(joint_dim)]
-                        frame["action.delta"] = torch.tensor(delta, dtype=torch.float32)
-                        # Delta freshness requires both command and state to be fresh
-                        delta_freshness = [
-                            action_freshness[i] and state_fresh
-                            for i in range(joint_dim)
-                        ]
-                        frame["action.delta.is_fresh"] = torch.tensor(delta_freshness, dtype=torch.bool)
-
-                        # Base velocity action (separate feature, inherently delta)
-                        if self.has_mobile_base:
-                            frame["action.base"] = torch.tensor(latest_cmd_vel, dtype=torch.float32)
-                            cmd_vel_fresh = latest_cmd_vel_time > last_frame_time
-                            frame["action.base.is_fresh"] = torch.full(
-                                (len(self.base_keys),), cmd_vel_fresh, dtype=torch.bool
-                            )
-
-                        # End-effector pose via TF chain (supports multiple EEs)
-                        if tf_tree is not None:
-                            stamp_ns = int(t_sec * 1e9)
-                            ee_failed = False
-                            for ee_name, ee_src, ee_tgt in self.ee_configs:
-                                ee_mat = tf_tree.resolve(ee_tgt, ee_src, stamp_ns)
-                                if ee_mat is None:
-                                    skipped_tf += 1
-                                    if skipped_tf <= 5:
-                                        self.get_logger().warn(
-                                            f"TF lookup failed: '{ee_src}' → '{ee_tgt}' "
-                                            f"at t={t_sec:.3f}s. Skipping frame."
-                                        )
-                                    ee_failed = True
-                                    break
-                                ee_abs = mat_to_pose6d(ee_mat)
-                                prev = prev_ee_poses[ee_name]
-                                if prev is not None:
-                                    for ax in range(3, 6):
-                                        diff = ee_abs[ax] - prev[ax]
-                                        if diff > np.pi:
-                                            ee_abs[ax] -= 2 * np.pi
-                                        elif diff < -np.pi:
-                                            ee_abs[ax] += 2 * np.pi
-                                    ee_rel = ee_abs - prev
-                                else:
-                                    ee_rel = np.zeros(6, dtype=np.float32)
-                                key = f"observation.ee_pose.{ee_name}" if ee_name else "observation.ee_pose"
-                                frame[key] = torch.from_numpy(ee_abs.copy())
-                                frame[f"{key}.delta"] = torch.from_numpy(ee_rel)
-                                prev_ee_poses[ee_name] = ee_abs.copy()
-                            if ee_failed:
-                                continue
-
-                        if not self.skip_cameras:
-                            for c_name in self.camera_topics.keys():
-                                img_arr = np.ascontiguousarray(images[c_name].transpose(2, 0, 1))
-                                frame[f"observation.images.{c_name}"] = torch.from_numpy(img_arr)
-
-                        # Subtask annotation
-                        if self.all_subtasks_list and subtasks_map:
-                            current_subtask_idx = 0
-                            for _, st_info in (subtasks_map.items() if isinstance(subtasks_map, dict) else {}):
-                                start_t = st_info.get("start_timestamp", -1.0) if isinstance(st_info, dict) else -1.0
-                                end_t = st_info.get("end_timestamp", float('inf')) if isinstance(st_info, dict) else float('inf')
-                                if end_t == 0.0:
-                                    end_t = float('inf')
-                                if start_t <= t_sec <= end_t:
-                                    label = st_info.get("label", "") if isinstance(st_info, dict) else ""
-                                    current_subtask_idx = self.subtask_label_to_idx.get(label, 0)
-                                    break
-                            frame["subtask_index"] = torch.tensor([current_subtask_idx], dtype=torch.int64)
-
-                        frames.append((t_sec, frame))
-                        last_frame_time = t_sec
-                        images[self.primary_camera] = None
+            frames.append((t_sec, frame))
+            last_frame_time = t_sec
 
         if skipped_tf > 5:
             self.get_logger().warn(f"TF lookup failed {skipped_tf} times total (suppressed after 5).")
@@ -628,7 +860,9 @@ class RosbagConversionNode(Node):
                                 self.cmd_vel_topic = part_info.get("cmd_vel_topic", "/cmd_vel")
                                 self.odom_topic = part_info.get("odom_topic", "")
                             else:
-                                self.action_features.extend(part_info.get("joint_names", []))
+                                for j in part_info.get("joint_names", []):
+                                    if j not in self.excluded_joints:
+                                        self.action_features.append(j)
                                 cmd_topic = part_info.get("command_topic", "")
                                 if cmd_topic:
                                     self.part_command_topics.add(cmd_topic)
@@ -857,22 +1091,24 @@ class RosbagConversionNode(Node):
 
         joint_dim = len(self.action_features)
         base_dim = len(self.base_keys)
+        total_dim = joint_dim + base_dim if self.has_mobile_base else joint_dim
+        action_names = self.action_features + self.base_keys if self.has_mobile_base else self.action_features
+        state_names = self.action_features + self.base_keys if self.has_mobile_base else self.action_features
 
         features = {
             # Joint action: commanded positions (absolute)
-            "action": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
-            "action.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
-            # Joint action delta: commanded - measured
-            "action.delta": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
-            "action.delta.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
+            # NOTE: Only "action" and "observation.state" are registered as dataset
+            # features.  Auxiliary keys (action.is_fresh, action.delta, action.base,
+            # observation.state.is_fresh) are still computed per-frame for debugging
+            # but are NOT registered here.  LeRobot auto-discovers output features
+            # from this dict and tags anything starting with "action" as ACTION type,
+            # which PI0.5 includes in the flow-matching denoising loss.  Including
+            # boolean freshness masks and redundant delta/base representations
+            # dilutes learning and causes deployment failure.
+            "action": {"dtype": "float32", "shape": (total_dim,), "names": action_names},
             # Joint state: measured positions from /joint_states
-            "observation.state": {"dtype": "float32", "shape": (joint_dim,), "names": self.action_features},
-            "observation.state.is_fresh": {"dtype": "bool", "shape": (joint_dim,), "names": None},
+            "observation.state": {"dtype": "float32", "shape": (total_dim,), "names": state_names},
         }
-        # Base velocity action (separate — already delta, different units from joint positions)
-        if self.has_mobile_base:
-            features["action.base"] = {"dtype": "float32", "shape": (base_dim,), "names": self.base_keys}
-            features["action.base.is_fresh"] = {"dtype": "bool", "shape": (base_dim,), "names": None}
         if self.ee_pose_enabled:
             ee_names = ["x", "y", "z", "roll", "pitch", "yaw"]
             for ee_name, _, _ in self.ee_configs:
@@ -889,7 +1125,7 @@ class RosbagConversionNode(Node):
                 features[f"observation.images.{cam_name}"] = {
                     "dtype": "video",
                     "shape": (3, h, w),
-                    "names": ["channels", "height", "width"],
+                    "names": ["channels", "height", "width"],  # shape is (C,H,W); image_writer expects CHW input and handles HWC→CHW transpose internally
                 }
 
         # Resolve output root (mirrors LeRobot default logic) so we can check existence
@@ -1059,7 +1295,9 @@ class RosbagConversionNode(Node):
             "fps": self.fps,
             "vcodec": self.vcodec,
             "sync_threshold": self.sync_threshold,
+            "downsample_tolerance": self.downsample_tolerance,
             "skip_static_threshold": self.skip_static_threshold,
+            "use_relative_actions": self.use_relative_actions,
             "ee_pose_enabled": self.ee_pose_enabled,
             "cameras_skip": self.skip_cameras,
             "total_episodes": len(self.episode_stats),
