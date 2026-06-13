@@ -174,16 +174,10 @@ class TrainNode(Node):
 
         from rclpy.parameter import Parameter
         self.declare_parameter('robot.descriptor_id', '', _p('Robot descriptor ID'))
-        d_groups = ParameterDescriptor(
-            description='Active joint groups',
-            type=Parameter.Type.STRING_ARRAY
-        )
-        self.declare_parameter('robot.active_groups', value=[], descriptor=d_groups)
-        d_cameras = ParameterDescriptor(
-            description='Active cameras',
-            type=Parameter.Type.STRING_ARRAY
-        )
-        self.declare_parameter('robot.active_cameras', value=[], descriptor=d_cameras)
+        # Typed STRING_ARRAY (no default []): empty list infers BYTE_ARRAY,
+        # clashing with the YAML STRING_ARRAY override.
+        self.declare_parameter('robot.active_groups', Parameter.Type.STRING_ARRAY)
+        self.declare_parameter('robot.active_cameras', Parameter.Type.STRING_ARRAY)
         self.declare_parameter(
             'robot.active_mobile_base', True, _p('Whether to include mobile base')
         )
