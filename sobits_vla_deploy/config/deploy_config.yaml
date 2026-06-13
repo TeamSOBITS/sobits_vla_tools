@@ -1,3 +1,17 @@
+# Generic deploy template (LEGACY inline-morphology format).
+#
+# This file documents the full inline robot.* schema for robots that do NOT
+# have a descriptor. For SOBIT robots, prefer the descriptor-based form used by
+# deploy_config_sobit_home*.yaml:
+#
+#     robot:
+#       descriptor_id: <robot_id>      # loads sobits_vla_common/robots/<id>.robot.yaml
+#       active_groups: [...]
+#       active_cameras: [...]
+#       active_mobile_base: true
+#
+# When robot.descriptor_id is empty, the deploy node falls back to the inline
+# robot.* parameters shown below.
 /**:
   ros__parameters:
     model:

@@ -1,0 +1,65 @@
+/**:
+  ros__parameters:
+    model:
+      # Absolute-actions model: trained on left-abs-gazebo with use_relative_actions: false.
+      # The postprocessor (absolute_actions_processor) loaded from this repo has enabled: false,
+      # and use_relative_actions here must match — keep false.
+      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_pi05"
+      policy_class: "lerobot.policies.pi05.modeling_pi05.PI05Policy"
+      device: "cuda"
+      use_amp: false
+      use_relative_actions: false
+      default_task_label: "Pick up the block"
+
+    runtime:
+      # Must match dataset fps (10) — actions are positions sampled at 10 Hz.
+      control_hz: 10.0
+      actions_per_chunk: 50
+      # Trigger re-inference when the queue drops to 50% (25 steps left).
+      # 0.9 caused near-continuous inference and constant chunk blending.
+      # With RTC the new chunk replace()s the queue, so 0.5 leaves enough
+      # margin for ~1.5 s inference latency without the queue running dry.
+      chunk_size_threshold: 0.5 # 0.7
+      # Only used in the non-RTC fallback path; 'newest' avoids 50/50 blending
+      # of chunks predicted from observations ~1 s apart.
+      aggregate_fn_name: newest
+      async_enabled: true
+      single_step_mode: false
+      # NOTE: per-group joint rate limiting (max_joint_delta) is defined in the
+      # robot descriptor (sobits_vla_common/robots/sobit_home.robot.yaml).
+      # Commands are clamped to measured_position ± max_joint_delta each cycle
+      # (lerobot ensure_safe_goal_position semantics).
+
+    rtc:
+      # RTC inpaints each new chunk against the unexecuted tail of the previous
+      # one, removing chunk-boundary jumps (the main jerk source without it).
+      enabled: true
+      # Steps of the previous chunk treated as (softly) frozen context.
+      # Rule of thumb: >= ceil(inference_latency * control_hz) and <= chunk_size/2.
+      # 16 covers ~1.5 s latency at 10 Hz; lower it if measured latency is < 1 s.
+      execution_horizon: 16
+      # LeRobot default 10.0; clamp on the inpainting guidance strength.
+      max_guidance_weight: 10.0
+      # EXP fade across the frozen prefix (RTC paper default).
+      prefix_attention_schedule: EXP
+      # Floor for the delay estimate in steps; the deploy node's LatencyTracker
+      # raises it dynamically from measured inference latency.
+      inference_delay: 5
+      debug: false
+
+    robot:
+      # Morphology (joint groups, command topics, joints, max_joint_delta,
+      # mobile_base, cameras) is loaded from the shared robot descriptor:
+      #   sobits_vla_common/robots/sobit_home.robot.yaml
+      # active_groups / active_cameras / active_mobile_base select the subset
+      # used for this task (left-arm pickup) without re-listing joints/topics.
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true

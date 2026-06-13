@@ -1,5 +1,32 @@
-#!/usr/bin/env python3
-"""Logger for the VLA deployment node.
+# Copyright (c) 2026, Team SOBITS
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from this
+#   software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+"""
+Logger for the VLA deployment node.
 
 Writes one JSON-Lines file per episode:
   <log_dir>/episode_<N>_<timestamp>.jsonl
@@ -28,13 +55,12 @@ World reset (called between episodes):
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import math
-import os
+from pathlib import Path
 import subprocess
 import threading
-from datetime import datetime, timezone
-from pathlib import Path
 from time import monotonic
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -42,6 +68,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _rpy_from_quat(x: float, y: float, z: float, w: float) -> Tuple[float, float, float]:
     """Quaternion → (roll, pitch, yaw) in radians."""
@@ -63,7 +90,8 @@ def _gz_set_pose(
     qx: float, qy: float, qz: float, qw: float,
     timeout: float = 3.0,
 ) -> bool:
-    """Teleport a Gazebo model via the /world/.../set_pose service.
+    """
+    Teleport a Gazebo model via the /world/.../set_pose service.
 
     Uses gz-transport CLI so no Python gz bindings are required.
     The UserCommands plugin must be loaded in the world.
@@ -102,7 +130,8 @@ def _gz_get_pose(
     model_name: str,
     timeout: float = 2.0,
 ) -> Optional[Dict[str, float]]:
-    """Query a model's world pose via the `gz model` CLI.
+    """
+    Query a model's world pose via the `gz model` CLI.
 
     Returns dict {x, y, z, roll, pitch, yaw} or None on failure.
 
@@ -141,7 +170,8 @@ def _gz_get_pose(
 
 
 def _gz_get_pose_fast(world_name: str, model_name: str) -> Optional[Dict[str, float]]:
-    """Like _gz_get_pose but uses /world/…/state_async for lower latency.
+    """
+    Like _gz_get_pose but uses /world/…/state_async for lower latency.
 
     Falls back to pose/info on any error.
     """
@@ -153,7 +183,8 @@ def _gz_get_pose_fast(world_name: str, model_name: str) -> Optional[Dict[str, fl
 # ---------------------------------------------------------------------------
 
 class EpisodeLogger:
-    """Logs one episode to a JSON-Lines file.
+    """
+    Logs one episode to a JSON-Lines file.
 
     Thread-safe: log_step() may be called from the control timer thread.
     begin_episode() and end_episode() are called from the joy/play callbacks.
@@ -259,7 +290,8 @@ class EpisodeLogger:
         base_vel: Dict[str, float],
         ee_pose: Optional[List[float]],
     ) -> None:
-        """Call once per control tick while episode is active.
+        """
+        Call once per control tick while episode is active.
 
         ee_pose: [x, y, z, roll, pitch, yaw] in base_footprint, or None.
         Gazebo poses are read from cache updated by background poller — zero

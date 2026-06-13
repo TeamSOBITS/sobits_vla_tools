@@ -30,9 +30,9 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'sobits_vla_deploy'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from sobits_vla_deploy import ActionChunkBuffer  # noqa: E402
+from sobits_vla_deploy.sobits_vla_deploy import ActionChunkBuffer  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -100,18 +100,21 @@ class TestActionChunkBufferAggregate:
         assert buf.size() == 2
 
     def test_left_over(self):
+        import torch
         buf = ActionChunkBuffer('weighted_average')
-        chunk = [_make_step(float(i)) for i in range(4)]
-        buf.merge(chunk, overlap=0)
+        original_actions = torch.tensor([[0.0, 0.0], [1.0, 2.0], [2.0, 4.0], [3.0, 6.0]])
+        processed_steps = [_make_step(float(i)) for i in range(4)]
+        buf.replace(original_actions, processed_steps, delay=1)
         result = buf.left_over(2)
-        assert len(result) == 2
-        assert result[0]['j0'] == 0.0
-        assert result[1]['j0'] == 1.0
+        assert result is not None
+        assert result.shape == (3, 2)
+        assert torch.allclose(result[0], torch.tensor([1.0, 2.0]))
 
 
 # ---------------------------------------------------------------------------
 # _to_action_steps tests (via VlaDeployNode with mocked ROS)
 # ---------------------------------------------------------------------------
+
 
 class MockNode:
     """Minimal mock to allow importing VlaDeployNode._to_action_steps."""
@@ -121,7 +124,7 @@ class MockNode:
         self._mobile_base_features = ['x.vel']
 
     def _to_action_steps(self, raw_actions):
-        from sobits_vla_deploy import LeRobotDeployNode as VlaDeployNode
+        from sobits_vla_deploy.sobits_vla_deploy import LeRobotDeployNode as VlaDeployNode
         return VlaDeployNode._to_action_steps(self, raw_actions)
 
 
