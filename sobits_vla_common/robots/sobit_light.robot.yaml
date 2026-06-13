@@ -41,6 +41,7 @@ groups:
     command_action: /sobit_light/hand_joint_controller/follow_joint_trajectory
     max_joint_delta: 0.30
     active: true
+    relative_exclude: true   # gripper: absolute, never delta-converted
     joints:
       - ros_name: hand_joint
         feature: hand_joint

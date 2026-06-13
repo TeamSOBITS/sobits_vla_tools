@@ -67,6 +67,7 @@ groups:
     command_action: /sobit_home/hand_left_position_controller/follow_joint_trajectory
     max_joint_delta: 0.30
     active: true
+    relative_exclude: true   # gripper: absolute, never delta-converted
     joints:
       - ros_name: hand_left_finger_l_mcp_joint
         feature: hand_left_finger_l_mcp_joint
@@ -88,6 +89,7 @@ groups:
     command_action: /sobit_home/hand_right_position_controller/follow_joint_trajectory
     max_joint_delta: 0.30
     active: false
+    relative_exclude: true   # gripper: absolute, never delta-converted
     joints:
       - ros_name: hand_right_finger_l_mcp_joint
         feature: hand_right_finger_l_mcp_joint

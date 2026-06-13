@@ -136,15 +136,9 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
 
             active_base_features = []
             if desc.mobile_base and active_mobile_base:
-                base_map = {
-                    'x.vel': 'base_x',
-                    'y.vel': 'base_y',
-                    'z.vel': 'base_z',
-                    'theta.vel': 'base_theta'
-                }
+                bmap = desc._BASE_FEATURE_MAP
                 active_base_features = [
-                    base_map[f] for f in desc.mobile_base.features
-                    if f in base_map
+                    bmap[f] for f in desc.mobile_base.features if f in bmap
                 ]
 
             expected_actions = active_joint_features + active_base_features
@@ -167,30 +161,20 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
                 raise
             log_warn(f'Failed to run robot-descriptor-based pre-flight checks: {exc}')
 
-    # relative_exclude_joints validation against actual joint names
-    if po.get('use_relative_actions', False) and action_names:
-        exclude: list[str] = po.get('relative_exclude_joints', ['gripper'])
-        if exclude == ['gripper']:
-            log_warn(
-                'use_relative_actions=true but relative_exclude_joints is the default '
-                "['gripper'], which matches no joint in SOBIT HOME. "
-                'Velocity joints (base_x, base_y, base_theta) will be delta-converted. '
-                'Set relative_exclude_joints explicitly in policy_overrides.'
-            )
-        unknown = [j for j in exclude if j not in action_names]
-        if unknown:
-            log_warn(
-                'relative_exclude_joints contains names not found in dataset action '
-                'feature names — these joints will not be excluded from delta conversion: '
-                f'{unknown}. Dataset action names: {action_names}'
-            )
-    elif po.get('use_relative_actions', False) and not action_names:
-        # Fall back to the original default-only check when names are unavailable
+    # relative_exclude_joints validation (config_builder derives this from the
+    # descriptor; warn only if it still looks wrong against the dataset).
+    if po.get('use_relative_actions', False):
         exclude = po.get('relative_exclude_joints', ['gripper'])
         if exclude == ['gripper']:
             log_warn(
-                'use_relative_actions=true but relative_exclude_joints appears to be the '
-                "default ['gripper'], which matches no joint in SOBIT HOME. "
-                'Velocity joints (base_x, base_y, base_theta) will be delta-converted. '
-                'Set relative_exclude_joints explicitly in policy_overrides if this is unintended.'
+                'use_relative_actions=true but relative_exclude_joints is the default '
+                "['gripper'], which matches no SOBIT HOME action. Base velocities would "
+                'be delta-converted. Set robot.descriptor_id or an explicit override.'
             )
+        elif action_names:
+            unknown = [j for j in exclude if j not in action_names]
+            if unknown:
+                log_warn(
+                    f'relative_exclude_joints {unknown} not in dataset action names '
+                    f'{action_names}; they will not be excluded from delta conversion.'
+                )

@@ -21,6 +21,9 @@ class GroupSpec:
     max_joint_delta: float
     active: bool
     joints: List[JointSpec]
+    # Keep this group's features absolute (never delta-convert) in relative
+    # mode — e.g. a gripper whose open/close is absolute, not incremental.
+    relative_exclude: bool = False
 
 
 @dataclass
@@ -92,6 +95,40 @@ class RobotDescriptor:
                     ros_names.append(j.ros_name)
         return ros_names
 
+    # Maps mobile_base feature keys (x.vel/...) to dataset action feature names.
+    _BASE_FEATURE_MAP = {
+        'x.vel': 'base_x',
+        'y.vel': 'base_y',
+        'z.vel': 'base_z',
+        'theta.vel': 'base_theta',
+    }
+
+    def relative_exclude_features(
+        self,
+        active_groups: Optional[List[str]] = None,
+        active_mobile_base: bool = True,
+    ) -> List[str]:
+        """
+        Dataset feature names to keep absolute in relative-action mode.
+
+        Mobile-base velocities and any group flagged relative_exclude (e.g. a
+        gripper) are never delta-converted. ``active_groups`` defaults to all
+        active groups; pass a subset to match a specific config selection.
+        """
+        if active_groups is None:
+            active_groups = [g.name for g in self.active_groups]
+        features: List[str] = []
+        if self.mobile_base and active_mobile_base:
+            features.extend(
+                self._BASE_FEATURE_MAP[f]
+                for f in self.mobile_base.features
+                if f in self._BASE_FEATURE_MAP
+            )
+        for g in self.groups:
+            if g.name in active_groups and g.relative_exclude:
+                features.extend(j.feature for j in g.joints)
+        return features
+
 
 def _parse_descriptor_file(path: Path) -> RobotDescriptor:
     with open(path) as f:
@@ -110,7 +147,8 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
             command_action=g.get('command_action'),
             max_joint_delta=float(g.get('max_joint_delta', 0.0)),
             active=bool(g.get('active', True)),
-            joints=joints
+            joints=joints,
+            relative_exclude=bool(g.get('relative_exclude', False)),
         ))
 
     # Build Mobile Base
