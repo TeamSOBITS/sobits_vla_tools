@@ -3,12 +3,10 @@
 
 #include <rcl_interfaces/msg/parameter_type.hpp>
 #include <sobits_interfaces/srv/vla_update_task.hpp>
-#include <sobits_interfaces/action/vla_record_state.hpp>
 #include <sobits_interfaces/srv/vla_command.hpp>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/executors/single_threaded_executor.hpp>
-#include <rclcpp_action/rclcpp_action.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -127,20 +125,6 @@ private:
     const sensor_msgs::msg::CameraInfo::SharedPtr msg,
     const std::string topic_name);
 
-  rclcpp_action::GoalResponse handleGoal(
-    const rclcpp_action::GoalUUID & uuid,
-    std::shared_ptr<const sobits_interfaces::action::VlaRecordState::Goal> goal);
-  rclcpp_action::CancelResponse handleCancel(
-    const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
-    goal_handle);
-  void handleAccepted(
-    const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
-    goal_handle);
-  void execute(
-    const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
-    goal_handle);
-
-  rclcpp_action::Server<sobits_interfaces::action::VlaRecordState>::SharedPtr record_action_server_;
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr task_update_service_;
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr subtask_update_service_;
   rclcpp::Service<sobits_interfaces::srv::VlaCommand>::SharedPtr command_service_;
@@ -148,8 +132,6 @@ private:
   void handleVlaCommand(
     const std::shared_ptr<sobits_interfaces::srv::VlaCommand::Request> request,
     std::shared_ptr<sobits_interfaces::srv::VlaCommand::Response> response);
-
-  uint8_t mapStateToActionToSrv(uint8_t action_state);
 
   std::unique_ptr<RecordingMonitor> recording_monitor_;
   std::unique_ptr<BagMetadataManager> bag_metadata_manager_;

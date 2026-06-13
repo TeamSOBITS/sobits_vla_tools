@@ -15,7 +15,6 @@ endif()
 find_package(ament_cmake REQUIRED)
 
 find_package(rclcpp REQUIRED)
-find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
 find_package(rosbag2_storage REQUIRED)
@@ -49,7 +48,6 @@ rclcpp_components_register_node(${PROJECT_NAME}
 
 ament_target_dependencies(${PROJECT_NAME}
   "rclcpp"
-  "rclcpp_action"
   "rclcpp_components"
   "rosbag2_cpp"
   "rosbag2_storage"

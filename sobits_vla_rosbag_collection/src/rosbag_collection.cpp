@@ -28,14 +28,6 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "Initializing RosbagCollection Node...");
   rclcpp::QoS qos_profile(rclcpp::KeepLast(10));
 
-  // Initialize Action Server
-  record_action_server_ = rclcpp_action::create_server<sobits_interfaces::action::VlaRecordState>(
-    this,
-    this->get_name() + std::string("/vla_record_state"),
-    std::bind(&RosbagCollection::handleGoal, this, std::placeholders::_1, std::placeholders::_2),
-    std::bind(&RosbagCollection::handleCancel, this, std::placeholders::_1),
-    std::bind(&RosbagCollection::handleAccepted, this, std::placeholders::_1));
-
   // Initialize Service Server for Tasks
   task_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
     this->get_name() + std::string("/vla_task_update"),
@@ -223,7 +215,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   }
 
   // Init values
-  current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;      // PAUSED, RECORDING, STOPPED, ERROR
+  current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;      // PAUSED, RECORDING, STOPPED, ERROR
   previous_state_ = current_state_;
 
   current_task_name_ = "default task";
@@ -442,7 +434,7 @@ void RosbagCollection::createRosbag()
   recording_start_time_ = std::chrono::steady_clock::now();
   max_duration_triggered_ = false;
   previous_state_ = current_state_;
-  current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+  current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
 
   // Configure rosbag2 transport options
   rosbag2_storage::StorageOptions storage_options;
@@ -486,7 +478,7 @@ void RosbagCollection::createRosbag()
           recorder_executor_->spin(); // processes subscription callbacks until cancel()
         } catch (const std::exception & e) {
           RCLCPP_ERROR(this->get_logger(), "Error during bag recording: %s", e.what());
-          current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+          current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
         }
   });
 
@@ -505,7 +497,7 @@ void RosbagCollection::removeRosbag()
   if (is_recording_) {
     RCLCPP_INFO(this->get_logger(), "Stopping recorder to remove bag...");
     is_recording_ = false;
-    current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
+    current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
 
     if (recorder_node_) {
       recorder_node_->stop();
@@ -529,7 +521,7 @@ void RosbagCollection::removeRosbag()
       RCLCPP_ERROR(this->get_logger(), "Failed to remove bag directory '%s': %s",
           current_bag_path_.c_str(), e.what());
       previous_state_ = current_state_;
-      current_state_ = sobits_interfaces::action::VlaRecordState_Result::ERROR;
+      current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
       throw std::runtime_error("Failed to remove bag directory");
     }
   }
@@ -541,7 +533,7 @@ void RosbagCollection::removeRosbag()
   current_bag_path_ = previous_bag_path_;
 
   previous_state_ = current_state_;
-  current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
+  current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
 
   RCLCPP_INFO(this->get_logger(), "Rosbag removed successfully");
 }
@@ -556,7 +548,7 @@ bool RosbagCollection::saveRosbag()
   if (!is_recording_) {
     RCLCPP_WARN(this->get_logger(), "No rosbag process to terminate");
     previous_state_ = current_state_;
-    current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
+    current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
     return false;
   }
 
@@ -578,7 +570,7 @@ bool RosbagCollection::saveRosbag()
   recorder_node_.reset();
 
   previous_state_ = current_state_;
-  current_state_ = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
+  current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
 
   // Episode duration validation (steady_clock: monotonic, unaffected by sim_time or NTP)
   auto elapsed = std::chrono::steady_clock::now() - recording_start_time_;
@@ -715,20 +707,6 @@ void RosbagCollection::removeEpisodeFromYaml()
   }
 }
 
-uint8_t RosbagCollection::mapStateToActionToSrv(uint8_t action_state)
-{
-  switch (action_state) {
-    case sobits_interfaces::action::VlaRecordState_Result::RECORDING:
-      return sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
-    case sobits_interfaces::action::VlaRecordState_Result::PAUSED:
-      return sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED;
-    case sobits_interfaces::action::VlaRecordState_Result::STOPPED:
-      return sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
-    default:
-      return sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
-  }
-}
-
 void RosbagCollection::handleVlaCommand(
   const std::shared_ptr<sobits_interfaces::srv::VlaCommand::Request> request,
   std::shared_ptr<sobits_interfaces::srv::VlaCommand::Response> response)
@@ -743,7 +721,7 @@ void RosbagCollection::handleVlaCommand(
     return;
   }
 
-  if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::ERROR) {
+  if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR) {
     response->success = false;
     response->message = "Cannot process command while in ERROR state.";
     response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
@@ -751,25 +729,25 @@ void RosbagCollection::handleVlaCommand(
   }
 
   if (request->command == sobits_interfaces::srv::VlaCommand::Request::RECORD) {
-    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED &&
-      current_state_ != sobits_interfaces::action::VlaRecordState_Result::PAUSED)
+    if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED &&
+      current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED)
     {
       response->success = false;
       response->message = "Cannot start/resume recording while already in state: " +
         std::to_string(current_state_);
-      response->status = mapStateToActionToSrv(current_state_);
+      response->status = current_state_;
       return;
     }
 
-    if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
+    if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
       createRosbag();
       response->success = true;
       response->message = "Recording started successfully";
       response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
-    } else if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
+    } else if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED) {
       if (recorder_node_) {
         recorder_node_->resume();
-        current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+        current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
         response->success = true;
         response->message = "Recording resumed successfully";
         response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
@@ -780,16 +758,16 @@ void RosbagCollection::handleVlaCommand(
       }
     }
   } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::PAUSE) {
-    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
+    if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING) {
       response->success = false;
       response->message = "Cannot pause while not recording";
-      response->status = mapStateToActionToSrv(current_state_);
+      response->status = current_state_;
       return;
     }
 
     if (recorder_node_) {
       recorder_node_->pause();
-      current_state_ = sobits_interfaces::action::VlaRecordState_Result::PAUSED;
+      current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED;
       response->success = true;
       response->message = "Recording paused successfully";
       response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED;
@@ -799,16 +777,16 @@ void RosbagCollection::handleVlaCommand(
       response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
     }
   } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::RESUME) {
-    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
+    if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED) {
       response->success = false;
       response->message = "Cannot resume while not paused";
-      response->status = mapStateToActionToSrv(current_state_);
+      response->status = current_state_;
       return;
     }
 
     if (recorder_node_) {
       recorder_node_->resume();
-      current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
+      current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
       response->success = true;
       response->message = "Recording resumed successfully";
       response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
@@ -818,10 +796,10 @@ void RosbagCollection::handleVlaCommand(
       response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
     }
   } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::SAVE) {
-    if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
+    if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
       response->success = false;
       response->message = "Cannot save recording while not in RECORDING or PAUSED state";
-      response->status = mapStateToActionToSrv(current_state_);
+      response->status = current_state_;
       return;
     }
     if (saveRosbag()) {
@@ -842,142 +820,7 @@ void RosbagCollection::handleVlaCommand(
     RCLCPP_ERROR(this->get_logger(), "Unknown command received: %d", request->command);
     response->success = false;
     response->message = "Unknown command received: " + std::to_string(request->command);
-    response->status = mapStateToActionToSrv(current_state_);
-  }
-}
-
-rclcpp_action::GoalResponse RosbagCollection::handleGoal(
-  const rclcpp_action::GoalUUID & uuid,
-  std::shared_ptr<const sobits_interfaces::action::VlaRecordState::Goal> goal)
-{
-  RCLCPP_INFO(this->get_logger(), "Received goal request: %d", goal->command);
-  // Accept the goal
-  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-}
-
-rclcpp_action::CancelResponse RosbagCollection::handleCancel(
-  const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
-  goal_handle)
-{
-  RCLCPP_INFO(this->get_logger(), "Received cancel request");
-  // Accept the cancel request
-  return rclcpp_action::CancelResponse::ACCEPT;
-}
-
-void RosbagCollection::handleAccepted(
-  const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
-  goal_handle)
-{
-  RCLCPP_INFO(this->get_logger(), "Goal accepted, executing...");
-  std::thread{[this, goal_handle]() {
-      this->execute(goal_handle);
-    }}.detach();
-}
-
-void RosbagCollection::execute(
-  const std::shared_ptr<rclcpp_action::ServerGoalHandle<sobits_interfaces::action::VlaRecordState>>
-  goal_handle)
-{
-  const auto goal = goal_handle->get_goal();
-  auto result = std::make_shared<sobits_interfaces::action::VlaRecordState::Result>();
-
-  if (!task_has_been_set_) {
-    RCLCPP_WARN(this->get_logger(),
-        "Please set a task name via the vla_task_update service before starting a recording.");
-    result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-    goal_handle->abort(result);
-    return;
-  }
-
-  if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::ERROR) {
-    RCLCPP_WARN(this->get_logger(), "Cannot start/resume recording while in ERROR state");
-    result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-    goal_handle->abort(result);
-    return;
-  }
-
-  if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::RECORD) {
-    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED &&
-      current_state_ != sobits_interfaces::action::VlaRecordState_Result::PAUSED)
-    {
-      RCLCPP_WARN(this->get_logger(), "Cannot start/resume recording while already in state: %d",
-          current_state_);
-      result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-      goal_handle->abort(result);
-      return;
-    }
-
-    if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
-      createRosbag();
-      result->status = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
-      goal_handle->succeed(result);
-      RCLCPP_INFO(this->get_logger(), "Recording started successfully");
-    } else if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
-      if (recorder_node_) {
-        recorder_node_->resume();
-        current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
-        result->status = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
-        goal_handle->succeed(result);
-        RCLCPP_INFO(this->get_logger(), "Recording resumed successfully");
-      }
-    }
-  } else if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::PAUSE) {
-    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
-      RCLCPP_WARN(this->get_logger(), "Cannot pause while not recording");
-      result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-      goal_handle->abort(result);
-      return;
-    }
-
-    if (recorder_node_) {
-      recorder_node_->pause();
-      current_state_ = sobits_interfaces::action::VlaRecordState_Result::PAUSED;
-      result->status = sobits_interfaces::action::VlaRecordState_Result::PAUSED;
-      goal_handle->succeed(result);
-      RCLCPP_INFO(this->get_logger(), "Recording paused successfully");
-    }
-  } else if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::RESUME) {
-    if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
-      RCLCPP_WARN(this->get_logger(), "Cannot resume while not paused");
-      result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-      goal_handle->abort(result);
-      return;
-    }
-
-    if (recorder_node_) {
-      recorder_node_->resume();
-      current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
-      result->status = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
-      goal_handle->succeed(result);
-      RCLCPP_INFO(this->get_logger(), "Recording resumed successfully");
-    }
-  } else if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::SAVE) {
-    if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
-      RCLCPP_WARN(this->get_logger(),
-          "Cannot save recording while not in RECORDING or PAUSED state");
-      result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-      goal_handle->abort(result);
-      return;
-    }
-    if (saveRosbag()) {
-      result->status = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
-      goal_handle->succeed(result);
-      RCLCPP_INFO(this->get_logger(), "Recording saved successfully");
-    } else {
-      result->status = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
-      goal_handle->abort(result);
-      RCLCPP_WARN(this->get_logger(), "Recording was discarded (too short or integrity failed)");
-    }
-  } else if (goal->command == sobits_interfaces::action::VlaRecordState_Goal::DELETE) {
-    removeRosbag();
-    result->status = sobits_interfaces::action::VlaRecordState_Result::STOPPED;
-    goal_handle->succeed(result);
-    RCLCPP_INFO(this->get_logger(), "Recording deleted successfully");
-  } else {
-    RCLCPP_ERROR(this->get_logger(), "Unknown command received: %d", goal->command);
-    result->status = sobits_interfaces::action::VlaRecordState_Result::ERROR;
-    goal_handle->abort(result);
-    return;
+    response->status = current_state_;
   }
 }
 
@@ -988,7 +831,7 @@ void RosbagCollection::taskUpdateCallback(
   RCLCPP_INFO(this->get_logger(), "Received task update request: %s", request->label.c_str());
 
   // Update the task name
-  if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::STOPPED) {
+  if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
     RCLCPP_WARN(this->get_logger(), "Cannot update task name while recording is in progress");
     response->success = false;
     response->message = "Cannot update task name while recording is in progress";
@@ -1038,7 +881,7 @@ void RosbagCollection::subtaskUpdateCallback(
 {
   RCLCPP_INFO(this->get_logger(), "Received subtask update request: %s", request->label.c_str());
 
-  if (current_state_ != sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
+  if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING) {
     RCLCPP_WARN(this->get_logger(), "Cannot update subtask while not recording.");
     response->success = false;
     response->message = "Cannot update subtask while not recording.";
