@@ -77,6 +77,17 @@ if(BUILD_TESTING)
   # skip copyright checking
   set(ament_cmake_copyright_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  # lerobot seam smoke-test suite — the pass/fail gate for the 0.5.1 ->
+  # 0.6.0 port (see docs/lerobot_v060_phase0_plan.md). Also runnable
+  # standalone: `python3 -m pytest sobits_vla_common/test/ -v`.
+  find_package(ament_cmake_pytest QUIET)
+  if(ament_cmake_pytest_FOUND)
+    ament_add_pytest_test(test_lerobot_seam test/test_lerobot_seam.py
+      APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+      TIMEOUT 120
+    )
+  endif()
 endif()
 
 ament_package()
