@@ -5,7 +5,7 @@
       # repo, no LoRA adapter. ACT ignores the language instruction (the task
       # label is kept for logging only) and runs in float32 (the deploy node
       # skips the bfloat16 cast for ACT automatically).
-      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_act"
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_act"
       policy_class: "lerobot.policies.act.modeling_act.ACTPolicy"
       device: "cuda"
       use_amp: false
