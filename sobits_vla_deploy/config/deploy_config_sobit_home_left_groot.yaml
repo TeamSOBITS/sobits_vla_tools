@@ -7,13 +7,13 @@
       #  - dataset_repo_id MUST be set: lerobot's factory injects dataset stats
       #    into the groot processor at load time; without them normalization
       #    is broken (the node warns and refuses silently-wrong behaviour).
-      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_groot"
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_groot"
       policy_class: "lerobot.policies.groot.modeling_groot.GrootPolicy"
       device: "cuda"
       use_amp: false
       use_relative_actions: false
       default_task_label: "Pick up the block"
-      dataset_repo_id: "k-valentin/sobit_home-pickup_the_block-left-abs-gazebo"
+      dataset_repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
 
     runtime:
       # Must match dataset fps (10).
