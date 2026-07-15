@@ -320,6 +320,13 @@ class TrainNode(Node):
         accelerator = build_accelerator(num_gpus=num_gpus, use_amp=use_amp)
 
         if train_cfg.peft is not None and peft_extra:
+            # lerobot 0.6.0 upstreamed `lora_alpha` onto PeftConfig (PR #3573),
+            # so it's now in `_known` and flows through the plain `_base.update()`
+            # below via native attribute assignment — no dynamic field needed for
+            # it. `lora_dropout` still has no upstream field, so it's the only
+            # one that ends up in `_new_fields` and gets injected via
+            # make_dataclass. This block requires no version gate: it always
+            # only injects whatever peft_extra keys are missing from upstream.
             import dataclasses as _dc
             from sobits_vla_common.lerobot_adapter import PeftConfig as _PeftConfig
             _known = {f.name for f in _dc.fields(train_cfg.peft)}
