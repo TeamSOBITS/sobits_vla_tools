@@ -165,12 +165,17 @@ def test_processor_registry_key():
 def test_compat_patches_apply():
     from sobits_vla_common import lerobot_compat as lc
 
+    # apply_conversion_patches() is a documented no-op on lerobot 0.6.0 —
+    # RunningQuantileStats.update() promotes via np.result_type upstream now
+    # (fix #3697), so the old uint8-overflow patch was deleted rather than
+    # kept as a dead version gate. It must still be callable so call sites
+    # that don't know about that don't need a version check.
+    assert callable(lc.apply_conversion_patches)
     lc.apply_conversion_patches()
     lc.apply_training_patches()
     lc.apply_deploy_patches()
 
     # Idempotency flags set.
-    assert lc._uint8_quantile_stats_patched
     assert lc._bool_quantile_normalization_patched
     assert lc._pi05_action_dim_padding_patched
     assert lc._processor_registry_patched
@@ -178,9 +183,8 @@ def test_compat_patches_apply():
     assert lc._pi05_from_pretrained_patched
 
     # Patch targets import and are (still) patched in place — hard fail if
-    # the target class/attr is missing outright ("target missing"); a
-    # version-gated no-op ("patch skipped by version gate") is fine once
-    # Phase 2 lands, but on 0.5.1 today every target below must be present.
+    # the target class/attr is missing outright, since every patch below is
+    # unconditionally active on lerobot 0.6.0 (see lerobot_compat.py).
     from lerobot.datasets.compute_stats import RunningQuantileStats
     assert hasattr(RunningQuantileStats, 'update')
 
@@ -231,7 +235,11 @@ def test_dataset_roundtrip(tmp_path):
     import numpy as np
 
     from sobits_vla_common.lerobot_adapter import LeRobotDataset
-    from sobits_vla_rosbag_conversion.dataset_writer import _make_create_kwargs
+    from sobits_vla_rosbag_conversion.dataset_writer import (
+        _make_create_kwargs,
+        read_custom_info,
+        write_custom_info,
+    )
 
     features = {
         'action': {'dtype': 'float32', 'shape': (2,), 'names': ['j0', 'j1']},
@@ -251,10 +259,13 @@ def test_dataset_roundtrip(tmp_path):
     )
     dataset = LeRobotDataset.create(**create_kwargs)
 
+    # lerobot 0.6.0's meta/info.json is a typed DatasetInfo dataclass with no
+    # robot_info/user_info fields (see dataset_writer.write_custom_info) — the
+    # production writer persists them to a meta/ sidecar JSON file instead of
+    # dataset.meta.info[...]. Exercise that exact path here.
     custom_robot_info = {'name': 'seam_test_robot', 'version': '1'}
-    custom_user_info = {'lerobot_version': '0.5.1', 'sobits_vla_tools_rev': 'testrev'}
-    dataset.meta.info['robot_info'] = custom_robot_info
-    dataset.meta.info['user_info'] = custom_user_info
+    custom_user_info = {'lerobot_version': '0.6.0', 'sobits_vla_tools_rev': 'testrev'}
+    write_custom_info(dataset.root, robot_info=custom_robot_info, user_info=custom_user_info)
 
     for i in range(2):
         dataset.add_frame({
@@ -266,10 +277,11 @@ def test_dataset_roundtrip(tmp_path):
     dataset.finalize()
 
     reloaded = LeRobotDataset(repo_id, root=root)
+    reloaded_custom_info = read_custom_info(reloaded.root)
 
     assert reloaded.meta.total_episodes == 1
-    assert reloaded.meta.info.get('robot_info') == custom_robot_info
-    assert reloaded.meta.info.get('user_info') == custom_user_info
+    assert reloaded_custom_info.get('robot_info') == custom_robot_info
+    assert reloaded_custom_info.get('user_info') == custom_user_info
 
 
 # ---------------------------------------------------------------------------
