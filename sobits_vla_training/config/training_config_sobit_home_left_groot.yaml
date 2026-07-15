@@ -4,7 +4,7 @@
     # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — GR00T N1.5
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_groot
-    # Dataset : k-valentin/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
     # Policy  : GR00T N1.5-3B (Eagle2 VLM + flow-matching action head)
     # Base    : nvidia/GR00T-N1.5-3B (loaded via base_model_path, not
     #           checkpoint.pretrained_path)
@@ -32,7 +32,7 @@
       active_mobile_base: true
 
     dataset:
-      repo_id: "k-valentin/sobit_home-pickup_the_block-left-abs-gazebo"
+      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
       num_workers: 4
       rename_map: []
 
@@ -73,7 +73,7 @@
 
     hub:
       push_to_hub: true
-      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_groot"
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_groot"
       private: false
 
     peft:
