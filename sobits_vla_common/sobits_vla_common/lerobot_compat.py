@@ -4,6 +4,9 @@ import logging
 
 import numpy as np
 
+# Single source of truth for lerobot version gating — see lerobot_adapter.py.
+from sobits_vla_common.lerobot_adapter import IS_V06, LEROBOT_VERSION  # noqa: F401
+
 
 logger = logging.getLogger(__name__)
 
@@ -189,14 +192,30 @@ def _patch_processor_registry() -> None:
     if _processor_registry_patched:
         return
     try:
-        from lerobot.processor.pipeline import ProcessorStepRegistry
-        if 'delta_actions_processor' in ProcessorStepRegistry._registry:
-            ProcessorStepRegistry._registry[
-                'relative_actions_processor'
-            ] = ProcessorStepRegistry._registry['delta_actions_processor']
+        from sobits_vla_common.lerobot_adapter import ProcessorStepRegistry
+
+        # Preferred: public register()/get() API. get() raises KeyError if
+        # 'delta_actions_processor' isn't registered (nothing to alias);
+        # register() raises ValueError if 'relative_actions_processor' is
+        # already registered natively (0.6.0) — either way, skip quietly.
+        try:
+            step_cls = ProcessorStepRegistry.get('delta_actions_processor')
+            # register() also stamps step_cls._registry_name with the new
+            # name, which is the key used when SERIALIZING pipelines — keep
+            # the native name so repos we push stay loadable by stock
+            # lerobot 0.5.1 (the alias is for loading only).
+            native_name = getattr(step_cls, '_registry_name', 'delta_actions_processor')
+            ProcessorStepRegistry.register('relative_actions_processor')(step_cls)
+            step_cls._registry_name = native_name
             logger.info(
                 "Registered alias 'relative_actions_processor' "
-                "-> 'delta_actions_processor'."
+                "-> 'delta_actions_processor' via ProcessorStepRegistry.register()."
+            )
+        except KeyError:
+            logger.debug("'delta_actions_processor' not registered — nothing to alias.")
+        except ValueError:
+            logger.debug(
+                "'relative_actions_processor' already registered — alias not needed."
             )
     except Exception as e:
         logger.warning(f'Could not register relative_actions_processor alias: {e}')
