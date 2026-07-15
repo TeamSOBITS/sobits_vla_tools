@@ -34,15 +34,14 @@ import numpy as np
 import torch
 
 try:
-    from lerobot.policies.utils import prepare_observation_for_inference
-    from lerobot.utils.control_utils import predict_action
+    from sobits_vla_common.lerobot_adapter import predict_action, prepare_observation_for_inference
 
     _LEROBOT_AVAILABLE = True
 except ImportError:
     _LEROBOT_AVAILABLE = False
 
 try:
-    from lerobot.policies.rtc.latency_tracker import LatencyTracker
+    from sobits_vla_common.lerobot_adapter import LatencyTracker
 
     _RTC_AVAILABLE = True
 except ImportError:
@@ -417,9 +416,7 @@ class InferenceEngine:
         if manually_add_delta and steps:
             has_absolute_step = False
             try:
-                from lerobot.processor.relative_action_processor import (
-                    AbsoluteActionsProcessorStep,
-                )
+                from sobits_vla_common.lerobot_adapter import AbsoluteActionsProcessorStep
 
                 if self.postprocessor is not None:
                     has_absolute_step = any(
