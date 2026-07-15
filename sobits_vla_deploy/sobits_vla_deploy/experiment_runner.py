@@ -42,9 +42,9 @@ returns. One model per invocation (no hot-swap) — run it once per model.
 
 from __future__ import annotations
 
+from collections import Counter
 import threading
 import time
-from collections import Counter
 
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
