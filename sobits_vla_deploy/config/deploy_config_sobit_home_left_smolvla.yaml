@@ -32,7 +32,7 @@
       # measured_position +- max_joint_delta each cycle.
 
     rtc:
-      # SmolVLA fully supports RTC in lerobot 0.5.1 (rtc_config field,
+      # SmolVLA fully supports RTC in lerobot 0.6.0 (rtc_config field,
       # init_rtc_processor, predict_action_chunk with inference_delay /
       # prev_chunk_left_over).
       enabled: true

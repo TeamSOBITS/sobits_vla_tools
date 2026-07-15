@@ -82,7 +82,7 @@
       private: false
 
     peft:
-      # PI0FastPolicy has no built-in PEFT defaults in lerobot 0.5.1 —
+      # PI0FastPolicy has no built-in PEFT defaults in lerobot 0.6.0 —
       # train_node patches in LM attention (q,v)_proj targets.
       method_type: "LORA"
       r: 16

@@ -66,7 +66,7 @@
       steps: 30000
 
       # 32 GB RTX 5090 (shared with display) — pi05 activations ~1.1 GB/sample.
-      # NOTE: lerobot 0.5.1 has NO gradient accumulation — effective batch is
+      # NOTE: lerobot 0.6.0 has NO gradient accumulation — effective batch is
       # exactly batch_size × num_gpus.
       # batch_size=16 WITHOUT gradient checkpointing peaks ~29 GB → OOM risk;
       # REQUIRES gradient_checkpointing: true below (peak ~23 GB, safe).
@@ -80,9 +80,9 @@
       # Log every 100 steps.
       log_freq: 100
 
-      # EFFECTIVELY DISABLED: lerobot's eval_freq only triggers gym-env
-      # rollouts (cfg.env), which is None for real-robot datasets. No eval
-      # runs during training.
+      # EFFECTIVELY DISABLED: lerobot's env_eval_freq (renamed from eval_freq
+      # in 0.6.0) only triggers gym-env rollouts (cfg.env), which is None for
+      # real-robot datasets. No eval runs during training.
       eval_freq: 5000
 
     # =========================================================================
