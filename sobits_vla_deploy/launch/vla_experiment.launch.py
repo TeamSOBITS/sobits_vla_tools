@@ -26,7 +26,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""
+r"""
 Unattended VLA evaluation launch — one model per invocation.
 
 Starts the deploy node with episode logging force-enabled (writing to
@@ -37,9 +37,11 @@ Assumes Gazebo + the robot are already running. Defaults to use_sim_time:=true
 so the 60 s episode timeout is measured against the simulation clock.
 
 Example:
+-------
   ros2 launch sobits_vla_deploy vla_experiment.launch.py \\
     deploy_config:=deploy_config_sobit_home_left_smolvla \\
     model_label:=smolvla num_episodes:=20
+
 """
 
 import os
