@@ -106,8 +106,7 @@ def build_train_config(params: dict[str, Any]):
         (e.g. lora_alpha, lora_dropout) to pass to wrap_with_peft.
 
     """
-    from lerobot.configs.default import DatasetConfig, WandBConfig
-    from lerobot.configs.train import TrainPipelineConfig
+    from sobits_vla_common.lerobot_adapter import DatasetConfig, TrainPipelineConfig, WandBConfig
 
     policy_type: str = params.get('policy', 'smolvla')
     device: str = _infer_device(params.get('num_gpus', 1))
@@ -178,12 +177,21 @@ def build_train_config(params: dict[str, Any]):
 
     dataset_cfg = DatasetConfig(repo_id=ds_repo_id)
 
+    # Version provenance: fold the lerobot version into notes since
+    # WandBConfig has no dedicated metadata field. Keeps the W&B run
+    # traceable to the lerobot version it trained under.
+    from sobits_vla_common.lerobot_adapter import LEROBOT_VERSION
+    lerobot_version_str = '.'.join(str(p) for p in LEROBOT_VERSION)
+    user_notes = params.get('wandb.notes', '') or ''
+    provenance_note = f'lerobot={lerobot_version_str}'
+    notes = f'{user_notes} [{provenance_note}]' if user_notes else f'[{provenance_note}]'
+
     wandb_cfg = WandBConfig(
         enable=params.get('wandb.enable', True),
         project=params.get('wandb.project', 'sobits_vla_training'),
         entity=params.get('wandb.entity', None) or None,
         run_id=params.get('wandb.run_name', None) or None,
-        notes=params.get('wandb.notes', '') or '',
+        notes=notes,
     )
 
     output_dir_raw = params.get('checkpoint.output_dir', '')
@@ -242,7 +250,7 @@ def build_peft_config(params: dict[str, Any]):
         if peft.method_type is not set.
 
     """
-    from lerobot.configs.default import PeftConfig
+    from sobits_vla_common.lerobot_adapter import PeftConfig
 
     method_type: str = params.get('peft.method_type', '') or ''
     if not method_type:
