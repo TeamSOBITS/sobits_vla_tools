@@ -42,7 +42,7 @@ else
 fi
 
 # Version specs can be overridden per environment, e.g.:
-LEROBOT_VERSION_SPEC=${LEROBOT_VERSION_SPEC:-"~=0.5.1"}
+LEROBOT_VERSION_SPEC=${LEROBOT_VERSION_SPEC:-"~=0.6.0"}
 NUMPY_VERSION_SPEC=${NUMPY_VERSION_SPEC:-">=2.0.0,<2.3.0"}
 NUMEXPR_VERSION_SPEC=${NUMEXPR_VERSION_SPEC:-">=2.10.2"}
 BOTTLENECK_VERSION_SPEC=${BOTTLENECK_VERSION_SPEC:-">=1.4.2"}
@@ -77,8 +77,10 @@ rosdep install --from-paths sobits_vla_tools --ignore-src -r -y
 # requirements.txt is the pip source of truth. Version specs on the
 # lerobot/numpy/numexpr/bottleneck lines are templated at install time so
 # the LEROBOT_VERSION_SPEC (etc.) env overrides above keep working — e.g.
-# LEROBOT_VERSION_SPEC="~=0.6.0" ./install.sh installs 0.6.0 even though
-# requirements.txt still pins ~=0.5.1.
+# LEROBOT_VERSION_SPEC="~=0.6.1" ./install.sh installs a 0.6.x patch release
+# even though requirements.txt pins ~=0.6.0. sobits_vla_tools targets
+# lerobot >= 0.6.0 only (0.5.1 support was dropped); the last 0.5.1-compatible
+# revision is on branch feat/refactor.
 REQUIREMENTS_FILE="${WORKSPACE_ROOT}/sobits_vla_tools/requirements.txt"
 if [ ! -f "${REQUIREMENTS_FILE}" ]; then
     echo "requirements.txt not found at ${REQUIREMENTS_FILE}"
