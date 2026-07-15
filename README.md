@@ -19,7 +19,7 @@ SOBITS VLA Tools is a monorepo providing the full pipeline for controlling SOBIT
 
 | Package | Description |
 | ------- | ----------- |
-| `sobits_vla_common` | Shared library: robot descriptor schema/loader, policy registry, lerobot 0.5.1 compat patches, `new_robot` scaffolder, and the `GamepadClient` node |
+| `sobits_vla_common` | Shared library: robot descriptor schema/loader, policy registry, lerobot 0.6.0 compat patches, `new_robot` scaffolder, and the `GamepadClient` node |
 | `sobits_vla_rosbag_collection` | Gamepad-triggered multi-modal rosbag recording with live quality monitoring |
 | `sobits_vla_rosbag_conversion` | Converts rosbags into [LeRobot](https://github.com/huggingface/lerobot) dataset format |
 | `sobits_vla_training` | Trains/fine-tunes VLA policies (pi05, pi0, pi0_fast, smolvla, ACT, GR00T) via lerobot |
@@ -384,7 +384,7 @@ Set `robot_descriptor_id` to drive `excluded_joints` and camera selection from t
 
 **Package:** [sobits_vla_training](./sobits_vla_training/)
 
-Trains/fine-tunes a VLA policy on a LeRobot dataset via lerobot 0.5.1. Supported policies: `pi05`, `pi0`, `pi0_fast`, `smolvla`, `act`, `groot`. PEFT/LoRA, Hub push, and W&B logging are configured per YAML.
+Trains/fine-tunes a VLA policy on a LeRobot dataset via lerobot 0.6.0. Supported policies: `pi05`, `pi0`, `pi0_fast`, `smolvla`, `act`, `groot`. PEFT/LoRA, Hub push, and W&B logging are configured per YAML.
 
 #### Launch
 

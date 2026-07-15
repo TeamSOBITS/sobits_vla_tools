@@ -19,7 +19,7 @@ SOBITS VLA Toolsは，SOBITS自作ロボットをVision-Language-Action（VLA）
 
 | パッケージ | 説明 |
 | ---------- | ---- |
-| [sobits_vla_common](./sobits_vla_common/) | 共有ライブラリ：ロボットディスクリプタのスキーマ/ローダ、ポリシーレジストリ、lerobot 0.5.1互換パッチ、`new_robot`スキャフォルダ、`GamepadClient`ノード |
+| [sobits_vla_common](./sobits_vla_common/) | 共有ライブラリ：ロボットディスクリプタのスキーマ/ローダ、ポリシーレジストリ、lerobot 0.6.0互換パッチ、`new_robot`スキャフォルダ、`GamepadClient`ノード |
 | [sobits_vla_rosbag_collection](./sobits_vla_rosbag_collection/) | ゲームパッドによるマルチモーダルrosbag記録（リアルタイム品質監視付き） |
 | [sobits_vla_rosbag_conversion](./sobits_vla_rosbag_conversion/) | rosbagを[LeRobot](https://github.com/huggingface/lerobot)データセット形式に変換 |
 | [sobits_vla_training](./sobits_vla_training/) | VLAポリシー（pi05, pi0, pi0_fast, smolvla, ACT, GR00T）をlerobotで学習・ファインチューニング |
@@ -385,7 +385,7 @@ ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
 
 **パッケージ:** [sobits_vla_training](./sobits_vla_training/)
 
-LeRobotデータセット上でVLAポリシーをlerobot 0.5.1により学習・ファインチューニングします。対応ポリシー：`pi05`, `pi0`, `pi0_fast`, `smolvla`, `act`, `groot`。PEFT/LoRA・Hubプッシュ・W&BログはすべてポリシーごとのYAMLで設定します。
+LeRobotデータセット上でVLAポリシーをlerobot 0.6.0により学習・ファインチューニングします。対応ポリシー：`pi05`, `pi0`, `pi0_fast`, `smolvla`, `act`, `groot`。PEFT/LoRA・Hubプッシュ・W&BログはすべてポリシーごとのYAMLで設定します。
 
 #### launchによる起動
 
