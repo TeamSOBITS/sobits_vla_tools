@@ -48,6 +48,7 @@ from typing import Any
 import rclpy
 from rclpy.node import Node
 
+from sobits_vla_common import runtime_deps
 from sobits_vla_common.lerobot_compat import apply_training_patches
 from sobits_vla_training.preflight import run_preflight_checks
 
@@ -64,6 +65,14 @@ class TrainNode(Node):
         self._shutdown_event = threading.Event()
 
         self._declare_parameters()
+
+        from sobits_vla_common.lerobot_adapter import describe
+        seam = describe()
+        self.get_logger().info(
+            f'lerobot seam: version={seam["version"]} is_v06={seam["is_v06"]} '
+            f'unresolvable={seam["unresolvable"]}'
+        )
+
         self.get_logger().info('sobits_vla_training node initialised.')
 
     def _declare_parameters(self) -> None:
@@ -312,7 +321,7 @@ class TrainNode(Node):
 
         if train_cfg.peft is not None and peft_extra:
             import dataclasses as _dc
-            from lerobot.configs.default import PeftConfig as _PeftConfig
+            from sobits_vla_common.lerobot_adapter import PeftConfig as _PeftConfig
             _known = {f.name for f in _dc.fields(train_cfg.peft)}
             _new_fields = [(k, type(v), _dc.field(default=v))
                            for k, v in peft_extra.items() if k not in _known]
@@ -344,7 +353,7 @@ class TrainNode(Node):
 
         apply_training_patches()
 
-        from lerobot.scripts.lerobot_train import train
+        from sobits_vla_common.lerobot_adapter import train
         train(train_cfg, accelerator=accelerator)
 
         self.get_logger().info('Training complete.')
@@ -360,6 +369,13 @@ class TrainNode(Node):
 
 def main(args=None) -> None:
     """Entry point for the sobits_vla_training ROS 2 node."""
+    # Checked here, not at module import, so lint/pytest collection of this
+    # package still works on environments without the ML stack installed.
+    runtime_deps.ensure({
+        'lerobot': 'pip install lerobot[training]~=0.6.0',
+        'accelerate': 'pip install lerobot[training]~=0.6.0',
+        'wandb': 'pip install lerobot[training]~=0.6.0',
+    })
     rclpy.init(args=args)
 
     node = TrainNode()
