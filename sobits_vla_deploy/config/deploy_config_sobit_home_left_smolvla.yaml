@@ -7,7 +7,7 @@
       # NOTE: smolvla has no action_feature_names — the node maps actions
       # positionally, which is correct because the robot.groups order below
       # matches the dataset feature order exactly. Do not reorder groups.
-      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_smolvla_vlmft"
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_smolvla_vlmft"
       policy_class: "lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy"
       device: "cuda"
       use_amp: false
@@ -43,6 +43,17 @@
       # Floor; the LatencyTracker adapts upward from measurements.
       inference_delay: 2
       debug: false
+
+    logging:
+      # Episode evaluation logging. The vla_experiment.launch.py overrides
+      # enabled/log_dir per model run; these are the defaults for plain deploy.
+      enabled: false
+      log_dir: "/tmp/vla_logs"
+      tilt_threshold_deg: 30.0
+      # Automatic episode termination thresholds.
+      episode_timeout_s: 60.0   # stop after 60 sim seconds
+      lift_success_m: 0.05      # block lifted > 5 cm -> success
+      fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
 
     robot:
       # Morphology (joint groups, command topics, joints, max_joint_delta,
