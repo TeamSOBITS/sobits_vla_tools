@@ -27,14 +27,48 @@
 
 """Dataset writer module for creating, populating and finalising LeRobot datasets."""
 
+import json
 from pathlib import Path
 import shutil
 import subprocess
 
 import numpy as np
 import pandas as pd
-from sobits_vla_common.lerobot_adapter import HF_LEROBOT_HOME, LEROBOT_VERSION, LeRobotDataset
+from sobits_vla_common.lerobot_adapter import (
+    HF_LEROBOT_HOME,
+    LEROBOT_VERSION,
+    LeRobotDataset,
+    RGBEncoderConfig,
+)
 import yaml
+
+# lerobot 0.6.0's meta/info.json loads into a typed `DatasetInfo` dataclass
+# (lerobot.datasets.utils.DatasetInfo) with a fixed field set — it has no
+# `robot_info`/`user_info` fields, and `write_info()` serializes it via
+# `dataclasses.asdict()`, so unknown keys assigned through the (deprecated)
+# dict-style `__setitem__` shim either raise KeyError or are silently dropped
+# on the next save/reload. There is no supported way to attach arbitrary
+# custom keys to DatasetInfo itself, so we persist them in a small sidecar
+# file next to the standard meta/ files instead.
+_CUSTOM_INFO_FILENAME = 'sobits_vla_info.json'
+
+
+def write_custom_info(dataset_root: Path, robot_info: dict, user_info: dict) -> None:
+    """Persist robot_info/user_info to a sidecar JSON file under meta/."""
+    meta_dir = Path(dataset_root) / 'meta'
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    payload = {'robot_info': robot_info, 'user_info': user_info}
+    with open(meta_dir / _CUSTOM_INFO_FILENAME, 'w') as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+
+
+def read_custom_info(dataset_root: Path) -> dict:
+    """Read back the robot_info/user_info sidecar written by write_custom_info."""
+    path = Path(dataset_root) / 'meta' / _CUSTOM_INFO_FILENAME
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        return json.load(f)
 
 
 def _sobits_vla_tools_rev() -> str:
@@ -75,7 +109,7 @@ def _make_create_kwargs(
         'root': output_directory,
         'robot_type': robot_type,
         'video_backend': 'auto',
-        'vcodec': vcodec,
+        'rgb_encoder': RGBEncoderConfig(vcodec=vcodec),
         'streaming_encoding': True,
     }
 
@@ -163,8 +197,6 @@ class DatasetWriter:
         )
         self.dataset = LeRobotDataset.create(**create_kwargs)
 
-        self.dataset.meta.info['robot_info'] = self.robot_info
-
         # Version provenance: which lerobot + which sobits_vla_tools revision
         # produced this dataset. Helps triage a bad conversion after a
         # lerobot bump.
@@ -181,9 +213,18 @@ class DatasetWriter:
                 user_info = {**user_info, **provenance}
             else:
                 user_info = {'user_info': user_info, **provenance}
-            self.dataset.meta.info['user_info'] = user_info
         else:
-            self.dataset.meta.info['user_info'] = provenance
+            user_info = provenance
+
+        # lerobot 0.6.0's meta/info.json is a typed DatasetInfo dataclass with
+        # no robot_info/user_info fields — see the write_custom_info docstring
+        # above. Persisted eagerly (not deferred to finalize()) so it survives
+        # even if conversion is interrupted before finalize().
+        write_custom_info(
+            self.dataset.root,
+            robot_info=self.robot_info,
+            user_info=user_info,
+        )
 
     def add_frame(self, frame):
         """Add a single frame to the dataset."""
@@ -194,7 +235,13 @@ class DatasetWriter:
         self.dataset.save_episode()
 
     def _persist_subtasks_metadata(self) -> None:
-        """Persist subtask mapping to meta/subtasks.parquet for LeRobot reload compatibility."""
+        """
+        Persist subtask mapping to a meta/subtasks.parquet sidecar.
+
+        lerobot 0.6.0 no longer loads this file (native subtasks support was
+        replaced by language columns, #3467) — it is kept as our own sidecar
+        so the subtask names survive for a future language-columns migration.
+        """
         if not self.has_subtasks:
             return
 
@@ -206,7 +253,6 @@ class DatasetWriter:
         subtasks_path = Path(self.dataset.root) / 'meta' / 'subtasks.parquet'
         subtasks_path.parent.mkdir(parents=True, exist_ok=True)
         subtasks_df.to_parquet(subtasks_path)
-        self.dataset.meta.subtasks = subtasks_df
         self.log_info(f'Subtasks metadata saved to: {subtasks_path}')
 
     def _verify_subtasks_metadata(self) -> None:
@@ -214,16 +260,22 @@ class DatasetWriter:
         if not self.has_subtasks:
             return
 
+        # lerobot 0.6.0 removed native subtasks support (meta.subtasks /
+        # load_subtasks are gone — superseded by language columns, #3467), so
+        # meta/subtasks.parquet is now purely our own sidecar: verify it on
+        # disk directly instead of through the reloaded metadata object.
         reloaded = LeRobotDataset(self.dataset_name, root=Path(self.dataset.root))
-        if reloaded.meta.subtasks is None:
+        subtasks_path = Path(self.dataset.root) / 'meta' / 'subtasks.parquet'
+        if not subtasks_path.exists():
             raise RuntimeError(
-                'Subtasks metadata was not persisted (meta.subtasks is None after reload).'
+                'Subtasks metadata was not persisted (meta/subtasks.parquet missing).'
             )
-        if len(reloaded.meta.subtasks) != len(self.all_subtasks_list):
+        persisted = pd.read_parquet(subtasks_path)
+        if len(persisted) != len(self.all_subtasks_list):
             raise RuntimeError(
                 f'Subtasks metadata size mismatch after reload: '
                 f'expected {len(self.all_subtasks_list)}, '
-                f'got {len(reloaded.meta.subtasks)}'
+                f'got {len(persisted)}'
             )
         if 'subtask_index' not in reloaded.features:
             raise RuntimeError("Feature 'subtask_index' is missing after reload.")
