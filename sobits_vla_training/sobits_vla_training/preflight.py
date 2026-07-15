@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 def load_dataset_info(repo_id: str) -> dict | None:
     """Read info.json from local cache or HF hub without instantiating LeRobotDataset."""
     try:
-        from lerobot.utils.constants import HF_LEROBOT_HOME
+        from sobits_vla_common.lerobot_adapter import HF_LEROBOT_HOME
         candidate = HF_LEROBOT_HOME / repo_id / 'meta' / 'info.json'
         if not candidate.exists():
             candidate = Path(repo_id) / 'meta' / 'info.json'
