@@ -88,6 +88,32 @@ from typing import Any, Dict, List, Optional, Tuple
 # ---------------------------------------------------------------------------
 
 
+def _sobits_vla_tools_rev() -> str:
+    """Return `git describe --always --dirty` for this checkout, or 'unknown'."""
+    try:
+        result = subprocess.run(
+            ['git', 'describe', '--always', '--dirty'],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or 'unknown'
+    except Exception:
+        pass
+    return 'unknown'
+
+
+def _lerobot_version_str() -> str:
+    """Return the installed lerobot version as 'major.minor.patch', or 'unknown'."""
+    try:
+        from sobits_vla_common.lerobot_adapter import LEROBOT_VERSION
+        return '.'.join(str(p) for p in LEROBOT_VERSION)
+    except Exception:
+        return 'unknown'
+
+
 def _rpy_from_quat(x: float, y: float, z: float, w: float) -> Tuple[float, float, float]:
     """Quaternion → (roll, pitch, yaw) in radians."""
     sinr = 2.0 * (w * x + y * z)
@@ -245,7 +271,9 @@ class EpisodeLogger:
         lift_success_m: float = 0.05,
         fall_z_drop_m: float = 0.15,
         enabled: bool = True,
+        model_repo_id: str = '',
     ) -> None:
+        self._model_repo_id = model_repo_id
         self._log_dir = Path(log_dir)
         self._world_name = world_name
         self._robot_name = robot_name
@@ -324,6 +352,9 @@ class EpisodeLogger:
                 'type': 'meta',
                 'episode': self._episode_idx,
                 'start_time_iso': datetime.now(timezone.utc).isoformat(),
+                'lerobot_version': _lerobot_version_str(),
+                'sobits_vla_tools_rev': _sobits_vla_tools_rev(),
+                'model_repo_id': self._model_repo_id,
                 'world_name': self._world_name,
                 'robot_name': self._robot_name,
                 'block_name': self._block_name,
@@ -515,10 +546,10 @@ class EpisodeLogger:
 
     def evaluate_termination(self, elapsed_sim_s: float) -> Optional[str]:
         """
-        Check the automatic termination conditions against the latest cached
-        Gazebo poses and the elapsed simulation time.
+        Check the automatic termination conditions.
 
-        Returns the outcome reason or None if the episode should continue:
+        Evaluates the latest cached Gazebo poses and the elapsed simulation
+        time. Returns the outcome reason or None if the episode should continue:
           "success_lift" — block lifted more than lift_success_m
           "fallen"       — robot tilt > threshold or world-z drop > fall_z_drop_m
           "timeout"      — elapsed_sim_s >= episode_timeout_s
