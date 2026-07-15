@@ -4,7 +4,7 @@
     # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0-FAST
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi0fast
-    # Dataset : k-valentin/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
     # Policy  : PI0-FAST (PaliGemma 2B, autoregressive FAST action tokens — no
     #           action expert; ~5x faster training than flow-matching pi0/pi05)
     # Base    : lerobot/pi0fast-base (hyphen — pi0fast_base does NOT exist)
@@ -18,7 +18,7 @@
     # TOKENIZER: uses the general-purpose lerobot/fast-action-tokenizer by
     # default. For best results on this robot, optionally train a custom one:
     #   lerobot-train-tokenizer \
-    #     --repo_id k-valentin/sobit_home-pickup_the_block-left-abs-gazebo \
+    #     --repo_id team-sobits/sobit_home-pickup_the_block-left-abs-gazebo \
     #     --action_horizon 10 --encoded_dims "0:19" --vocab_size 1024 \
     #     --normalization_mode QUANTILES --push_to_hub \
     #     --hub_repo_id k-valentin/sobit_home_fast_tokenizer
@@ -40,7 +40,7 @@
       active_mobile_base: true
 
     dataset:
-      repo_id: "k-valentin/sobit_home-pickup_the_block-left-abs-gazebo"
+      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
       num_workers: 4
       rename_map: []
 
@@ -78,7 +78,7 @@
 
     hub:
       push_to_hub: true
-      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_pi0fast"
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi0fast_vlmft"
       private: false
 
     peft:
