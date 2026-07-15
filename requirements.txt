@@ -9,7 +9,7 @@
 # (e.g. a pre-installed CUDA-matched wheel).
 
 huggingface_hub
-lerobot[transformers-dep]~=0.5.1
+lerobot[training,transformers-dep,pi,smolvla,peft-dep]~=0.6.0
 peft
 numpy>=2.0.0,<2.3.0
 numexpr>=2.10.2
