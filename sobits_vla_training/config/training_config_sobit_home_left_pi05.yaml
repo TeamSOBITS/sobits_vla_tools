@@ -3,7 +3,7 @@
     # =========================================================================
     # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0.5
     #
-    # Dataset : k-valentin/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
     # Policy  : PI0.5  (PaliGemma 2B + Gemma 300M action expert, flow matching)
     # Robot   : SOBIT HOME — left arm only, 2 cameras (head + hand_left), mobile base
     # DOF     : 19 (head×2 + body×1 + arm_left×6 + hand_left×7 + mobile_base [x,y,θ])
@@ -30,7 +30,7 @@
     # =========================================================================
     dataset:
       # Local LeRobotDataset path (already downloaded from HuggingFace Hub).
-      repo_id: "k-valentin/sobit_home-pickup_the_block-left-abs-gazebo"
+      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
 
       # DataLoader workers — 4 is safe for 3-camera video datasets on this machine.
       num_workers: 4
@@ -98,7 +98,7 @@
       enable: true
       project: "sobits_vla_training"
       entity: ""
-      run_name: "sobit_home-pickup_block-left-abs-pi05-vlmlora"
+      run_name: "sobit_home-pickup_block-left-abs-pi05-vlmlora_test20"
       notes: "PI0.5 VLM-LoRA on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm, language_model adapters unfrozen)"
       tags:
         - pi05
@@ -113,7 +113,7 @@
     hub:
       # Push the FINAL-step model (+ processors) to the Hub after training.
       push_to_hub: true
-      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_pi05_vlmlora"
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi05_vlmlora"
       private: false
 
     # =========================================================================
@@ -197,8 +197,7 @@
       #   false → pretrained_path is loaded as full model weights (pi05_base: correct)
       #   true  → factory.py reads adapter_config.json at pretrained_path, loads
       #           the base model it references, and applies the adapter on top.
-      #           Use this only to CONTINUE training from a previous adapter, e.g.
-      #           pretrained_path: "k-valentin/sobit_home_pickup_block_left_abs_pi05".
+      #           Use this only to CONTINUE training from a previous adapter.
       # LoRA training is enabled by the peft: section above; after wrapping,
       # lerobot flips config.use_peft to true automatically so the final Hub
       # push uploads adapter files (pretrained.py:313, lerobot_train.py:549).
