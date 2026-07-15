@@ -32,10 +32,7 @@ import numpy as np
 import torch
 
 try:
-    from lerobot.datasets.feature_utils import (
-        build_dataset_frame,
-        hw_to_dataset_features,
-    )
+    from sobits_vla_common.lerobot_adapter import build_dataset_frame, hw_to_dataset_features
 
     _LEROBOT_AVAILABLE = True
 except ImportError:
