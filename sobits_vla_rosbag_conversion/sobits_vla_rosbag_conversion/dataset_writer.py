@@ -29,12 +29,55 @@
 
 from pathlib import Path
 import shutil
+import subprocess
 
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.utils.constants import HF_LEROBOT_HOME
 import numpy as np
 import pandas as pd
+from sobits_vla_common.lerobot_adapter import HF_LEROBOT_HOME, LEROBOT_VERSION, LeRobotDataset
 import yaml
+
+
+def _sobits_vla_tools_rev() -> str:
+    """Return `git describe --always --dirty` for this checkout, or 'unknown'."""
+    try:
+        result = subprocess.run(
+            ['git', 'describe', '--always', '--dirty'],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or 'unknown'
+    except Exception:
+        pass
+    return 'unknown'
+
+
+def _make_create_kwargs(
+    dataset_name: str,
+    fps: int,
+    features: dict,
+    output_directory: Path | None,
+    robot_type: str | None,
+    vcodec: str,
+) -> dict:
+    """
+    Build the kwargs dict for `LeRobotDataset.create(...)`.
+
+    Factored out so the seam test suite exercises the exact same
+    creation path as production conversion (see test_dataset_roundtrip).
+    """
+    return {
+        'repo_id': dataset_name,
+        'fps': fps,
+        'features': features,
+        'root': output_directory,
+        'robot_type': robot_type,
+        'video_backend': 'auto',
+        'vcodec': vcodec,
+        'streaming_encoding': True,
+    }
 
 
 class DatasetWriter:
@@ -110,23 +153,37 @@ class DatasetWriter:
             )
             shutil.rmtree(dataset_root)
 
-        self.dataset = LeRobotDataset.create(
-            repo_id=self.dataset_name,
+        create_kwargs = _make_create_kwargs(
+            dataset_name=self.dataset_name,
             fps=self.fps,
             features=self.features,
-            root=self.output_directory,
+            output_directory=self.output_directory,
             robot_type=self.robot_type,
-            video_backend='auto',
             vcodec=self.vcodec,
-            streaming_encoding=True,
         )
+        self.dataset = LeRobotDataset.create(**create_kwargs)
 
         self.dataset.meta.info['robot_info'] = self.robot_info
+
+        # Version provenance: which lerobot + which sobits_vla_tools revision
+        # produced this dataset. Helps triage a bad conversion after a
+        # lerobot bump.
+        provenance = {
+            'lerobot_version': '.'.join(str(p) for p in LEROBOT_VERSION),
+            'sobits_vla_tools_rev': _sobits_vla_tools_rev(),
+        }
         if self.user_info:
             if len(self.user_info) > 1 or not isinstance(self.user_info, list):
-                self.dataset.meta.info['user_info'] = self.user_info
+                user_info = self.user_info
             else:
-                self.dataset.meta.info['user_info'] = self.user_info[0]
+                user_info = self.user_info[0]
+            if isinstance(user_info, dict):
+                user_info = {**user_info, **provenance}
+            else:
+                user_info = {'user_info': user_info, **provenance}
+            self.dataset.meta.info['user_info'] = user_info
+        else:
+            self.dataset.meta.info['user_info'] = provenance
 
     def add_frame(self, frame):
         """Add a single frame to the dataset."""
