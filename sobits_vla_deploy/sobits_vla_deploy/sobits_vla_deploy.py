@@ -48,6 +48,7 @@ from rclpy.qos import QoSProfile  # noqa: E402
 import rclpy.time  # noqa: E402
 from sensor_msgs.msg import CompressedImage, Image, JointState  # noqa: E402
 from sobits_interfaces.srv import VlaCommand, VlaUpdateTask  # noqa: E402
+from sobits_vla_common import runtime_deps  # noqa: E402
 from sobits_vla_common.lerobot_compat import apply_deploy_patches  # noqa: E402
 from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.action_executor import ActionExecutor  # noqa: E402
@@ -81,6 +82,13 @@ class JointGroupConfig:
 class LeRobotDeployNode(Node):
     def __init__(self) -> None:
         super().__init__('sobits_vla_deploy')
+
+        from sobits_vla_common.lerobot_adapter import describe
+        seam = describe()
+        self.get_logger().info(
+            f'lerobot seam: version={seam["version"]} is_v06={seam["is_v06"]} '
+            f'unresolvable={seam["unresolvable"]}'
+        )
 
         self._cb_group = ReentrantCallbackGroup()
         self._lock = Lock()
@@ -289,6 +297,7 @@ class LeRobotDeployNode(Node):
             lift_success_m=self._lift_success_m,
             fall_z_drop_m=self._fall_z_drop_m,
             enabled=self._logging_enabled,
+            model_repo_id=self._model_repo_id,
         )
         if self._logging_enabled:
             self.get_logger().info(
@@ -1052,6 +1061,13 @@ class LeRobotDeployNode(Node):
 
 
 def main(args: Optional[List[str]] = None) -> None:
+    # Checked here, not at module import, so lint/pytest collection of this
+    # package still works on environments without the ML stack installed.
+    runtime_deps.ensure({
+        'lerobot': 'pip install lerobot[training]~=0.6.0',
+        'huggingface_hub': 'pip install huggingface_hub',
+        'safetensors': 'pip install lerobot[training]~=0.6.0',
+    })
     rclpy.init(args=args)
     node = LeRobotDeployNode()
     executor = MultiThreadedExecutor(num_threads=4)
