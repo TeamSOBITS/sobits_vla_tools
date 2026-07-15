@@ -33,16 +33,15 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
-# LeRobot v0.5.1 imports
+# LeRobot imports (via the single seam — see lerobot_adapter.py)
 try:
-    from lerobot.policies.factory import make_pre_post_processors
+    from sobits_vla_common.lerobot_adapter import make_pre_post_processors
     _LEROBOT_AVAILABLE = True
 except ImportError:
     _LEROBOT_AVAILABLE = False
 
 try:
-    from lerobot.policies.rtc.configuration_rtc import RTCConfig
-    from lerobot.configs.types import RTCAttentionSchedule
+    from sobits_vla_common.lerobot_adapter import RTCAttentionSchedule, RTCConfig
     _RTC_AVAILABLE = True
 except ImportError:
     RTCConfig = None
@@ -63,6 +62,25 @@ def _registry_flag(policy_class_path: str, index: int, default: bool) -> bool:
     elif index == 4:
         return entry.cast_bf16
     return default
+
+
+def _state_dim_from_preprocessor(preprocessor) -> Optional[int]:
+    """
+    Infer expected_state_dim by introspecting the built preprocessor pipeline.
+
+    Replaces the old `policy_preprocessor_step_*_normalizer_processor.safetensors`
+    filename convention + hub file listing with a read of the normalizer
+    step's own stats object — the same `_tensor_stats` dict the bool-
+    normalization compat patch already touches, so this is one private-API
+    coupling instead of two.
+    """
+    for step in getattr(preprocessor, 'steps', []):
+        stats = getattr(step, '_tensor_stats', None) or {}
+        state_stats = stats.get('observation.state')
+        if state_stats:
+            any_stat = next(iter(state_stats.values()))
+            return int(any_stat.shape[-1])
+    return None
 
 
 class PolicyLoader:
@@ -193,8 +211,9 @@ class PolicyLoader:
         """Build a typed policy config from the model repo's config.json."""
         try:
             from dataclasses import fields as _dc_fields
-            from lerobot.configs.types import FeatureType as FT
-            from lerobot.configs.types import PolicyFeature
+
+            from sobits_vla_common.lerobot_adapter import FeatureType as FT
+            from sobits_vla_common.lerobot_adapter import PolicyFeature
 
             cfg_path = self._fetch_model_file(self.model_repo_id, 'config.json')
             with open(cfg_path) as fh:
@@ -283,8 +302,8 @@ class PolicyLoader:
             )
 
             try:
-                from lerobot.configs.types import FeatureType as FT
-                from lerobot.configs.types import PolicyFeature
+                from sobits_vla_common.lerobot_adapter import FeatureType as FT
+                from sobits_vla_common.lerobot_adapter import PolicyFeature
 
                 adapter_policy_json_path = self._fetch_model_file(
                     self.model_repo_id, 'config.json'
@@ -563,9 +582,7 @@ class PolicyLoader:
             is_groot = 'groot' in self.policy_class_path.lower()
             if self.model_dataset_repo_id:
                 try:
-                    from lerobot.datasets.lerobot_dataset import (
-                        LeRobotDatasetMetadata,
-                    )
+                    from sobits_vla_common.lerobot_adapter import LeRobotDatasetMetadata
 
                     _ds_meta = LeRobotDatasetMetadata(
                         self.model_dataset_repo_id
@@ -598,9 +615,7 @@ class PolicyLoader:
 
         if postprocessor is not None:
             try:
-                from lerobot.processor.relative_action_processor import (
-                    AbsoluteActionsProcessorStep,
-                )
+                from sobits_vla_common.lerobot_adapter import AbsoluteActionsProcessorStep
 
                 _abs_steps = [
                     s
@@ -631,39 +646,17 @@ class PolicyLoader:
 
         expected_state_dim = None
         _state_dim_source = 'disabled'
-        try:
-            from huggingface_hub import list_repo_files as _list_files
-            from safetensors.torch import load_file as _st_load
-
-            if Path(self.model_repo_id).is_dir():
-                repo_files = [p.name for p in Path(self.model_repo_id).iterdir()]
-            else:
-                repo_files = _list_files(self.model_repo_id)
-            normalizer_file = None
-            for filename in repo_files:
-                if filename.startswith(
-                    'policy_preprocessor_step_'
-                ) and filename.endswith('_normalizer_processor.safetensors'):
-                    normalizer_file = filename
-                    break
-
-            if normalizer_file is not None:
-                stats_path = self._fetch_model_file(
-                    self.model_repo_id, normalizer_file
+        if preprocessor is not None:
+            try:
+                expected_state_dim = _state_dim_from_preprocessor(preprocessor)
+                _state_dim_source = (
+                    'preprocessor_tensor_stats' if expected_state_dim is not None
+                    else 'preprocessor_has_no_observation_state_stats'
                 )
-                stats = _st_load(stats_path)
-                q01 = stats.get('observation.state.q01')
-                if q01 is not None:
-                    expected_state_dim = int(q01.shape[-1])
-                    _state_dim_source = 'normalizer_stats ({})'.format(
-                        normalizer_file
-                    )
-                else:
-                    _state_dim_source = 'normalizer_stats_loaded_but_no_q01_key'
-            else:
-                _state_dim_source = 'no_normalizer_file_in_repo'
-        except Exception as exc:
-            _state_dim_source = 'exception ({})'.format(exc)
+            except Exception as exc:
+                _state_dim_source = 'exception ({})'.format(exc)
+        else:
+            _state_dim_source = 'no_preprocessor_built'
 
         if expected_state_dim is None and model_action_feature_names is not None:
             expected_state_dim = len(model_action_feature_names)
