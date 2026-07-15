@@ -4,7 +4,7 @@
     # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi0
-    # Dataset : k-valentin/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
     # Policy  : PI0 (PaliGemma 2B + Gemma 300M action expert, flow matching)
     # Base    : lerobot/pi0_base (per HF pi0 docs)
     # Recipe  : LoRA r=16 — same family/recipe as the proven pi05 run.
@@ -26,7 +26,7 @@
       active_mobile_base: true
 
     dataset:
-      repo_id: "k-valentin/sobit_home-pickup_the_block-left-abs-gazebo"
+      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
       num_workers: 4
       rename_map: []
 
@@ -66,7 +66,7 @@
     hub:
       push_to_hub: true
       # New policy type → its own repo (never mix policies/semantics in one repo).
-      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_pi0"
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi0_vlmft"
       private: false
 
     peft:
