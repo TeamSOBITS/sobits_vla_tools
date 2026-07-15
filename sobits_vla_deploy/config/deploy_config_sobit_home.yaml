@@ -25,6 +25,17 @@
       inference_delay: 4
       debug: false
 
+    logging:
+      # Episode evaluation logging. The vla_experiment.launch.py overrides
+      # enabled/log_dir per model run; these are the defaults for plain deploy.
+      enabled: false
+      log_dir: "/tmp/vla_logs"
+      tilt_threshold_deg: 30.0
+      # Automatic episode termination thresholds.
+      episode_timeout_s: 60.0   # stop after 60 sim seconds
+      lift_success_m: 0.05      # block lifted > 5 cm -> success
+      fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
+
     robot:
       # Morphology is loaded from the shared robot descriptor:
       #   sobits_vla_common/robots/sobit_home.robot.yaml
