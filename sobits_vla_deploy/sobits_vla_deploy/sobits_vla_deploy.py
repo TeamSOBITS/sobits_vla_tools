@@ -285,12 +285,22 @@ class LeRobotDeployNode(Node):
             spawn_qx=sqx, spawn_qy=sqy, spawn_qz=sqz, spawn_qw=sqw,
             block_x=bx, block_y=by, block_z=bz,
             tilt_threshold_deg=self._log_tilt_deg,
+            episode_timeout_s=self._episode_timeout_s,
+            lift_success_m=self._lift_success_m,
+            fall_z_drop_m=self._fall_z_drop_m,
             enabled=self._logging_enabled,
         )
         if self._logging_enabled:
             self.get_logger().info(
                 'Episode logging enabled → {}'.format(self._log_dir)
             )
+
+        # Sim-time of the current episode start, and a topic the experiment
+        # runner listens on to know when an episode has auto-terminated.
+        self._episode_t0 = None
+        self._episode_done_pub = self.create_publisher(
+            String, '/vla/episode_done', QoSProfile(depth=10)
+        )
 
         self.get_logger().info(
             'Loaded profile {!r} with {} joint features, {} cameras. '
@@ -375,6 +385,10 @@ class LeRobotDeployNode(Node):
         self.declare_parameter('logging.enabled', False)
         self.declare_parameter('logging.log_dir', '/tmp/vla_logs')
         self.declare_parameter('logging.tilt_threshold_deg', 30.0)
+        # Automatic episode termination thresholds.
+        self.declare_parameter('logging.episode_timeout_s', 60.0)
+        self.declare_parameter('logging.lift_success_m', 0.05)
+        self.declare_parameter('logging.fall_z_drop_m', 0.15)
 
         # Simulation reset parameters
         self.declare_parameter('sim.world_name', 'simple_data_collection')
@@ -394,6 +408,11 @@ class LeRobotDeployNode(Node):
         self._logging_enabled = bool(self.get_parameter('logging.enabled').value)
         self._log_dir = str(self.get_parameter('logging.log_dir').value)
         self._log_tilt_deg = float(self.get_parameter('logging.tilt_threshold_deg').value)
+        self._episode_timeout_s = float(
+            self.get_parameter('logging.episode_timeout_s').value
+        )
+        self._lift_success_m = float(self.get_parameter('logging.lift_success_m').value)
+        self._fall_z_drop_m = float(self.get_parameter('logging.fall_z_drop_m').value)
         self._sim_world_name = str(self.get_parameter('sim.world_name').value)
         self._sim_robot_model = str(self.get_parameter('sim.robot_model_name').value)
         self._sim_block_model = str(self.get_parameter('sim.block_model_name').value)
@@ -648,6 +667,24 @@ class LeRobotDeployNode(Node):
                 self.get_logger().info(
                     'logging.tilt_threshold_deg → {}'.format(self._log_tilt_deg)
                 )
+            elif p.name == 'logging.episode_timeout_s':
+                self._episode_timeout_s = float(p.value)
+                self._episode_logger._episode_timeout_s = self._episode_timeout_s
+                self.get_logger().info(
+                    'logging.episode_timeout_s → {}'.format(self._episode_timeout_s)
+                )
+            elif p.name == 'logging.lift_success_m':
+                self._lift_success_m = float(p.value)
+                self._episode_logger._lift_success_m = self._lift_success_m
+                self.get_logger().info(
+                    'logging.lift_success_m → {}'.format(self._lift_success_m)
+                )
+            elif p.name == 'logging.fall_z_drop_m':
+                self._fall_z_drop_m = float(p.value)
+                self._episode_logger._fall_z_drop_m = self._fall_z_drop_m
+                self.get_logger().info(
+                    'logging.fall_z_drop_m → {}'.format(self._fall_z_drop_m)
+                )
         return SetParametersResult(successful=True)
 
     def _reset_episode_state(self) -> None:
@@ -668,7 +705,7 @@ class LeRobotDeployNode(Node):
         Thread(target=self._do_world_reset, daemon=True).start()
 
     def _do_world_reset(self) -> None:
-        """Teleport robot+block, then move robot to detecting_pose via action."""
+        """Teleport robot+block, then move robot to initial_pose via action."""
         import subprocess
         from sobits_vla_deploy.vla_episode_logger import _gz_set_pose
         sx, sy, sz, sqx, sqy, sqz, sqw = self._sim_spawn
@@ -685,7 +722,7 @@ class LeRobotDeployNode(Node):
             'World reset: robot={} block={}'.format(ok_robot, ok_block)
         )
         goal = (
-            "pose_name: 'detecting_pose'\n"
+            "pose_name: 'initial_pose'\n"
             'time_allowance:\n'
             '  sec: 1\n'
             '  nanosec: 500000000'
@@ -701,7 +738,7 @@ class LeRobotDeployNode(Node):
                 capture_output=True, text=True, timeout=10.0,
             )
             ok_pose = 'succeeded' in result.stdout.lower() or result.returncode == 0
-            self.get_logger().info('move_to_pose detecting_pose: {}'.format(
+            self.get_logger().info('move_to_pose initial_pose: {}'.format(
                 'OK' if ok_pose else 'FAIL (rc={})'.format(result.returncode)
             ))
         except subprocess.TimeoutExpired:
@@ -735,6 +772,7 @@ class LeRobotDeployNode(Node):
                 self.get_logger().info('VLA execution started via service command PLAY.')
                 with self._lock:
                     self._cmd_vector = dict(self._obs_builder.state_vector)
+                self._episode_t0 = self.get_clock().now()
                 self._play_enabled = True
                 self._episode_logger.begin_episode()
                 self._inference_engine.update_play_enabled(True)
@@ -744,10 +782,18 @@ class LeRobotDeployNode(Node):
         elif cmd == VlaCommand.Request.STOP:
             if self._play_enabled:
                 self.get_logger().info('VLA execution stopped via service command STOP.')
-                self._episode_logger.end_episode()
+                self._episode_logger.end_episode('manual_stop')
                 self._play_enabled = False
                 self._inference_engine.update_play_enabled(False)
                 self._reset_episode_state()
+                self._publish_episode_done('manual_stop')
+            else:
+                # Idle STOP = reset the world to the start pose. The experiment
+                # runner issues this before episode 1 so the first episode does
+                # not start from a stale (un-reset) pose.
+                self.get_logger().info('STOP while idle → resetting world to start pose.')
+                self._reset_episode_state()
+                self._publish_episode_done('reset')
             response.success = True
             response.message = 'STOP execution disabled'
             response.status = VlaCommand.Response.STATE_STOPPED
@@ -765,15 +811,37 @@ class LeRobotDeployNode(Node):
             self.get_logger().info('VLA execution started via /vla/play topic.')
             with self._lock:
                 self._cmd_vector = dict(self._obs_builder.state_vector)
+            self._episode_t0 = self.get_clock().now()
             self._play_enabled = True
             self._episode_logger.begin_episode()
             self._inference_engine.update_play_enabled(True)
         elif not msg.data and self._play_enabled:
             self.get_logger().info('VLA execution stopped via /vla/play topic.')
-            self._episode_logger.end_episode()
+            self._episode_logger.end_episode('manual_stop')
             self._play_enabled = False
             self._inference_engine.update_play_enabled(False)
             self._reset_episode_state()
+            self._publish_episode_done('manual_stop')
+
+    def _auto_stop_episode(self, outcome: str) -> None:
+        """Terminate the current episode automatically and notify the runner."""
+        self.get_logger().info(
+            'Episode auto-terminated: {}. Resetting world.'.format(outcome)
+        )
+        self._episode_logger.end_episode(outcome)
+        self._play_enabled = False
+        self._inference_engine.update_play_enabled(False)
+        # Stop the base immediately so the robot does not drift during reset.
+        if self._base_pub is not None:
+            self._base_pub.publish(Twist())
+        self._reset_episode_state()
+        self._publish_episode_done(outcome)
+
+    def _publish_episode_done(self, outcome: str) -> None:
+        self._episode_t0 = None
+        msg = String()
+        msg.data = outcome
+        self._episode_done_pub.publish(msg)
 
     def _on_task(self, msg: String) -> None:
         label = msg.data.strip()
@@ -824,6 +892,16 @@ class LeRobotDeployNode(Node):
                 self._base_pub.publish(cmd)
             return
 
+        # Automatic termination: success (block lifted), failure (fall), or
+        # timeout. Checked before consuming the action queue so an empty queue
+        # cannot stall a timeout. Uses the sim-time-aware node clock.
+        if self._logging_enabled and self._episode_t0 is not None:
+            elapsed = (self.get_clock().now() - self._episode_t0).nanoseconds * 1e-9
+            outcome = self._episode_logger.evaluate_termination(elapsed)
+            if outcome is not None:
+                self._auto_stop_episode(outcome)
+                return
+
         if self._single_step_mode:
             step = self._inference_engine.get_single_step_result()
             self._inference_engine.clear_single_step_result()
@@ -861,12 +939,15 @@ class LeRobotDeployNode(Node):
             now_msg=now,
         )
 
-        # Episode logging: joints, base vel, EE pose (TF lookup)
+        # Episode logging: commanded + measured joints, base vel, EE pose
         if self._logging_enabled:
             log_joints: Dict[str, float] = {}
+            log_joints_measured: Dict[str, float] = {}
+            measured_state = self._obs_builder.state_vector
             for group in self._joint_groups:
                 for feat in group.features:
                     log_joints[feat] = float(self._cmd_vector.get(feat, 0.0))
+                    log_joints_measured[feat] = float(measured_state.get(feat, 0.0))
             log_base = {
                 'x': float(step.get('x.vel', 0.0)) if step else 0.0,
                 'y': float(step.get('y.vel', 0.0)) if step else 0.0,
@@ -879,6 +960,7 @@ class LeRobotDeployNode(Node):
                 joints=log_joints,
                 base_vel=log_base,
                 ee_pose=ee.tolist() if ee is not None else None,
+                joints_measured=log_joints_measured,
             )
 
         self.get_logger().info('CMD -> {}{}'.format(joint_log, base_log))
@@ -981,7 +1063,10 @@ def main(args: Optional[List[str]] = None) -> None:
     finally:
         executor.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        # On SIGINT (launch teardown) rclpy's signal handler may already have
+        # shut down the context; calling shutdown() again raises RCLError.
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
