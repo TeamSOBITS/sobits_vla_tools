@@ -1,0 +1,96 @@
+/**:
+  ros__parameters:
+    # =========================================================================
+    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — VLA-JEPA
+    #
+    # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_vla_jepa
+    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Policy  : VLA-JEPA (Qwen3-VL-2B + DiT-B flow-matching head + V-JEPA2
+    #           latent world model; world model used at training time only)
+    # Base    : lerobot/VLA-JEPA-Pretrain (DROID 1.0.1, 7-dim EE actions)
+    # Recipe  : per HF vla_jepa docs — fine-tune from Pretrain, ~30k steps.
+    #           The base was trained on 7-dim actions / 8-dim state, so the
+    #           action-head projection layers MUST be re-initialised for our
+    #           19-dim joint actions (reinit_modules below); the Qwen backbone
+    #           and DiT trunk keep their pretrained weights.
+    # =========================================================================
+
+    policy: vla_jepa
+
+    robot:
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true
+
+    dataset:
+      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
+      num_workers: 4
+      rename_map: []
+
+    checkpoint:
+      output_dir: "sobit_home_pickup_block_vla_jepa"
+      resume: false
+      overwrite: true
+      pretrained_path: "lerobot/VLA-JEPA-Pretrain"
+      save_freq: 5000
+      save_checkpoint: true
+
+    training:
+      # 30k steps per the HF LIBERO recipe (matches our pi05/smolvla runs).
+      steps: 30000
+      # 2B backbone + DiT-B + V-JEPA2 encoder in bf16; the world-model loss
+      # loads num_video_frames=8 frames per sample, so activations are
+      # video-heavy — start small and raise if headroom allows.
+      batch_size: 4
+      seed: 1000
+      # VLA-JEPA preset: AdamW lr=1e-4, weight_decay=1e-10, grad_clip=10.
+      use_policy_training_preset: true
+      log_freq: 100
+      eval_freq: 5000
+
+    num_gpus: 1
+
+    wandb:
+      enable: true
+      project: "sobits_vla_training"
+      entity: ""
+      run_name: "sobit_home-pickup_block-left-abs-vla_jepa"
+      notes: "VLA-JEPA fine-tune from lerobot/VLA-JEPA-Pretrain on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only; reinit action/state projections for 19-dim joints)"
+      tags:
+        - vla_jepa
+        - sobit_home
+        - pickup_block
+        - gazebo
+
+    hub:
+      push_to_hub: true
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_vla_jepa"
+      private: false
+
+    peft:
+      # No lerobot PEFT for VLA-JEPA; scope is controlled via freeze_qwen.
+      method_type: ""
+
+    policy_overrides:
+      # Paper/DROID recipe chunking: 7 steps (0.7 s at 10 fps). The deploy
+      # node re-infers per chunk, so short chunks mean frequent inference.
+      chunk_size: 7
+      n_action_steps: 7
+      # Full fine-tune including the Qwen backbone (world model active).
+      # Set true to train the action head only (world model auto-disabled).
+      freeze_qwen: false
+      # REQUIRED for cross-embodiment fine-tuning from VLA-JEPA-Pretrain:
+      # our 19-dim actions / 19-dim state mismatch the pretrained 7/8-dim
+      # projections — these layers are re-initialised from scratch, any
+      # other shape mismatch still raises.
+      reinit_modules:
+        - "model.action_model.action_encoder"
+        - "model.action_model.action_decoder"
+        - "model.action_model.state_encoder"
