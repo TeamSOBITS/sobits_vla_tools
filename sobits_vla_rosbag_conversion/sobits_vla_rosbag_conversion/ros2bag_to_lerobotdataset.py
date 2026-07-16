@@ -139,11 +139,13 @@ class RosbagConversionNode(Node):
         output_dir = (
             self.get_parameter('output_directory').get_parameter_value().string_value
         )
+        # The dataset root is always <base>/<dataset_name>, where <base> is
+        # output_directory when set and <package_src>/lerobotdataset/
+        # otherwise — so several datasets can share one output_directory
+        # without colliding.
         if output_dir:
-            self.output_directory = Path(output_dir)
+            self.output_directory = Path(output_dir) / self.dataset_name
         else:
-            # Default documented in the conversion configs:
-            # <package_src>/lerobotdataset/<dataset_name>
             self.output_directory = (
                 _default_output_root() / self.dataset_name
             )
