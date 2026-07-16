@@ -95,6 +95,33 @@ _REGISTRY: dict[str, PolicyEntry] = {
         supports_rtc=False,
         cast_bf16=True,
     ),
+    'vla_jepa': PolicyEntry(
+        policy_id='vla_jepa',
+        class_path='lerobot.policies.vla_jepa.modeling_vla_jepa.VLAJEPAPolicy',
+        config_module='lerobot.policies.vla_jepa.configuration_vla_jepa',
+        config_class='VLAJEPAConfig',
+        default_yaml='vla_jepa.yaml',
+        default_pretrained='lerobot/VLA-JEPA-Pretrain',
+        has_device_field=True,
+        # No init_rtc_processor in modeling_vla_jepa (lerobot 0.6.0).
+        supports_rtc=False,
+        # Model manages its own dtype via config torch_dtype ('bfloat16').
+        cast_bf16=False,
+    ),
+    'molmoact2': PolicyEntry(
+        policy_id='molmoact2',
+        class_path='lerobot.policies.molmoact2.modeling_molmoact2.MolmoAct2Policy',
+        config_module='lerobot.policies.molmoact2.configuration_molmoact2',
+        config_class='MolmoAct2Config',
+        default_yaml='molmoact2.yaml',
+        # Base weights load via the config's checkpoint_path field
+        # (allenai/MolmoAct2), not via checkpoint.pretrained_path.
+        default_pretrained='',
+        has_device_field=True,
+        supports_rtc=True,
+        # Model manages its own dtype via config model_dtype ('bfloat16').
+        cast_bf16=False,
+    ),
 }
 
 _CLASS_PATH_TO_ENTRY: dict[str, PolicyEntry] = {
