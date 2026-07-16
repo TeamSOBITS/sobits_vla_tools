@@ -59,6 +59,35 @@ runtime_deps.ensure({
 apply_conversion_patches()
 
 
+def _default_output_root() -> Path:
+    """
+    Resolve the default dataset output root: <package_src>/lerobotdataset/.
+
+    Works from the colcon install space (regular-copy installs) by walking up
+    to the workspace root and locating the package under src/, and from
+    source/symlink-install runs by finding the package root directly. Falls
+    back to the installed share directory if the source tree can't be found.
+    """
+    candidate = Path(os.path.realpath(__file__)).parent
+    for _ in range(8):
+        # Running from the source tree (or --symlink-install): the package
+        # root has both package.xml and the lerobotdataset/ folder.
+        if (candidate / 'package.xml').exists() and (candidate / 'lerobotdataset').is_dir():
+            return candidate / 'lerobotdataset'
+        # Running from the install space: walk up to the workspace root and
+        # look for the package under src/ (e.g. src/sobits_vla_tools/<pkg>).
+        src_root = candidate / 'src'
+        if src_root.is_dir():
+            for pattern in ('*/sobits_vla_rosbag_conversion', '*/*/sobits_vla_rosbag_conversion'):
+                for pkg_dir in src_root.glob(pattern):
+                    if (pkg_dir / 'lerobotdataset').is_dir():
+                        return pkg_dir / 'lerobotdataset'
+        candidate = candidate.parent
+
+    from ament_index_python.packages import get_package_share_directory
+    return Path(get_package_share_directory('sobits_vla_rosbag_conversion')) / 'lerobotdataset'
+
+
 class RosbagConversionNode(Node):
     def __init__(self):
         super().__init__('rosbag_conversion_node')
@@ -110,7 +139,17 @@ class RosbagConversionNode(Node):
         output_dir = (
             self.get_parameter('output_directory').get_parameter_value().string_value
         )
-        self.output_directory = Path(output_dir) if output_dir else None
+        if output_dir:
+            self.output_directory = Path(output_dir)
+        else:
+            # Default documented in the conversion configs:
+            # <package_src>/lerobotdataset/<dataset_name>
+            self.output_directory = (
+                _default_output_root() / self.dataset_name
+            )
+            self.get_logger().info(
+                f'output_directory not set — defaulting to {self.output_directory}'
+            )
         self.fps = self.get_parameter('fps').get_parameter_value().integer_value
         self.vcodec = self.get_parameter('vcodec').get_parameter_value().string_value
         self.sync_threshold = (
