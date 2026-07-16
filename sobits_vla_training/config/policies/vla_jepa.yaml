@@ -1,0 +1,63 @@
+# VLA-JEPA policy training defaults.
+# All fields map 1-to-1 to VLAJEPAConfig dataclass fields (lerobot 0.6.0).
+# Override any field in training_config.yaml under policy_overrides:
+#
+# Architecture: Qwen3-VL-2B backbone + DiT-B flow-matching action head +
+# V-JEPA2 latent world model (training-time loss only; unused at inference).
+# Pretrained base: lerobot/VLA-JEPA-Pretrain (DROID, 7-dim EE actions).
+#
+# CROSS-EMBODIMENT NOTE: the pretrained action/state encoders are sized for
+# DROID's 7-dim actions / 8-dim state. Fine-tuning on a robot with different
+# dims REQUIRES policy_overrides.reinit_modules listing the projection layers
+# allowed to re-initialise (see training_config_sobit_home_left_vla_jepa.yaml).
+# action_dim/state_dim themselves are auto-derived from the dataset features.
+
+policy_type: vla_jepa
+
+# Weights come from checkpoint.pretrained_path in the training config
+# (lerobot/VLA-JEPA-Pretrain), or train from scratch when empty.
+pretrained_path: ""
+
+# --- Action chunking (paper/DROID recipe: 7-step chunks) ---
+chunk_size: 7
+n_action_steps: 7
+n_obs_steps: 1
+
+# --- Backbones ---
+qwen_model_name: "Qwen/Qwen3-VL-2B-Instruct"
+jepa_encoder_name: "facebook/vjepa2-vitl-fpc64-256"
+
+# --- Fine-tuning scope ---
+# freeze_qwen: true trains only the action head (also auto-disables the
+# world-model loss since no gradient flows into the backbone).
+freeze_qwen: false
+enable_world_model: true
+
+# --- World model ---
+# num_video_frames must be >= 2 * jepa_tubelet_size.
+num_video_frames: 8
+jepa_tubelet_size: 2
+world_model_loss_weight: 0.1
+
+# --- Gripper post-processing ---
+# The upstream defaults binarize a single gripper dimension (DROID EE
+# convention). SOBIT HOME actions are 19 raw joint positions (7 of them the
+# left-hand joints) — no single binary gripper dim, so keep these off.
+binarize_gripper_action: false
+pre_snap_gripper_action: false
+clip_normalized_actions: true
+
+# --- Precision ---
+torch_dtype: "bfloat16"
+
+# --- Optimisation (policy preset, used when use_policy_training_preset: true) ---
+optimizer_lr: 1.0e-4
+optimizer_betas: [0.9, 0.95]
+optimizer_eps: 1.0e-8
+optimizer_weight_decay: 1.0e-10
+optimizer_grad_clip_norm: 10.0
+
+# --- LR schedule ---
+scheduler_warmup_steps: 1000
+scheduler_decay_steps: 30000
+scheduler_decay_lr: 2.5e-6
