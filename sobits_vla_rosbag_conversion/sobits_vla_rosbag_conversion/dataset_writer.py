@@ -203,6 +203,18 @@ class DatasetWriter:
             dataset_root = HF_LEROBOT_HOME / self.dataset_name
 
         if self.overwrite and dataset_root.exists():
+            # Refuse to delete a non-empty directory that doesn't look like a
+            # LeRobot dataset — a mispointed output_directory with
+            # overwrite=true must not wipe arbitrary data.
+            is_dataset = (dataset_root / 'meta' / 'info.json').exists()
+            is_empty = not any(dataset_root.iterdir())
+            if not is_dataset and not is_empty:
+                raise RuntimeError(
+                    f'overwrite=true but {dataset_root} is not a LeRobot '
+                    'dataset (no meta/info.json) and is not empty — refusing '
+                    'to delete it. Remove it manually or point '
+                    'output_directory elsewhere.'
+                )
             self.log_warn(
                 f'overwrite=true: deleting existing dataset at {dataset_root}'
             )
