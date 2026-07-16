@@ -181,6 +181,24 @@ def test_compat_patches_apply():
     assert lc._processor_registry_patched
     assert lc._pi0fast_peft_targets_patched
     assert lc._pi05_from_pretrained_patched
+    assert lc._vla_jepa_image_resize_patched
+
+    # The resize helper backing the VLA-JEPA patch must equalize
+    # heterogeneous camera resolutions for both frame and video tensors.
+    import torch
+    batch = {
+        'observation.images.a': torch.zeros(2, 3, 480, 640),
+        'observation.images.b': torch.zeros(2, 8, 3, 1200, 1920),
+        'action': torch.zeros(2, 7, 19),
+    }
+    resized = lc._resize_image_features(
+        batch, ['observation.images.a', 'observation.images.b'], (480, 640)
+    )
+    assert resized['observation.images.a'].shape == (2, 3, 480, 640)
+    assert resized['observation.images.b'].shape == (2, 8, 3, 480, 640)
+    assert resized['action'].shape == (2, 7, 19)
+    # Untouched tensors are passed through, not copied.
+    assert resized['observation.images.a'] is batch['observation.images.a']
 
     # Patch targets import and are (still) patched in place — hard fail if
     # the target class/attr is missing outright, since every patch below is
