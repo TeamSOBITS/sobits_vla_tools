@@ -8,8 +8,8 @@
     dataset_name: "MyDataset"
 
     # Local directory where the dataset is saved.
-    # If left empty (""), defaults to ~/.cache/huggingface/lerobot/<dataset_name>
-    # (or $HF_LEROBOT_HOME/<dataset_name> if that env var is set).
+    # The dataset is written to <output_directory>/<dataset_name>.
+    # Empty = <package_src>/lerobotdataset/<dataset_name>
     output_directory: ""
 
     # Target frame rate for the dataset. Frames from the primary camera that arrive
