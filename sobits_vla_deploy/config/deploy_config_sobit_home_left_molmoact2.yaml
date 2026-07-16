@@ -1,0 +1,68 @@
+/**:
+  ros__parameters:
+    model:
+      # MolmoAct2 LoRA-VLM fine-tune from allenai/MolmoAct2 (see
+      # training_config_sobit_home_left_molmoact2.yaml), saved/pushed by
+      # lerobot — loading a LEROBOT-SAVED checkpoint restores config,
+      # weights, processor and normalization stats. Absolute joint actions.
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_molmoact2_vlmlora"
+      policy_class: "lerobot.policies.molmoact2.modeling_molmoact2.MolmoAct2Policy"
+      device: "cuda"
+      use_amp: false
+      use_relative_actions: false
+      default_task_label: "Pick up the block"
+
+    runtime:
+      # Must match dataset fps (10) — actions are positions sampled at 10 Hz.
+      control_hz: 10.0
+      # MolmoAct2 recipe chunking: 10 steps = 1 s at 10 Hz.
+      actions_per_chunk: 10
+      # Short chunks + ~0.5-1 s inference: trigger re-inference at 70%
+      # (7 steps left) so the queue doesn't run dry.
+      chunk_size_threshold: 0.7
+      # Only used in the non-RTC fallback path.
+      aggregate_fn_name: newest
+      async_enabled: true
+      single_step_mode: false
+
+    rtc:
+      # MolmoAct2 has native RTC support in lerobot 0.6.0
+      # (init_rtc_processor + rtc_config). With 10-step chunks the frozen
+      # prefix must stay small: execution_horizon <= chunk_size/2.
+      enabled: true
+      # 4 steps cover ~0.4 s latency at 10 Hz; raise toward 5 if measured
+      # inference latency exceeds that (LatencyTracker adjusts the delay
+      # estimate dynamically either way).
+      execution_horizon: 4
+      max_guidance_weight: 10.0
+      prefix_attention_schedule: EXP
+      inference_delay: 2
+      debug: false
+
+    logging:
+      # Episode evaluation logging. The vla_experiment.launch.py overrides
+      # enabled/log_dir per model run; these are the defaults for plain deploy.
+      enabled: false
+      log_dir: "/tmp/vla_logs"
+      tilt_threshold_deg: 30.0
+      # Automatic episode termination thresholds.
+      episode_timeout_s: 60.0   # stop after 60 sim seconds
+      lift_success_m: 0.05      # block lifted > 5 cm -> success
+      fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
+
+    robot:
+      # Morphology (joint groups, command topics, joints, max_joint_delta,
+      # mobile_base, cameras) is loaded from the shared robot descriptor:
+      #   sobits_vla_common/robots/sobit_home.robot.yaml
+      # active_groups / active_cameras / active_mobile_base select the subset
+      # used for this task (left-arm pickup) without re-listing joints/topics.
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true
