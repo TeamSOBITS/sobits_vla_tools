@@ -14,10 +14,15 @@ ros_packages=(
     "sobits_interfaces"
 )
 
-# Clone all packages
+# Clone all packages (skip ones already present — with set -e a failing
+# clone would abort the whole install)
 for ((i = 0; i < ${#ros_packages[@]}; i++)) {
-    echo "Clonning: ${ros_packages[i]}"
-    git clone --recurse-submodules -b $ROS_DISTRO-devel https://github.com/TeamSOBITS/${ros_packages[i]}
+    if [ -d "${ros_packages[i]}" ]; then
+        echo "Skipping clone: ${ros_packages[i]} already exists."
+    else
+        echo "Clonning: ${ros_packages[i]}"
+        git clone --recurse-submodules -b $ROS_DISTRO-devel https://github.com/TeamSOBITS/${ros_packages[i]}
+    fi
 
     # Check if install.sh exists in each package
     if [ -f ${ros_packages[i]}/install.sh ]; then
