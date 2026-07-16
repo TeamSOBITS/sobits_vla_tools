@@ -83,7 +83,9 @@ class TrainNode(Node):
             d.description = desc
             return d
 
-        self.declare_parameter('policy', 'smolvla', _p('Policy type: smolvla|pi0|pi05|pi0_fast'))
+        self.declare_parameter(
+            'policy', 'smolvla',
+            _p('Policy type: smolvla|pi0|pi05|pi0_fast|act|groot|vla_jepa|molmoact2'))
 
         self.declare_parameter(
             'dataset.repo_id', '', _p('HF Hub repo_id or local path to LeRobotDataset'))
