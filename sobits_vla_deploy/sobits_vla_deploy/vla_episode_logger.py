@@ -76,6 +76,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import math
+import os
 from pathlib import Path
 import subprocess
 import threading
@@ -89,7 +90,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 def _sobits_vla_tools_rev() -> str:
-    """Return `git describe --always --dirty` for this checkout, or 'unknown'."""
+    """
+    Return the sobits_vla_tools revision for provenance, or 'unknown'.
+
+    Tries SOBITS_VLA_TOOLS_REV (for installed/CI environments), then
+    `git describe --always --dirty` from this file's directory — the latter
+    only works when running from the source space, since the colcon install
+    space is not a git checkout.
+    """
+    env_rev = os.environ.get('SOBITS_VLA_TOOLS_REV', '').strip()
+    if env_rev:
+        return env_rev
     try:
         result = subprocess.run(
             ['git', 'describe', '--always', '--dirty'],
