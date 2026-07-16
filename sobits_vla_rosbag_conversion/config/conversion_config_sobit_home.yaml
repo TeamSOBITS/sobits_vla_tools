@@ -8,7 +8,7 @@
     dataset_name: "MyDataset"
 
     # Local directory where the LeRobot dataset is written.
-    # Empty = <package_src>/lerobotdataset/
+    # Empty = <package_src>/lerobotdataset/<dataset_name>
     output_directory: ""
 
     # Target fps for the LeRobot dataset.
