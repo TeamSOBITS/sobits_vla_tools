@@ -23,6 +23,33 @@ _pi05_action_dim_padding_patched = False
 _processor_registry_patched = False
 _pi0fast_peft_targets_patched = False
 _pi05_from_pretrained_patched = False
+_vla_jepa_image_resize_patched = False
+
+
+def _resize_image_features(batch: dict, image_keys, target: tuple) -> dict:
+    """
+    Return a copy of ``batch`` with every image feature resized to ``target``.
+
+    Handles both [B, C, H, W] frames and [B, T, C, H, W] video windows.
+    Area interpolation matches what VLAJEPAPolicy.predict_action uses for
+    its own ``resize_images_to`` handling.
+    """
+    import torch.nn.functional as F
+
+    h, w = target
+    out = dict(batch)
+    for key in image_keys:
+        t = out.get(key)
+        if t is None or t.shape[-2:] == (h, w):
+            continue
+        if t.ndim == 5:
+            b, n = t.shape[:2]
+            t = F.interpolate(t.flatten(0, 1), size=(h, w), mode='area')
+            t = t.reshape(b, n, *t.shape[1:])
+        else:
+            t = F.interpolate(t, size=(h, w), mode='area')
+        out[key] = t
+    return out
 
 
 def _patch_bool_quantile_normalization() -> None:
@@ -379,14 +406,58 @@ def apply_conversion_patches() -> None:
     """
 
 
+def _patch_vla_jepa_image_resize() -> None:
+    """
+    Apply ``resize_images_to`` in VLAJEPAPolicy's training/inference input path.
+
+    Upstream inconsistency (lerobot 0.6.0): ``config.resize_images_to`` is
+    honored in ``predict_action`` but NOT in ``_prepare_model_inputs``, whose
+    world-model video assembly does ``torch.stack`` over the per-camera
+    tensors — multi-camera datasets with heterogeneous resolutions (SOBIT
+    HOME: head 480x640, hand 1200x1920) crash with "stack expects each
+    tensor to be equal size". Resize every image feature to
+    ``resize_images_to`` before the original method runs. Upstreaming
+    candidate.
+    """
+    global _vla_jepa_image_resize_patched
+    if _vla_jepa_image_resize_patched:
+        return
+    try:
+        from lerobot.policies.vla_jepa.modeling_vla_jepa import VLAJEPAPolicy
+
+        _orig_prepare = VLAJEPAPolicy._prepare_model_inputs
+
+        def _patched_prepare(self, batch, training):
+            target = getattr(self.config, 'resize_images_to', None)
+            if target is not None:
+                batch = _resize_image_features(
+                    batch, list(self.config.image_features.keys()), tuple(target)
+                )
+            return _orig_prepare(self, batch, training)
+
+        VLAJEPAPolicy._prepare_model_inputs = _patched_prepare
+        logger.info(
+            'Patched VLAJEPAPolicy._prepare_model_inputs to apply '
+            'resize_images_to (heterogeneous camera resolutions).'
+        )
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f'Could not patch VLAJEPAPolicy._prepare_model_inputs: {e}')
+    finally:
+        _vla_jepa_image_resize_patched = True
+
+
 def apply_training_patches() -> None:
     _patch_bool_quantile_normalization()
     _patch_pi05_action_dim_padding()
     _patch_processor_registry()
     _patch_pi0fast_peft_targets()
+    _patch_vla_jepa_image_resize()
 
 
 def apply_deploy_patches() -> None:
     _patch_pi05_action_dim_padding()
     _patch_processor_registry()
     _patch_pi05_from_pretrained()
+    _patch_vla_jepa_image_resize()
