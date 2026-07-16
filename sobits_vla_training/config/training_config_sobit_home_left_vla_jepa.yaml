@@ -45,10 +45,10 @@
     training:
       # 30k steps per the HF LIBERO recipe (matches our pi05/smolvla runs).
       steps: 30000
-      # 2B backbone + DiT-B + V-JEPA2 encoder in bf16; the world-model loss
-      # loads num_video_frames=8 frames per sample, so activations are
-      # video-heavy — start small and raise if headroom allows.
-      batch_size: 4
+      # With the Qwen backbone frozen only the ~200M action head trains, so
+      # optimizer state is small — batch is bounded by activations, not
+      # Adam moments. Raise further if nvidia-smi shows headroom.
+      batch_size: 16
       seed: 1000
       # VLA-JEPA preset: AdamW lr=1e-4, weight_decay=1e-10, grad_clip=10.
       use_policy_training_preset: true
@@ -61,7 +61,7 @@
       enable: true
       project: "sobits_vla_training"
       entity: ""
-      run_name: "sobit_home-pickup_block-left-abs-vla_jepa"
+      run_name: "sobit_home-pickup_block-left-abs-vla_jepa-headft"
       notes: "VLA-JEPA fine-tune from lerobot/VLA-JEPA-Pretrain on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only; reinit action/state projections for 19-dim joints)"
       tags:
         - vla_jepa
@@ -83,9 +83,13 @@
       # node re-infers per chunk, so short chunks mean frequent inference.
       chunk_size: 7
       n_action_steps: 7
-      # Full fine-tune including the Qwen backbone (world model active).
-      # Set true to train the action head only (world model auto-disabled).
-      freeze_qwen: false
+      # Action-head-only fine-tune (HF docs variant). Full FT of the 2.77B
+      # model needs ~33 GB for weights+grads+Adam states alone and OOMs a
+      # 32 GB GPU at any batch size; frozen backbone trains only the ~200M
+      # DiT head incl. our reinit'd 19-dim projections. Side effect: the
+      # world-model loss auto-disables (no grads reach the backbone).
+      # Set false only on >=48 GB or multi-GPU setups.
+      freeze_qwen: true
       # REQUIRED for cross-embodiment fine-tuning from VLA-JEPA-Pretrain:
       # our 19-dim actions / 19-dim state mismatch the pretrained 7/8-dim
       # projections — these layers are re-initialised from scratch, any
