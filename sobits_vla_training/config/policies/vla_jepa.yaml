@@ -39,6 +39,15 @@ num_video_frames: 8
 jepa_tubelet_size: 2
 world_model_loss_weight: 0.1
 
+# --- Vision ---
+# REQUIRED for multi-camera datasets with heterogeneous resolutions (SOBIT
+# HOME: head 480x640, hand 1200x1920): the world-model video assembly
+# torch.stack()s per-camera tensors and needs one common size. Applied via
+# the lerobot_compat VLAJEPAPolicy patch in training AND inference ([H, W];
+# the Qwen/V-JEPA2 processors re-resize to their own grids downstream, so
+# this mainly equalizes shapes and cuts dataloader memory).
+resize_images_to: [480, 640]
+
 # --- Gripper post-processing ---
 # The upstream defaults binarize a single gripper dimension (DROID EE
 # convention). SOBIT HOME actions are 19 raw joint positions (7 of them the
