@@ -33,7 +33,10 @@ _REGISTRY: dict[str, PolicyEntry] = {
         config_class='SmolVLAConfig',
         default_yaml='smolvla.yaml',
         default_pretrained='lerobot/smolvla_base',
-        has_device_field=False,
+        # lerobot 0.6.0's SmolVLAConfig accepts device= like every other
+        # policy config; False here left device=None and triggered a
+        # "Device 'None' is not available" warning at config build.
+        has_device_field=True,
         supports_rtc=True,
         cast_bf16=False,
     ),
