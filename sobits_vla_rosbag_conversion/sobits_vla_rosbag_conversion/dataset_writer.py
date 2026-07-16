@@ -28,6 +28,7 @@
 """Dataset writer module for creating, populating and finalising LeRobot datasets."""
 
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -72,7 +73,17 @@ def read_custom_info(dataset_root: Path) -> dict:
 
 
 def _sobits_vla_tools_rev() -> str:
-    """Return `git describe --always --dirty` for this checkout, or 'unknown'."""
+    """
+    Return the sobits_vla_tools revision for provenance, or 'unknown'.
+
+    Tries SOBITS_VLA_TOOLS_REV (for installed/CI environments), then
+    `git describe --always --dirty` from this file's directory — the latter
+    only works when running from the source space, since the colcon install
+    space is not a git checkout.
+    """
+    env_rev = os.environ.get('SOBITS_VLA_TOOLS_REV', '').strip()
+    if env_rev:
+        return env_rev
     try:
         result = subprocess.run(
             ['git', 'describe', '--always', '--dirty'],
@@ -102,6 +113,16 @@ def _make_create_kwargs(
     Factored out so the seam test suite exercises the exact same
     creation path as production conversion (see test_dataset_roundtrip).
     """
+    rgb_encoder = RGBEncoderConfig(vcodec=vcodec)
+    # 'auto' now probes hardware encoders (lerobot 0.6.0, #3455) and picks
+    # h264_nvenc on NVIDIA machines, but get_codec_options() never sets 'bf'
+    # for nvenc — nvenc's default B-frames then violate its own constraint
+    # against lerobot's default GOP g=2 ("Gop Length should be greater than
+    # number of B frames + 1") and avcodec_open2 fails. Resolve the codec
+    # here and pin bf=0 for nvenc (upstreaming candidate).
+    rgb_encoder.resolve_vcodec()
+    if rgb_encoder.vcodec.endswith('_nvenc') and 'bf' not in rgb_encoder.extra_options:
+        rgb_encoder.extra_options = {**rgb_encoder.extra_options, 'bf': 0}
     return {
         'repo_id': dataset_name,
         'fps': fps,
@@ -109,7 +130,7 @@ def _make_create_kwargs(
         'root': output_directory,
         'robot_type': robot_type,
         'video_backend': 'auto',
-        'rgb_encoder': RGBEncoderConfig(vcodec=vcodec),
+        'rgb_encoder': rgb_encoder,
         'streaming_encoding': True,
     }
 
