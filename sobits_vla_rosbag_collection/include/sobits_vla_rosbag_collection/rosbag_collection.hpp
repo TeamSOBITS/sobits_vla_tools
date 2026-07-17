@@ -1,3 +1,4 @@
+#include <std_msgs/msg/string.hpp>
 #include <rcl_interfaces/msg/parameter_type.hpp>
 #include <sobits_interfaces/srv/vla_update_task.hpp>
 #include <sobits_interfaces/action/vla_record_state.hpp>
@@ -129,6 +130,14 @@ private:
   void cameraInfoCallback(
     const sensor_msgs::msg::CameraInfo::SharedPtr msg,
     const std::string topic_name);
+  
+  void publishStatus(const std::string & status);
+  void publishCurrentStatus();
+  std::string formatRecordingElapsed() const;
+
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+  rclcpp::TimerBase::SharedPtr status_timer_;
+  std::string last_status_text_{"idle"};
 
   rclcpp_action::GoalResponse handleGoal(
     const rclcpp_action::GoalUUID & uuid,
