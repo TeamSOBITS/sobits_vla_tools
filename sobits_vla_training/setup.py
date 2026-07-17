@@ -21,6 +21,11 @@ setup(
     maintainer_email='kvalentincardenas@gmail.com',
     description='ROS 2 package for fine-tuning VLA policies on LeRobot datasets.',
     license='BSD-3-Clause',
+    extras_require={
+        'test': [
+            'pytest',
+        ],
+    },
     entry_points={
         'console_scripts': [
             'train_node = sobits_vla_training.train_node:main',

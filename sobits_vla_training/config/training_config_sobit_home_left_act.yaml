@@ -4,7 +4,7 @@
     # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — ACT
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_act
-    # Dataset : k-valentin/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
     # Policy  : ACT (~80M, ResNet18 + transformer, VAE) — trained FROM SCRATCH
     # Recipe  : per HF act docs — defaults work well; batch 8+ and ~100k steps.
     #           ACT ignores the language instruction (single-task only) and
@@ -13,8 +13,20 @@
 
     policy: act
 
+    robot:
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true
+
     dataset:
-      repo_id: "k-valentin/sobit_home-pickup_the_block-left-abs-gazebo"
+      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
       num_workers: 4
       rename_map: []
 
@@ -55,7 +67,7 @@
 
     hub:
       push_to_hub: true
-      repo_id: "k-valentin/sobit_home_pickup_block_left_abs_act"
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_act"
       private: false
 
     peft:

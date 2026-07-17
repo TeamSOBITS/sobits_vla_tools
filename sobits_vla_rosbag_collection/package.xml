@@ -26,7 +26,6 @@
   <depend>launch</depend>
   <depend>launch_ros</depend>
   <depend>rclcpp</depend>
-  <depend>rclcpp_action</depend>
   <depend>rclcpp_components</depend>
   <depend>yaml_cpp_vendor</depend>
   <depend>sensor_msgs</depend>
@@ -39,6 +38,7 @@
   <depend>rosbag2_storage</depend>
   <depend>rosbag2_storage_mcap</depend>
   <depend>rosbag2_transport</depend>
+  <depend>sobits_vla_common</depend>
 
 
   <test_depend>ament_lint_auto</test_depend>

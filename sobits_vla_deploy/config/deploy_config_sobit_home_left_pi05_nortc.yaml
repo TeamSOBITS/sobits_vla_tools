@@ -1,0 +1,52 @@
+/**:
+  ros__parameters:
+    # ABLATION A of deploy_config_sobit_home_left_pi05.yaml: RTC DISABLED.
+    # Goal: test whether RTC chunk-stitching is the source of the jerk /
+    # toppling seen with PI0.5. Everything else is identical to the baseline
+    # so the only variable is rtc.enabled. With RTC off, chunks are consumed
+    # from the buffer and overlaps merged by aggregate_fn_name ('newest' avoids
+    # 50/50 blending of chunks predicted ~1 s apart).
+    model:
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi05_vlmlora"
+      policy_class: "lerobot.policies.pi05.modeling_pi05.PI05Policy"
+      device: "cuda"
+      use_amp: false
+      use_relative_actions: false
+      default_task_label: "Pick up the block"
+
+    runtime:
+      control_hz: 10.0
+      actions_per_chunk: 50
+      chunk_size_threshold: 0.6
+      aggregate_fn_name: newest
+      async_enabled: true
+      single_step_mode: false
+
+    rtc:
+      # The only change vs baseline: RTC turned OFF.
+      enabled: false
+      execution_horizon: 16
+      max_guidance_weight: 10.0
+      prefix_attention_schedule: EXP
+      inference_delay: 5
+      debug: false
+
+    logging:
+      enabled: false
+      log_dir: "/tmp/vla_logs"
+      tilt_threshold_deg: 30.0
+      episode_timeout_s: 60.0
+      lift_success_m: 0.05
+      fall_z_drop_m: 0.15
+
+    robot:
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true

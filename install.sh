@@ -74,19 +74,45 @@ sudo apt install -y \
 rosdep update
 rosdep install --from-paths sobits_vla_tools --ignore-src -r -y
 
-PYTHON_PACKAGES=(
-    "huggingface_hub"
-    "lerobot[transformers-dep]${LEROBOT_VERSION_SPEC}"
-    "peft"
-    "numpy${NUMPY_VERSION_SPEC}"
-    "numexpr${NUMEXPR_VERSION_SPEC}"
-    "bottleneck${BOTTLENECK_VERSION_SPEC}"
-    "pyyaml"
-    "rosbags"
-    "scipy"
-)
+# requirements.txt is the pip source of truth. Version specs on the
+# lerobot/numpy/numexpr/bottleneck lines are templated at install time so
+# the LEROBOT_VERSION_SPEC (etc.) env overrides above keep working — e.g.
+# LEROBOT_VERSION_SPEC="~=0.6.0" ./install.sh installs 0.6.0 even though
+# requirements.txt still pins ~=0.5.1.
+REQUIREMENTS_FILE="${WORKSPACE_ROOT}/sobits_vla_tools/requirements.txt"
+if [ ! -f "${REQUIREMENTS_FILE}" ]; then
+    echo "requirements.txt not found at ${REQUIREMENTS_FILE}"
+    exit 1
+fi
+
+PYTHON_PACKAGES=()
+while IFS= read -r line; do
+    # Skip blank lines and comments.
+    [[ -z "${line}" || "${line}" == \#* ]] && continue
+    case "${line}" in
+        lerobot\[*\]*)
+            base="${line%%~=*}"
+            base="${base%%>=*}"
+            base="${base%%==*}"
+            PYTHON_PACKAGES+=("${base}${LEROBOT_VERSION_SPEC}")
+            ;;
+        numpy*)
+            PYTHON_PACKAGES+=("numpy${NUMPY_VERSION_SPEC}")
+            ;;
+        numexpr*)
+            PYTHON_PACKAGES+=("numexpr${NUMEXPR_VERSION_SPEC}")
+            ;;
+        bottleneck*)
+            PYTHON_PACKAGES+=("bottleneck${BOTTLENECK_VERSION_SPEC}")
+            ;;
+        *)
+            PYTHON_PACKAGES+=("${line}")
+            ;;
+    esac
+done < "${REQUIREMENTS_FILE}"
 
 echo "Using Python: ${PYTHON_BIN}"
+echo "Requirements file: ${REQUIREMENTS_FILE}"
 echo "LeRobot spec: ${LEROBOT_VERSION_SPEC}"
 echo "NumPy spec: ${NUMPY_VERSION_SPEC}"
 

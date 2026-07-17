@@ -44,21 +44,29 @@ def _str_to_bool(value: str) -> bool:
 
 
 def _create_deploy_node(context, *args, **kwargs):
-    config_file = LaunchConfiguration('config_file').perform(context)
-    robot_config = LaunchConfiguration('robot_config').perform(context).strip()
+    from ament_index_python.packages import get_package_share_directory
 
-    # robot_config is a filename stem inside the package's config/ dir.
+    config_file = LaunchConfiguration('config_file').perform(context)
+    deploy_config = LaunchConfiguration('deploy_config').perform(context).strip()
+
+    # deploy_config is a filename stem inside the package's config/ dir.
     # If provided it takes precedence over config_file.
-    if robot_config:
-        from ament_index_python.packages import get_package_share_directory
-        import os
+    if deploy_config:
         pkg_config_dir = os.path.join(
             get_package_share_directory('sobits_vla_deploy'), 'config'
         )
         # Accept with or without .yaml extension
-        if not robot_config.endswith('.yaml'):
-            robot_config += '.yaml'
-        config_file = os.path.join(pkg_config_dir, robot_config)
+        if not deploy_config.endswith('.yaml'):
+            deploy_config += '.yaml'
+        config_file = os.path.join(pkg_config_dir, deploy_config)
+
+    # Shared gamepad config (sobits_vla_common) supplies gamepad.command_service,
+    # the VlaCommand service name this node advertises for gamepad-driven play/stop.
+    gamepad_config = os.path.join(
+        get_package_share_directory('sobits_vla_common'),
+        'config',
+        'gamepad_config.yaml',
+    )
 
     robot_name = LaunchConfiguration('robot_name').perform(context)
     node_name = LaunchConfiguration('node_name').perform(context)
@@ -87,6 +95,7 @@ def _create_deploy_node(context, *args, **kwargs):
             namespace=robot_name,
             output='screen',
             parameters=[
+                gamepad_config,
                 config_file,
                 overrides,
             ],
@@ -99,24 +108,27 @@ def generate_launch_description() -> LaunchDescription:
         [
             FindPackageShare('sobits_vla_deploy'),
             'config',
-            'robot_config.yaml',
+            'deploy_config.yaml',
         ]
     )
 
     return LaunchDescription(
         [
             DeclareLaunchArgument(
-                'robot_config',
+                'deploy_config',
                 default_value='',
                 description=(
                     'Config filename (with or without .yaml) inside the package config/ dir. '
-                    'e.g. robot_config_sobit_home  — takes precedence over config_file.'
+                    'e.g. deploy_config_sobit_home  — takes precedence over config_file.'
                 ),
             ),
             DeclareLaunchArgument(
                 'config_file',
                 default_value=default_config,
-                description='Absolute path to deploy parameter YAML. Ignored when robot_config is set.',
+                description=(
+                    'Absolute path to deploy parameter YAML. '
+                    'Ignored when deploy_config is set.'
+                ),
             ),
             DeclareLaunchArgument(
                 'robot_name',

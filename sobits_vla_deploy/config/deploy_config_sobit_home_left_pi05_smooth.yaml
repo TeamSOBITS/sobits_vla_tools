@@ -1,0 +1,55 @@
+/**:
+  ros__parameters:
+    # ABLATION B of deploy_config_sobit_home_left_pi05.yaml: latency-matched,
+    # less-frequent-replan RTC. Goal: test whether the baseline RTC settings
+    # under-cover PI0.5's inference latency (3B backbone + 10 flow steps),
+    # producing misaligned chunk stitching and jerk. Same model/robot/logging
+    # as baseline; only the RTC timing + replan cadence change.
+    model:
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi05_vlmlora"
+      policy_class: "lerobot.policies.pi05.modeling_pi05.PI05Policy"
+      device: "cuda"
+      use_amp: false
+      use_relative_actions: false
+      default_task_label: "Pick up the block"
+
+    runtime:
+      control_hz: 10.0
+      actions_per_chunk: 50
+      # Replan less often (queue must drop to 30% before re-inference) so fewer
+      # chunk boundaries -> fewer stitching seams.
+      chunk_size_threshold: 0.7
+      aggregate_fn_name: newest
+      async_enabled: true
+      single_step_mode: false
+
+    rtc:
+      enabled: true
+      # Larger frozen prefix + delay floor to absorb the higher PI0.5 latency.
+      # execution_horizon <= actions_per_chunk/2 (=25) keeps a valid prefix.
+      execution_horizon: 25
+      max_guidance_weight: 10.0
+      prefix_attention_schedule: EXP
+      # Raise the delay floor; the LatencyTracker can still adapt upward.
+      inference_delay: 8
+      debug: false
+
+    logging:
+      enabled: false
+      log_dir: "/tmp/vla_logs"
+      tilt_threshold_deg: 30.0
+      episode_timeout_s: 60.0
+      lift_success_m: 0.05
+      fall_z_drop_m: 0.15
+
+    robot:
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true

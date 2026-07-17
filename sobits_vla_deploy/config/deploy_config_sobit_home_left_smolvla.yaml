@@ -1,0 +1,73 @@
+/**:
+  ros__parameters:
+    model:
+      # SmolVLA (450M) FULL fine-tune with UNFROZEN VLM + vision (the LeKiwi
+      # ablation recipe) on left-abs-gazebo. Full-model repo (no adapter);
+      # runs float32 at deploy (registry cast_bf16=false) — only ~1.8 GB VRAM.
+      # NOTE: smolvla has no action_feature_names — the node maps actions
+      # positionally, which is correct because the robot.groups order below
+      # matches the dataset feature order exactly. Do not reorder groups.
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_smolvla_vlmft"
+      policy_class: "lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy"
+      device: "cuda"
+      use_amp: false
+      use_relative_actions: false
+      default_task_label: "Pick up the block"
+      dataset_repo_id: ""
+
+    runtime:
+      # Must match dataset fps (10).
+      control_hz: 10.0
+      actions_per_chunk: 50
+      # SmolVLA inference is fast (~50-150 ms for 450M fp32) — the queue
+      # refills quickly; 0.5 gives frequent replans with large margin.
+      chunk_size_threshold: 0.5
+      aggregate_fn_name: newest
+      async_enabled: true
+      # single_step_mode: true is viable for smolvla if maximum reactivity is
+      # wanted (inference fits well inside the 100 ms tick on this GPU).
+      single_step_mode: false
+      # NOTE: joint rate limiting is configured per group via
+      # robot.groups.<group>.max_joint_delta (rad): commands are clamped to
+      # measured_position +- max_joint_delta each cycle.
+
+    rtc:
+      # SmolVLA fully supports RTC in lerobot 0.5.1 (rtc_config field,
+      # init_rtc_processor, predict_action_chunk with inference_delay /
+      # prev_chunk_left_over).
+      enabled: true
+      # Low latency -> small frozen prefix; ~2-3 steps cover 150-300 ms.
+      execution_horizon: 10
+      max_guidance_weight: 10.0
+      prefix_attention_schedule: EXP
+      # Floor; the LatencyTracker adapts upward from measurements.
+      inference_delay: 2
+      debug: false
+
+    logging:
+      # Episode evaluation logging. The vla_experiment.launch.py overrides
+      # enabled/log_dir per model run; these are the defaults for plain deploy.
+      enabled: false
+      log_dir: "/tmp/vla_logs"
+      tilt_threshold_deg: 30.0
+      # Automatic episode termination thresholds.
+      episode_timeout_s: 60.0   # stop after 60 sim seconds
+      lift_success_m: 0.05      # block lifted > 5 cm -> success
+      fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
+
+    robot:
+      # Morphology (joint groups, command topics, joints, max_joint_delta,
+      # mobile_base, cameras) is loaded from the shared robot descriptor:
+      #   sobits_vla_common/robots/sobit_home.robot.yaml
+      # active_groups / active_cameras / active_mobile_base select the subset
+      # used for this task (left-arm pickup) without re-listing joints/topics.
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true

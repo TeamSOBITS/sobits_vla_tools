@@ -40,20 +40,20 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .policy_registry import make_policy_config
+from sobits_vla_common.policy_registry import make_policy_config
 
 logger = logging.getLogger(__name__)
 
 
 def find_package_src_dir() -> Path:
     current_file = Path(__file__).resolve()
-    
+
     # Check if 'build' or 'install' or 'site-packages' or 'dist-packages' is in the path parts
     in_workspace_build_or_install = any(
-        part in current_file.parts 
+        part in current_file.parts
         for part in ('build', 'install', 'site-packages', 'dist-packages')
     )
-    
+
     if not in_workspace_build_or_install:
         # We might be running directly from the source tree
         direct_parent = current_file.parent.parent
@@ -69,14 +69,14 @@ def find_package_src_dir() -> Path:
                 if path.parent.name == 'sobits_vla_training':
                     return path.parent
             break
-            
+
     # Fallback to get_package_share_directory if available
     try:
         from ament_index_python.packages import get_package_share_directory
         return Path(get_package_share_directory('sobits_vla_training'))
     except Exception:
         pass
-        
+
     return current_file.parent.parent
 
 
@@ -106,13 +106,49 @@ def build_train_config(params: dict[str, Any]):
         (e.g. lora_alpha, lora_dropout) to pass to wrap_with_peft.
 
     """
-    from lerobot.configs.default import DatasetConfig, WandBConfig
-    from lerobot.configs.train import TrainPipelineConfig
+    from sobits_vla_common.lerobot_adapter import DatasetConfig, TrainPipelineConfig, WandBConfig
 
     policy_type: str = params.get('policy', 'smolvla')
     device: str = _infer_device(params.get('num_gpus', 1))
 
     policy_overrides: dict = params.get('policy_overrides', {}) or {}
+
+    desc_id = params.get('robot.descriptor_id', '')
+    if desc_id:
+        from sobits_vla_common.robot_descriptor import load_robot_descriptor
+        desc = load_robot_descriptor(desc_id)
+
+        active_groups = params.get('robot.active_groups', [])
+        if not active_groups:
+            active_groups = [g.name for g in desc.active_groups]
+        active_mobile_base = params.get('robot.active_mobile_base', True)
+
+        active_joint_features = []
+        for g in desc.groups:
+            if g.name in active_groups:
+                active_joint_features.extend([j.feature for j in g.joints])
+
+        n_base = 0
+        if desc.mobile_base and active_mobile_base:
+            n_base = len(desc.mobile_base.features)
+
+        total_dim = len(active_joint_features) + n_base
+
+        if 'max_state_dim' not in policy_overrides:
+            policy_overrides['max_state_dim'] = max(32, total_dim)
+        if 'max_action_dim' not in policy_overrides:
+            policy_overrides['max_action_dim'] = max(32, total_dim)
+
+        # Relative mode: keep base velocities + flagged groups absolute.
+        # Descriptor-derived; explicit override wins.
+        if (
+            policy_overrides.get('use_relative_actions', False)
+            and 'relative_exclude_joints' not in policy_overrides
+        ):
+            policy_overrides['relative_exclude_joints'] = desc.relative_exclude_features(
+                active_groups=active_groups,
+                active_mobile_base=active_mobile_base,
+            )
 
     raw_pretrained = params.get('checkpoint.pretrained_path', '')
     if raw_pretrained:
@@ -141,12 +177,21 @@ def build_train_config(params: dict[str, Any]):
 
     dataset_cfg = DatasetConfig(repo_id=ds_repo_id)
 
+    # Version provenance: fold the lerobot version into notes since
+    # WandBConfig has no dedicated metadata field. Keeps the W&B run
+    # traceable to the lerobot version it trained under.
+    from sobits_vla_common.lerobot_adapter import LEROBOT_VERSION
+    lerobot_version_str = '.'.join(str(p) for p in LEROBOT_VERSION)
+    user_notes = params.get('wandb.notes', '') or ''
+    provenance_note = f'lerobot={lerobot_version_str}'
+    notes = f'{user_notes} [{provenance_note}]' if user_notes else f'[{provenance_note}]'
+
     wandb_cfg = WandBConfig(
         enable=params.get('wandb.enable', True),
         project=params.get('wandb.project', 'sobits_vla_training'),
         entity=params.get('wandb.entity', None) or None,
         run_id=params.get('wandb.run_name', None) or None,
-        notes=params.get('wandb.notes', '') or '',
+        notes=notes,
     )
 
     output_dir_raw = params.get('checkpoint.output_dir', '')
@@ -205,7 +250,7 @@ def build_peft_config(params: dict[str, Any]):
         if peft.method_type is not set.
 
     """
-    from lerobot.configs.default import PeftConfig
+    from sobits_vla_common.lerobot_adapter import PeftConfig
 
     method_type: str = params.get('peft.method_type', '') or ''
     if not method_type:

@@ -1,6 +1,6 @@
 <a name="readme-top"></a>
 
-[JA](README.md) | [EN](README_en.md)
+[JA](README_ja.md) | [EN](README.md)
 
 [![Contributors][contributors-shield]][contributors-url]
 [![Forks][forks-shield]][forks-url]
@@ -10,28 +10,64 @@
 
 # SOBITS VLA Tools
 
-<!-- 概要 -->
-## 概要
+<!-- INTRODUCTION -->
+## Introduction
 
-SOBITS VLA Toolsは，SOBITS自作ロボットをVision-Language-Action（VLA）モデルで制御するための統合パイプラインを提供するモノレポです．データ収集から学習，リアルタイム推論まで，すべてROS 2上で動作します．
+SOBITS VLA Tools is a monorepo providing the full pipeline for controlling SOBITS-developed robots with Vision-Language-Action (VLA) models — from data collection through training to real-time deployment, all integrated via ROS 2.
 
-### パッケージ一覧
+### Package Overview
 
-| パッケージ | 説明 |
-| ---------- | ---- |
-| [sobits_vla_rosbag_collection](./sobits_vla_rosbag_collection/) | ゲームパッドによるマルチモーダルrosbag記録（リアルタイム品質監視付き） |
-| [sobits_vla_rosbag_conversion](./sobits_vla_rosbag_conversion/) | rosbagを[LeRobot](https://github.com/huggingface/lerobot)データセット形式に変換 |
-| [sobits_vla_training](./sobits_vla_training/) | モデル学習ユーティリティ（TBD） |
-| [sobits_vla_deploy](./sobits_vla_deploy/) | ロボット制御用リアルタイムVLA推論ノード（TBD） |
-| [sobits_vla_visualization](./sobits_vla_visualization/) | データセット・推論の可視化（TBD） |
+| Package | Description |
+| ------- | ----------- |
+| `sobits_vla_common` | Shared library: robot descriptor schema/loader, policy registry, lerobot 0.5.1 compat patches, `new_robot` scaffolder, and the `GamepadClient` node |
+| `sobits_vla_rosbag_collection` | Gamepad-triggered multi-modal rosbag recording with live quality monitoring |
+| `sobits_vla_rosbag_conversion` | Converts rosbags into [LeRobot](https://github.com/huggingface/lerobot) dataset format |
+| `sobits_vla_training` | Trains/fine-tunes VLA policies (pi05, pi0, pi0_fast, smolvla, ACT, GR00T) via lerobot |
+| `sobits_vla_deploy` | Real-time VLA inference node for robot control (async chunking + RTC) |
+| `sobits_vla_visualization` | Dataset and inference visualization (TBD) |
 
-<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+All four pipeline stages read robot morphology from a single **robot descriptor** (`sobits_vla_common/robots/<robot_id>.robot.yaml`) — the one source of truth for joint groups, command topics, sensors, and mobile base. See [Robot Descriptor](#robot-descriptor) below.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
-<!-- セットアップ -->
-## 環境構築
+<!-- ROBOT DESCRIPTOR -->
+## Robot Descriptor
 
-### 環境条件
+A robot descriptor (`sobits_vla_common/robots/<robot_id>.robot.yaml`) is the single source of truth for a robot's morphology. Collection (C++), conversion, training, and deploy all load it instead of duplicating joint/topic lists across per-stage configs.
+
+It defines:
+- `groups` — joint groups, each with `command_topic`, `command_action`, `max_joint_delta`, `active`, and ordered `joints` (`ros_name` → dataset `feature`)
+- `mobile_base` — optional `cmd_vel`/`odom` interface with `has_vel_*` / `max_vel_*` / `features`
+- `sensors.cameras` — name, compressed/raw/info topics, encoding, active flag
+- `ee_poses` — optional TF end-effector poses
+- `excluded_joints` — mimic/wheel/passive joints to drop from feature vectors
+
+Each pipeline config references it by `descriptor_id` (deploy/training) or `robot_descriptor_id` (collection/conversion), then picks a subset via `active_groups` / `active_cameras` / `active_mobile_base`. Adding a new robot + N policies = **1 descriptor + N model-only configs** instead of editing every stage.
+
+### Scaffold a new robot
+
+```bash
+ros2 run sobits_vla_common new_robot \
+  --robot_id sobit_mini --dof 7 --cameras head,hand_left --mobile_base diff \
+  --gen_collection_config
+```
+
+Generates a commented `<robot_id>.robot.yaml` (and optional collection config) with `# TODO:` markers on every topic/joint field. Validate after editing:
+
+```bash
+ros2 run sobits_vla_common new_robot --robot_id sobit_mini --validate_only
+```
+
+Validation fails (exit 1) while `# TODO` placeholders or unresolved `arm_joint<N>` names remain.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+
+<!-- GETTING STARTED -->
+## Getting Started
+
+### Prerequisites
 
 | System | Version |
 | ------ | ------- |
@@ -40,27 +76,27 @@ SOBITS VLA Toolsは，SOBITS自作ロボットをVision-Language-Action（VLA）
 | Python | ≥3.10                  |
 
 > [!NOTE]
-> `Ubuntu`や`ROS`のインストール方法に関しては，[SOBITS Manual](https://github.com/TeamSOBITS/sobits_manual#%E9%96%8B%E7%99%BA%E7%92%B0%E5%A2%83%E3%81%AB%E3%81%A4%E3%81%84%E3%81%A6)を参照してください．
+> If you need to install `Ubuntu` or `ROS`, please check our [SOBITS Manual](https://github.com/TeamSOBITS/sobits_manual#%E9%96%8B%E7%99%BA%E7%92%B0%E5%A2%83%E3%81%AB%E3%81%A4%E3%81%84%E3%81%A6).
 
-<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
-### インストール方法
+### Installation
 
-1. ROSの`src`フォルダに移動します．
+1. Go to the `src` folder of your ROS workspace.
     ```sh
     $ cd ~/colcon_ws/src/
     ```
-2. 本リポジトリをcloneします．
+2. Clone this repository.
     ```sh
     $ git clone https://github.com/TeamSOBITS/sobits_vla_tools
     ```
-3. 必要な依存パッケージをインストールします．
+3. Install the required dependencies.
     ```sh
     $ cd sobits_vla_tools/
     $ bash install.sh
     ```
-4. パッケージをコンパイルします．
+4. Compile the packages.
     ```sh
     $ cd ~/colcon_ws
     $ rosdep update
@@ -69,19 +105,19 @@ SOBITS VLA Toolsは，SOBITS自作ロボットをVision-Language-Action（VLA）
     $ source install/setup.bash
     ```
 
-<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
-<!-- パッケージ -->
-## パッケージ
+<!-- PACKAGES -->
+## Packages
 
-### 1. データ収集
+### 1. Data Collection
 
-**パッケージ:** [sobits_vla_rosbag_collection](./sobits_vla_rosbag_collection/)
+**Package:** [sobits_vla_rosbag_collection](./sobits_vla_rosbag_collection/)
 
-ゲームパッドコントローラーを使用して，カメラ・関節状態・オドメトリ・LiDAR・TFなどのマルチモーダルセンサーデータをrosbagエピソードとして記録します．
+Records multi-modal sensor data (cameras, joint states, odometry, LiDAR, TF) as rosbag episodes using a gamepad controller.
 
-#### 起動方法
+#### Launch
 
 ```bash
 ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
@@ -89,62 +125,63 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
   record_directory:=/path/to/rosbags
 ```
 
-| 引数 | デフォルト | 説明 |
-| ---- | ---------- | ---- |
-| `robot_name` | （必須） | ロボット名 — `record_settings_<robot_name>.yaml`設定ファイルと一致する必要あり |
-| `record_directory` | `<package_share>/rosbags` | rosbagエピソードの保存先の絶対パス |
+| Argument | Default | Description |
+| -------- | ------- | ----------- |
+| `robot_name` | (required) | Robot name — must match a `collection_config_<robot_name>.yaml` config file |
+| `record_directory` | `<package_share>/rosbags` | Absolute path where rosbag episodes are saved |
 
-#### ゲームパッド操作
+#### Gamepad Controls
 
-| ボタン | 動作 |
-| ------ | ---- |
-| Record/Pause | 記録開始 / 一時停止 / 再開 |
-| Save | 現在のエピソードを保存 |
-| Save（停止中） | 最後に保存したエピソードを削除（取り消し） |
+| Button | Action |
+| ------ | ------ |
+| Record/Pause | Start recording / Pause / Resume |
+| Save/Delete | Save current episode / Delete last saved episode (if not recording) |
 
-ボタンマッピングは[gamepad_settings.yaml](./sobits_vla_rosbag_collection/config/gamepad_settings.yaml)で設定します．
-現在のコントローラープロファイルは`quest`，`dualshock4`，`keyboard`に対応しています．
+Button mappings are configured in [gamepad_config.yaml](./sobits_vla_rosbag_collection/config/gamepad_config.yaml).
+Supported controller profiles currently include `quest`, `dualshock4`, and `keyboard`.
 
-#### 記録品質モニタリング
+#### Recording Quality Monitors
 
-収集ノードは記録中にデータ品質をリアルタイムで監視します：
+The collection node monitors data quality in real-time during recording:
 
-| モニター | 説明 |
-| -------- | ---- |
-| **FPS監視** | カメラの配信レートが設定閾値を下回った場合に警告 |
-| **ディスク容量** | 空き容量が閾値を下回った場合に警告；危険レベルで記録停止 |
-| **最小エピソード長** | 設定時間より短いエピソードを拒否 |
-| **タイムスタンプジャンプ** | ROSクロックとウォールタイムの不整合を検出 |
-| **Bag整合性** | 保存後にbagファイルが読み取り可能で空でないことを検証 |
-| **設定一致性** | 再開時に現在の設定が既存の`recorded_bags_meta.yaml`と一致するか検証 |
+| Monitor | Description |
+| ------- | ----------- |
+| **FPS monitoring** | Warns if camera publish rate drops below configured threshold |
+| **Disk space** | Warns when free disk space falls below threshold; stops recording at critical level |
+| **Minimum episode duration** | Rejects episodes shorter than configured duration |
+| **Timestamp jumps** | Detects ROS clock discontinuities vs. wall time |
+| **Bag integrity** | Verifies bag file is readable and non-empty after save |
+| **Config consistency** | On resume, validates current config matches existing `recorded_bags_meta.yaml` |
 
-#### 設定
+#### Configuration
 
-ロボット固有設定: `config/record_settings_<robot_name>.yaml`
+Robot-specific config: `config/collection_config_<robot_name>.yaml`
 
-本リポジトリで主に使う設定:
-- `config/record_settings_sobit_home.yaml`
-- `config/record_settings_sobit_light.yaml`
+For this repository, the main presets are:
+- `config/collection_config_sobit_home.yaml`
+- `config/collection_config_sobit_light.yaml`
 
-| グループ | 主要パラメータ |
-| -------- | -------------- |
-| ロボット形態 | `parts`, `joint_names`, `is_actionable`, `joint_states_topic` |
-| センサー | カメラトピック, LiDAR, IMU |
-| 記録 | `topics_to_record`, 圧縮形式/モード |
-| モニタリング | `expected_sensor_fps`, `min_disk_space_warning_gb`, `min_episode_duration` |
+Morphology (joint groups, command topics, sensors, mobile base) is **not** here — it is loaded from the [robot descriptor](#robot-descriptor) via `robot_descriptor_id`. The collection config only holds recording params:
 
-#### SOBIT HOME の起動
+| Group | Key Parameters |
+| ----- | -------------- |
+| Descriptor | `robot_descriptor_id` (selects `<id>.robot.yaml`) |
+| User info | `user_info.name` / `location` / `email` |
+| Recording | `additional_topics`, `conversion_format`, compression format/mode |
+| Monitoring | `expected_sensor_fps`, `min_disk_space_mb`, `min_episode_duration`, `max_episode_duration`, `timestamp_jump_threshold` |
 
-テレオペレーションノードや Quest アプリを起動する**前に**，ロボットを先に起動してください．
+#### Launching SOBIT HOME
 
-**実機：**
+Launch the robot **before** starting the teleop node or the Quest app.
+
+**Real robot:**
 
 ```bash
 ros2 launch sobit_home_bringup real_minimal.launch.py \
   enable_teleop:=true
 ```
 
-**シミュレーション（Gazebo）：**
+**Simulation (Gazebo):**
 
 ```bash
 ros2 launch sobit_home_bringup gz_minimal.launch.py \
@@ -152,9 +189,9 @@ ros2 launch sobit_home_bringup gz_minimal.launch.py \
   enable_teleop:=true
 ```
 
-`world_model` に指定できる値: `empty`, `wrs`, `small_house`, `rcjo2025_arena`, `rcjo2026_arena`, `simple_data_collection`．
+Available `world_model` values: `empty`, `wrs`, `small_house`, `rcjo2025_arena`, `rcjo2026_arena`, `simple_data_collection`.
 
-**テレオペレーションノード（Quest，実機）：**
+**Teleop node (Quest, real robot):**
 
 ```bash
 ros2 launch sobits_teleop sobits_teleop.launch.py \
@@ -164,7 +201,7 @@ ros2 launch sobits_teleop sobits_teleop.launch.py \
   ros_ip:=127.0.0.1
 ```
 
-**テレオペレーションノード（Quest，シミュレーション）：**
+**Teleop node (Quest, simulation):**
 
 ```bash
 ros2 launch sobits_teleop sobits_teleop.launch.py \
@@ -175,33 +212,33 @@ ros2 launch sobits_teleop sobits_teleop.launch.py \
   use_sim_time:=true
 ```
 
-#### SOBIT HOME + Meta Quest でのデータ収集
+#### Collecting Data with SOBIT HOME and Meta Quest
 
-SOBIT HOME のテレオペレーションは，[sobits_teleop](https://github.com/TeamSOBITS/sobits_teleop) を通じて Meta Quest ヘッドセットを使用します．Quest アプリは TCP ポート 10000 で PC と通信します．接続方法は2種類あります：
+SOBIT HOME teleoperation uses the Meta Quest headset via [sobits_teleop](https://github.com/TeamSOBITS/sobits_teleop). The Quest app communicates with the PC over TCP port 10000. Two connection methods are supported:
 
-| 方法 | 使いどき |
-| ---- | -------- |
-| **有線（ADB）** | USB ケーブルで Quest を PC に接続 — 最も安定，ネットワーク不要 |
-| **無線（Wi-Fi）** | ケーブルなしで操作；Quest と PC が同じネットワーク上にある必要あり |
+| Method | When to use |
+| ------ | ----------- |
+| **Wired (ADB)** | Quest connected to PC via USB cable — most reliable, no network required |
+| **Wireless (Wi-Fi)** | Cable-free operation; Quest and PC must be on the same network |
 
 ---
 
-##### オプション A — 有線接続（ADB）
+##### Option A — Wired connection (ADB)
 
-launch ファイルが自動的に `adb reverse tcp:10000 tcp:10000` を実行し，USB 経由でアプリの接続をトンネリングします．Quest 側の IP 設定は不要です．
+The launch file automatically runs `adb reverse tcp:10000 tcp:10000`, which tunnels the app's connection through USB. No IP configuration is needed on the Quest side.
 
-1. ヘッドセット**左側のボタン**を押して Quest を起動する．
-2. USB ケーブルで Quest を PC に接続し，以下のコマンドを PC で**一度だけ**実行する（sobits_teleop のインストーラー実行済みであること）：
+1. Turn on the Quest by pressing the button on the **left side** of the headset.
+2. Connect the Quest to the PC with a USB cable and run the following command **once** in the computer. (You should have runned the installer for sobits_teleop already).
    ```bash
    sudo adb kill-server
    sudo adb start-server
    ```
-3. ヘッドセット内に表示される **"このコンピュータからのUSBデバッグを常に許可する"** を選択して承認する．
-4. デバイスが認識されているか確認する：
+3. Accept the **"Allow USB debugging"** prompt inside the headset by clicking on the **"Allow always from this computer"**
+4. Verify the device is detected:
    ```bash
    adb devices
    ```
-5. PC でテレオペレーションノードを起動する：
+5. Launch the teleop node on the PC:
    ```bash
    ros2 launch sobits_teleop sobits_teleop.launch.py \
      robot_name:=sobit_home \
@@ -209,26 +246,26 @@ launch ファイルが自動的に `adb reverse tcp:10000 tcp:10000` を実行�
      use_moveit:=true \
      ros_ip:=127.0.0.1
    ```
-6. ヘッドセット内でライブラリウィンドウを開き（**右コントローラーのMetaボタン**），**Menu → Unknown Sources** に移動して **Quest Teleoperation** アプリを起動する．
-7. **左コントローラーの3本線ボタン**を押して設定パネルを開き，IP に `127.0.0.1` を入力して **OK** を押すと，ロボットのカメラ映像が表示される．
+6. Inside the headset, open the library window (**Meta button**, right controller), go to **Menu->Unknown Sources**, and launch the **Quest Teleoperation** app.
+7. Press the **three-lines button on the left controller** to open settings, set the IP to `127.0.0.1`, and press **OK** — the robot's camera feeds should appear.
 
 ---
 
-##### オプション B — 無線接続（Wi-Fi）
+##### Option B — Wireless connection (Wi-Fi)
 
-Quest と PC が同じ Wi-Fi ネットワークに接続されている必要があります．
+Quest and PC must be on the same Wi-Fi network.
 
-**Quest ヘッドセット側：**
+**On the Quest headset:**
 
-1. ヘッドセット**左側のボタン**を押して Quest を起動する．
-2. **右コントローラーのMetaボタン**を押してライブラリウィンドウを開く．
-3. **クイックコントロール**（2つのドットと3本線のアイコン）を開き，**Wi-Fi** を押す．
-4. ネットワークを選択してパスワードを入力し，**"Connected"** が表示されるまで待つ．
-5. 戻る矢印を押してから **Done** を押して設定を完了する．
+1. Turn on the Quest by pressing the button on the **left side** of the headset.
+2. Using the **right controller**, press the **Meta button** to open the library window.
+3. Open **Quick Controls** (the icon with two dots and three lines) and press **Wi-Fi**.
+4. Select your network, enter the password, and wait until **"Connected"** appears.
+5. Press the back arrow, then **Done** to finish.
 
-**PC 側：**
+**On the PC:**
 
-6. 共有ネットワーク上の PC の IP アドレスを指定してテレオペレーションノードを起動する：
+7. Launch the teleop node, passing your PC's IP on the shared network:
    ```bash
    ros2 launch sobits_teleop sobits_teleop.launch.py \
      robot_name:=sobit_home \
@@ -236,40 +273,40 @@ Quest と PC が同じ Wi-Fi ネットワークに接続されている必要が
      use_moveit:=true \
      ros_ip:=<PC_IP_ADDRESS>
    ```
-   `<PC_IP_ADDRESS>` を PC の IP アドレスに置き換えてください（例: `192.168.11.10`）．
+   Replace `<PC_IP_ADDRESS>` with your PC's IP (e.g. `192.168.11.10`).
 
-**Quest に戻る：**
+**Back on the Quest:**
 
-7. ライブラリウィンドウで **Menu → Unknown Sources** に移動し，**Quest Teleoperation** アプリを起動する．
-8. **左コントローラーの3本線ボタン**を押して設定パネルを開き，PC の IP アドレスを入力して **OK** を押すと，ロボットのカメラ映像が表示される．
+8. From the library window, go to **Menu->Unknown Sources** and launch the **Quest Teleoperation** app.
+9. Press the **three-lines button on the left controller**, enter your PC's IP address, and press **OK** — the robot's camera feeds should appear.
 
 ---
 
-##### テレオペレーション起動引数
+##### Teleop launch arguments
 
-| 引数 | デフォルト | 説明 |
-| ---- | ---------- | ---- |
-| `robot_name` | `sobit_home` | ロボット設定プロファイル |
-| `device` | `quest` | 入力デバイス — Quest コントローラー |
-| `ros_ip` | `127.0.0.1` | Quest アプリが接続する PC の IP（有線 ADB の場合は `127.0.0.1`，無線の場合は PC の IP を確認） |
-| `use_moveit` | `true` | `true` にすると MoveIt ベースのアーム制御が有効になる |
+| Argument | Default | Description |
+| -------- | ------- | ----------- |
+| `robot_name` | `sobit_home` | Robot configuration profile to load |
+| `device` | `quest` | Input device — Quest controller |
+| `ros_ip` | `127.0.0.1` | PC IP the Quest app connects to (`127.0.0.1` for wired ADB). Check your your PC's IP if wireless. |
+| `use_moveit` | `true` | Set `true` to enable MoveIt-based arm control via Quest |
 
 > [!TIP]
-> Quest アプリを接続する**前に**，PC 側でロボットの bringup を先に起動しておくと，カメラトピックがすでに配信された状態でアプリが接続できます．
+> Launch the robot bringup on the PC **before** opening the Quest app, so camera topics are already available when the app connects.
 
-##### タスク名の設定
+##### Set the task name
 
-収集ノードはエピソードをタスクごとのディレクトリに整理します．記録を開始する前に，`/vla_task_update` サービスでタスク名を設定してください：
+The collection node organises episodes into per-task directories. Before recording, set the task name via the `/vla_task_update` service:
 
 ```bash
 ros2 service call /rosbag_collection/vla_task_update sobits_interfaces/srv/VlaUpdateTask "{label: 'pick up the bottle'}"
 ```
 
-タスク名を変更すると，以降のエピソードは新しいディレクトリに保存されます．
+Changing the task name mid-session will save subsequent episodes into a new directory.
 
-##### rosbag 収集ノードの起動とエピソードの記録
+##### Launch the rosbag collection node and record episodes
 
-別ターミナルで rosbag 収集ノードを起動する：
+In a separate terminal, launch the rosbag collection node:
 
 ```bash
 ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
@@ -277,204 +314,228 @@ ros2 launch sobits_vla_rosbag_collection rosbag_collection.launch.py \
   record_directory:=/path/to/rosbags
 ```
 
-ノードが起動したら，Quest コントローラーで以下の操作を行います：
+Once the node is running, use the Quest controllers to manage episodes:
 
-| ボタン | 状態 | 動作 |
-| ------ | ---- | ---- |
-| **A ボタン**（右コントローラー） | 待機中 | 記録開始 |
-| **A ボタン**（右コントローラー） | 記録中 | 一時停止 / 再開 |
-| **B ボタン**（右コントローラー） | 記録中 | エピソードを保存して停止 |
-| **B ボタン**（右コントローラー） | 待機中 | 最後に保存したエピソードを削除 |
+| Button | State | Action |
+| ------ | ----- | ------ |
+| **A button** (right controller) | Idle | Start recording |
+| **A button** (right controller) | Recording | Pause / Resume |
+| **B button** (right controller) | Recording | Save episode and stop |
+| **B button** (right controller) | Idle | Delete the last saved episode |
 
-<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
-### 2. データセット変換
+### 2. Dataset Conversion
 
-**パッケージ:** [sobits_vla_rosbag_conversion](./sobits_vla_rosbag_conversion/)
+**Package:** [sobits_vla_rosbag_conversion](./sobits_vla_rosbag_conversion/)
 
-生のrosbag記録を時刻同期されたマルチモーダルフレームで[LeRobot](https://github.com/huggingface/lerobot)データセット形式に変換します．
+Converts raw rosbag recordings into [LeRobot](https://github.com/huggingface/lerobot) dataset format with time-synchronized multi-modal frames.
 
-#### 起動方法
+#### Launch
 
 ```bash
 ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py \
-  config_file:=conversion_settings.yaml \
+  config_file:=conversion_config.yaml \
   rosbag_directory:=/path/to/rosbags \
   dataset_name:=MyDataset
 ```
 
-| 引数 | デフォルト | 説明 |
-| ---- | ---------- | ---- |
-| `config_file` | `conversion_settings.yaml` | 変換設定ファイル（ロボットに応じて切り替え） |
-| `rosbag_directory` | （収集パッケージから） | 記録済みrosbagエピソードのパス |
-| `recorded_bags_meta_file` | `<rosbag_directory>/recorded_bags_meta.yaml` | 収集時のメタデータファイル |
-| `dataset_name` | （設定から） | 出力データセット名 |
+| Argument | Default | Description |
+| -------- | ------- | ----------- |
+| `config_file` | `conversion_config.yaml` | Conversion config file (switch per robot profile) |
+| `rosbag_directory` | (from collection package) | Path to recorded rosbag episodes |
+| `recorded_bags_meta_file` | `<rosbag_directory>/recorded_bags_meta.yaml` | Metadata file from collection |
+| `dataset_name` | (from config) | Output dataset name |
 
-#### 主な機能
+#### Key Features
 
-- **フレーム同期**: プライマリカメラトリガーと設定可能な同期閾値でカメラ・関節状態・コマンドデータを整列
-- **ダウンサンプリング**: 設定可能なターゲットFPS — 要求レートを満たせないbagはスキップ
-- **デルタアクション**: フレームごとに`action.delta`（指令値 - 測定値）を計算
-- **エンドエフェクター姿勢**: TFツリーによるオプションの6-DOF姿勢抽出
-- **静止フレームフィルタリング**: 関節が動いていないフレームをオプションでスキップ
-- **変換統計**: エピソードごとの品質指標，スキップされたbagとその理由のYAMLレポートを生成
+- **Frame synchronization**: Aligns camera, joint state, and command data using a primary camera trigger with configurable sync threshold
+- **Downsampling**: Configurable target FPS — bags that cannot deliver the requested rate are skipped
+- **Delta actions**: Computes `action.delta` (commanded - measured position) per frame
+- **End-effector pose**: Optional 6-DOF pose extraction via TF tree
+- **Static frame filtering**: Optionally skips frames where joints are not moving
+- **Conversion stats**: Generates a YAML report with per-episode quality metrics, skipped bags, and reasons
 
-#### 設定
+#### Configuration
 
-設定ファイル: [conversion_settings.yaml](./sobits_vla_rosbag_conversion/config/conversion_settings.yaml)
+Config file: [conversion_config.yaml](./sobits_vla_rosbag_conversion/config/conversion_config.yaml)
 
-ロボット別プリセット例: [conversion_settings_sobit_home.yaml](./sobits_vla_rosbag_conversion/config/conversion_settings_sobit_home.yaml)
+Robot-specific preset example: [conversion_config_sobit_home.yaml](./sobits_vla_rosbag_conversion/config/conversion_config_sobit_home.yaml)
 
-| パラメータ | デフォルト | 説明 |
-| ---------- | ---------- | ---- |
-| `fps` | `10` | ターゲットデータセットフレームレート |
-| `sync_threshold` | `0.1` | 同期センサー間の最大時間差（秒） |
-| `downsample_tolerance` | `0.015` | スケジューリングジッターによるフレームの早期到達を許容する時間差（秒） |
-| `primary_camera` | `head_camera` | 同期トリガーとして使用するカメラ |
-| `cameras` | `head_camera, hand_left_camera, hand_right_camera` | データセットに含めるカメラ |
-| `ee_pose.enabled` | `false` | エンドエフェクター姿勢抽出を有効化 |
-| `skip_static_threshold` | `0.0` | 静止フレームフィルタリングの関節移動閾値（0 = 無効） |
-| `push_to_hub` | `false` | 結果のデータセットをHuggingFace Hubにプッシュ |
+Set `robot_descriptor_id` to drive `excluded_joints` and camera selection from the [robot descriptor](#robot-descriptor); otherwise the legacy inline `excluded_joints` / `cameras` keys are used.
 
-<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+| Parameter | Default | Description |
+| --------- | ------- | ----------- |
+| `robot_descriptor_id` | `""` | Selects `<id>.robot.yaml` for joint/camera selection (empty = use inline keys) |
+| `fps` | `10` | Target dataset frame rate |
+| `sync_threshold` | `0.1` | Max temporal gap (seconds) between synced sensors |
+| `downsample_tolerance` | `0.015` | Tolerance margin (seconds) to accept frames arriving early due to scheduling jitter |
+| `primary_camera` | `head_camera` | Camera used as sync trigger |
+| `cameras` | `head_camera, hand_left_camera, hand_right_camera` | Cameras included in the dataset |
+| `ee_pose.enabled` | `false` | Enable end-effector pose extraction |
+| `skip_static_threshold` | `0.0` | Joint movement threshold for static frame filtering (0 = disabled) |
+| `push_to_hub` | `false` | Push resulting dataset to HuggingFace Hub |
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
-### 3. 学習
+### 3. Training
 
-**パッケージ:** [sobits_vla_training](./sobits_vla_training/)
+**Package:** [sobits_vla_training](./sobits_vla_training/)
+
+Trains/fine-tunes a VLA policy on a LeRobot dataset via lerobot 0.5.1. Supported policies: `pi05`, `pi0`, `pi0_fast`, `smolvla`, `act`, `groot`. PEFT/LoRA, Hub push, and W&B logging are configured per YAML.
+
+#### Launch
+
+```bash
+ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi05
+```
+
+`robot:=<name>` selects `training_config_<name>.yaml` from the package `config/`.
+
+#### Config layout
+
+Each `training_config_*.yaml` carries:
+- `policy` — policy type (one of the supported six)
+- `robot` — `descriptor_id` + `active_groups` / `active_cameras` / `active_mobile_base`; the trainer derives `max_state_dim` / `max_action_dim` from the descriptor's active joints + mobile-base features (so they need not be hand-set)
+- `dataset` / `training` / `checkpoint` / `wandb` / `hub` — standard lerobot knobs
+- `peft` — LoRA method/targets (empty `method_type` = full fine-tune)
+- `policy_overrides` — any field of the policy's lerobot config (introspected; unknown keys warn)
 
 > [!NOTE]
-> TBD — 学習ユーティリティは開発中です．
+> GR00T (`groot`) keeps explicit `max_state_dim: 64` / `max_action_dim: 32` and uses its own `tune_*` freezing flags instead of lerobot PEFT. Requires `flash-attn`.
 
-<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
-### 4. 推論・デプロイ
+### 4. Deployment
 
-**パッケージ:** [sobits_vla_deploy](./sobits_vla_deploy/)
+**Package:** [sobits_vla_deploy](./sobits_vla_deploy/)
 
-ロボット上でリアルタイムVLA推論を実行します．ポリシーが対応している場合，非同期チャンク実行（Async）とRTCによるチャンク接続の滑らかさ向上を利用できます．
+Runs real-time VLA inference on the robot with async chunk execution and RTC-enabled chunk smoothing when supported by the policy.
 
-#### 実行方法
+#### Run
 
 ```bash
 ros2 run sobits_vla_deploy sobits_vla_deploy.py --ros-args \
-  --params-file $(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/robot_config.yaml
+  --params-file $(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/deploy_config.yaml
 ```
 
-ロボット別設定を使う場合は，`robot_config_<robot_name>.yaml`を指定してください（例: `robot_config_sobit_home.yaml`）．
+To use a robot-specific setup, pass a `deploy_config_<robot_name>.yaml` file (for example, `deploy_config_sobit_home.yaml`).
 
-#### launchによる起動
+#### Launch
 
 ```bash
 ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py
 ```
 
-ロボット別設定ファイルを指定する場合:
+With a robot-specific config:
 
 ```bash
 ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py \
-  config_file:=$(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/robot_config_sobit_home.yaml
+  config_file:=$(ros2 pkg prefix sobits_vla_deploy)/share/sobits_vla_deploy/config/deploy_config_sobit_home.yaml
 ```
 
-#### 設定ファイル構成
+#### Config layout
 
-- 汎用テンプレート: [robot_config.yaml](./sobits_vla_deploy/config/robot_config.yaml)
-- ロボット別プリセット例: [robot_config_sobit_home.yaml](./sobits_vla_deploy/config/robot_config_sobit_home.yaml)
+- Generic template (legacy inline format): [deploy_config.yaml](./sobits_vla_deploy/config/deploy_config.yaml)
+- Robot-specific preset: [deploy_config_sobit_home_left.yaml](./sobits_vla_deploy/config/deploy_config_sobit_home_left.yaml)
 
-`robot`直下（`robot.name`でロボット名を指定）で以下を設定できます:
-- `joint_states_topic` と `odom_topic`
-- 複数の関節軌道コントローラグループ
-- モバイルベース指令トピックと特徴量
-- カメラトピックと画像エンコーディング
+The deploy node reads morphology from the **robot descriptor** and selects a subset per task:
 
-#### 複数コントローラー対応（gamepad）
+```yaml
+robot:
+  descriptor_id: sobit_home              # loads sobits_vla_common/robots/sobit_home.robot.yaml
+  active_groups: [head, body, arm_left, hand_left]
+  active_cameras: [head_camera, hand_left_camera]
+  active_mobile_base: true
+```
 
-デプロイ側gamepad設定は，コントローラーごとのボタンマッピングに対応しています．
+Command topics, joints, `max_joint_delta`, mobile-base, and camera topics all come from the descriptor — no inline joint/topic lists. (If `descriptor_id` is empty, the node falls back to the legacy inline `robot.*` schema shown in `deploy_config.yaml`.) The `model` / `runtime` / `rtc` sections stay in the deploy config.
+
+#### Gamepad play/stop
+
+Play/stop is driven by the shared `GamepadClient` node (`sobits_vla_common`), which calls the deploy node's `VlaCommand` **service** (no direct `/joy` subscription). Button mappings and the service name live in `sobits_vla_common/config/gamepad_config.yaml`:
 
 ```yaml
 gamepad:
-  topic: /joy
-  name: quest
-  controllers: [quest, dualshock4]
+  command_service: "/vla/command"        # service the deploy node advertises
+  controller: quest
   quest:
-    button_mapping:
-      play: 4
-      stop: 5
+    button_mapping: { play: 4, stop: 4 }
   dualshock4:
-    button_mapping:
-      play: 7
-      stop: 6
+    button_mapping: { play: 7, stop: 7 }
 ```
 
-この設定により，複数コントローラーから同一ノードのplay/stop制御が可能です．
+`/vla/play` (Bool) and `/vla/task` (String) topics remain available for programmatic control.
 
-<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
-### 5. 可視化
+### 5. Visualization
 
-**パッケージ:** [sobits_vla_visualization](./sobits_vla_visualization/)
+**Package:** [sobits_vla_visualization](./sobits_vla_visualization/)
 
 > [!NOTE]
-> TBD — 可視化ツールは開発中です．
+> TBD — Visualization tools are under development.
 
-<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
-<!-- ワークフロー -->
-## ワークフロー
+<!-- WORKFLOW -->
+## Workflow
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  1. 収集         │────▶│  2. 変換         │────▶│  3. 学習         │────▶│  4. デプロイ     │
+│  1. Collection   │────▶│  2. Conversion   │────▶│  3. Training     │────▶│  4. Deployment   │
 │  (rosbag_        │     │  (rosbag_        │     │  (training)      │     │  (deploy)        │
 │   collection)    │     │   conversion)    │     │                  │     │                  │
 │                  │     │                  │     │                  │     │                  │
-│  ゲームパッドで   │     │  Rosbags →       │     │  VLAモデルの     │     │  ロボット上で    │
-│  エピソード      │     │  LeRobotデータ   │     │  ファインチューン │     │  リアルタイム    │
-│  記録            │     │  セットに変換    │     │                  │     │  推論            │
+│  Gamepad-driven  │     │  Rosbags →      │     │  Fine-tune VLA   │     │  Real-time       │
+│  episode         │     │  LeRobot dataset │     │  model           │     │  inference on    │
+│  recording       │     │  with sync &     │     │                  │     │  robot           │
+│                  │     │  quality stats   │     │                  │     │                  │
 └─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
-1. ゲームパッドでロボットを遠隔操作してデモデータを**収集**
-2. 記録したrosbagをLeRobot互換データセットに**変換**
-3. 収集したデータセットでVLAモデルを**学習**
-4. 学習済みモデルを自律ロボット制御に**デプロイ**
+1. **Collect** demonstration data by teleoperating the robot with a gamepad
+2. **Convert** recorded rosbags into a LeRobot-compatible dataset
+3. **Train** a VLA model on the collected dataset
+4. **Deploy** the trained model for autonomous robot control
 
-<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
 <!-- TODO -->
 ## TODO
 
-### `relative_exclude_joints` の完全サポート
+### Full support for `relative_exclude_joints`
 
-現在，`sobits_vla_rosbag_conversion` および `sobits_vla_deploy` パッケージでは `relative_exclude_joints` パラメータを明示的に扱っていません．
+The `sobits_vla_rosbag_conversion` and `sobits_vla_deploy` packages do not yet explicitly handle the `relative_exclude_joints` parameter.
 
-**現状と理由:**
+**Current state and reasoning:**
 
-- **変換パッケージ (`sobits_vla_rosbag_conversion`):** 相対アクション変換（デルタ変換）はジョイント位置のみに適用され，ベース速度（`base_x`, `base_y`, `base_theta`）はコード構造上，変換後に追加されるため自動的に除外されます．現在のSOBIT HOMEの構成では，これで十分です．
-- **デプロイパッケージ (`sobits_vla_deploy`):** 後処理器（`absolute_actions_processor`）はモデルリポジトリから読み込まれた `policy_postprocessor.json` に保存されたマスクを使用するため，学習時の除外設定が正しく反映されます．手動デルタ補正のフォールバックパスはベースキーのみを除外するハードコードになっており，`relative_exclude_joints` を参照していません．
+- **Conversion package (`sobits_vla_rosbag_conversion`):** The relative action conversion (delta subtraction) is applied only to joint positions. Mobile base velocities (`base_x`, `base_y`, `base_theta`) are appended to the action vector after the delta step, so they are excluded implicitly by code structure. This is sufficient for the current SOBIT HOME configuration.
+- **Deploy package (`sobits_vla_deploy`):** The postprocessor (`absolute_actions_processor`) uses the mask saved in `policy_postprocessor.json` loaded from the model repository, which correctly reflects the exclusions from training time. The manual delta fallback path hardcodes exclusion of base keys only and does not read `relative_exclude_joints` from the policy config.
 
-**将来の対応:**
+**Future work:**
 
-異なるロボット形態（モーフォロジー）では，除外すべきジョイントが異なる場合があります（例: 速度制御のホイール，バイナリ制御のグリッパー，受動ジョイントなど）．以下の対応を将来的に実装する必要があります：
+Different robot morphologies may require different exclusion sets — for example, velocity-controlled wheels, binary gripper joints, or passive joints that should never be delta-converted. The following should be implemented when supporting new morphologies:
 
-- `sobits_vla_rosbag_conversion`: `relative_exclude_joints` パラメータをYAML設定に追加し，デルタ変換のスキップ対象を明示的に指定できるようにする．
-- `sobits_vla_deploy`: 手動デルタ補正のフォールバックパスで，ポリシー設定の `relative_exclude_joints` を読み取り，後処理器なしでデプロイする場合にも正しく除外できるようにする．
+- `sobits_vla_rosbag_conversion`: Add a `relative_exclude_joints` parameter to the YAML config so that joints to skip during delta conversion can be specified explicitly rather than relying on code structure.
+- `sobits_vla_deploy`: Update the manual delta fallback path to read `relative_exclude_joints` from the loaded policy config, so that deployment without a postprocessor file still applies the correct exclusions.
 
-<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
-<!-- 参考文献 -->
-## 参考文献
+<!-- ACKNOWLEDGMENTS -->
+## Acknowledgments
 
-- [LeRobot](https://github.com/huggingface/lerobot) — データセット形式と学習フレームワーク
-- [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/) — ロボットミドルウェア
+- [LeRobot](https://github.com/huggingface/lerobot) — Dataset format and training framework
+- [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/) — Robot middleware
 
-<p align="right">(<a href="#readme-top">上に戻る</a>)</p>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
 <!-- MARKDOWN LINKS & IMAGES -->

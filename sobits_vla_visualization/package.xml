@@ -6,7 +6,8 @@
   <name>sobits_vla_visualization</name>
   <version>0.1.0</version>
   <description>
-    ROS packages for SOBITS VLA Visualization.
+    Research-grade analysis and plotting for SOBITS VLA evaluation episode logs
+    (SmolVLA vs Pi05 comparison).
   </description>
 
   <maintainer email="kvalentincardenas@gmail.com">VALENTIN Keith</maintainer>
@@ -20,14 +21,18 @@
   <author email="team.sobits@gmail.com">Team SOBITS</author>
   <author email="kvalentincardenas@gmail.com">VALENTIN Keith</author>
 
-  <buildtool_depend>ament_cmake</buildtool_depend>
-  
-  <!-- <depend>TODO</depend> -->
+  <buildtool_depend>ament_python</buildtool_depend>
 
-  <test_depend>ament_lint_auto</test_depend>
-  <test_depend>ament_lint_common</test_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-pandas</exec_depend>
+  <exec_depend>python3-matplotlib</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
 
   <export>
-    <build_type>ament_cmake</build_type>
+    <build_type>ament_python</build_type>
   </export>
 </package>

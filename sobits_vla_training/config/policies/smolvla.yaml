@@ -39,7 +39,7 @@ scheduler_decay_steps: 30000
 scheduler_decay_lr: 2.5e-6
 
 # --- Mixed precision ---
-use_amp: true
+use_amp: false
 
 # --- Compilation (disable for fine-tuning; enable for long production runs) ---
 compile_model: false

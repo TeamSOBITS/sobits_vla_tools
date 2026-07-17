@@ -19,6 +19,7 @@
   <author email="kvalentincardenas@gmail.com">VALENTIN Keith</author>
 
   <buildtool_depend>ament_python</buildtool_depend>
+  <depend>sobits_vla_common</depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

@@ -1,0 +1,56 @@
+/**:
+  ros__parameters:
+    model:
+      # ACT (~80M, trained FROM SCRATCH on the left-abs dataset) — full-model
+      # repo, no LoRA adapter. ACT ignores the language instruction (the task
+      # label is kept for logging only) and runs in float32 (the deploy node
+      # skips the bfloat16 cast for ACT automatically).
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_act"
+      policy_class: "lerobot.policies.act.modeling_act.ACTPolicy"
+      device: "cuda"
+      use_amp: false
+      use_relative_actions: false
+      default_task_label: "Pick up the block"
+      # Optional for ACT (stats ship inside the pushed processors).
+      dataset_repo_id: ""
+
+    runtime:
+      # Must match dataset fps (10).
+      control_hz: 10.0
+      actions_per_chunk: 50
+      # ACT inference is ~10-20 ms — the queue refills almost instantly, so a
+      # high threshold gives near-continuous replanning without starvation.
+      # single_step_mode: true is also viable for maximum reactivity.
+      chunk_size_threshold: 0.5
+      aggregate_fn_name: newest
+      async_enabled: true
+      single_step_mode: false
+      # NOTE: joint rate limiting is configured per group via
+      # robot.groups.<group>.max_joint_delta (rad): commands are clamped to
+      # measured_position +- max_joint_delta each cycle.
+
+    rtc:
+      # ACT has no rtc_config — the node auto-disables RTC for this policy.
+      enabled: false
+      execution_horizon: 16
+      max_guidance_weight: 10.0
+      prefix_attention_schedule: EXP
+      inference_delay: 5
+      debug: false
+
+    robot:
+      # Morphology (joint groups, command topics, joints, max_joint_delta,
+      # mobile_base, cameras) is loaded from the shared robot descriptor:
+      #   sobits_vla_common/robots/sobit_home.robot.yaml
+      # active_groups / active_cameras / active_mobile_base select the subset
+      # used for this task (left-arm pickup) without re-listing joints/topics.
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true
