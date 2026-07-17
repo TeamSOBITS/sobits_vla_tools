@@ -1,0 +1,108 @@
+/**:
+  ros__parameters:
+    # =========================================================================
+    # sobits_vla_training — SOBIT HOME "pickup_the_block" — VLA-JEPA VLM-LoRA
+    #
+    # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_vla_jepa_lora
+    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Policy  : VLA-JEPA — LoRA on the Qwen3-VL backbone + FULL training of
+    #           the DiT action head and the V-JEPA2 world-model predictor.
+    # Base    : lerobot/VLA-JEPA-Pretrain
+    # Recipe  : second iteration after the head-only run
+    #           (team-sobits/..._vla_jepa) stalled at ~0.73 m with zero base
+    #           motion — classic median-action regression with a frozen
+    #           backbone. LoRA lets gradients reach the VLM (adapts it to the
+    #           robot's visual domain, same lesson as smolvla's unfrozen
+    #           vision encoder) while keeping optimizer state small enough
+    #           for a 32 GB GPU; freeze_qwen stays false so the world-model
+    #           loss remains ACTIVE.
+    # NOTE    : final push is a PEFT ADAPTER repo (lerobot sets use_peft).
+    #           Deploy-side adapter loading for vla_jepa is not wired yet —
+    #           merge the adapter before eval or extend policy_loader first.
+    # =========================================================================
+
+    policy: vla_jepa
+
+    robot:
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true
+
+    dataset:
+      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
+      num_workers: 4
+      rename_map: []
+
+    checkpoint:
+      output_dir: "sobit_home_pickup_block_vla_jepa_lora"
+      resume: false
+      overwrite: true
+      pretrained_path: "lerobot/VLA-JEPA-Pretrain"
+      save_freq: 5000
+      save_checkpoint: true
+
+    training:
+      steps: 30000
+      # Backprop now traverses the 2B backbone and the world model loads
+      # 8-frame windows per sample — batch is activation-bound. 4 fits a
+      # 32 GB GPU; raise if nvidia-smi shows headroom.
+      batch_size: 4
+      seed: 1000
+      use_policy_training_preset: true
+      log_freq: 100
+      eval_freq: 5000
+
+    num_gpus: 1
+
+    wandb:
+      enable: true
+      project: "sobits_vla_training"
+      entity: ""
+      run_name: "sobit_home-pickup_block-left-abs-vla_jepa-vlmlora"
+      notes: "VLA-JEPA VLM-LoRA + active world model from lerobot/VLA-JEPA-Pretrain on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions; reinit 19-dim action/state projections; full-training DiT head + video predictor)"
+      tags:
+        - vla_jepa
+        - lora
+        - sobit_home
+        - pickup_block
+        - gazebo
+
+    hub:
+      push_to_hub: true
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_vla_jepa_vlmlora"
+      private: false
+
+    peft:
+      method_type: "LORA"
+      r: 16
+      lora_alpha: 32
+      lora_dropout: 0.05
+      # LoRA on the Qwen3-VL language-model attention projections
+      # (model.qwen.model...language_model.layers.N.self_attn.{q,v}_proj).
+      # VLAJEPAPolicy defines no default targets, so this regex is REQUIRED.
+      target_modules: "(.*\\.language_model\\..*\\.self_attn\\.(q|v)_proj)"
+      # Fully train the flow-matching DiT head (incl. the reinit'd 19-dim
+      # projections — LoRA on randomly-initialised layers is pointless) and
+      # the world-model predictor. The V-JEPA2 encoder stays frozen.
+      full_training_modules:
+        - "action_model"
+        - "video_predictor"
+
+    policy_overrides:
+      chunk_size: 7
+      n_action_steps: 7
+      # Gradients reach the backbone through the adapters, so the JEPA
+      # world-model loss stays active (freeze_qwen would auto-disable it).
+      freeze_qwen: false
+      enable_world_model: true
+      reinit_modules:
+        - "model.action_model.action_encoder"
+        - "model.action_model.action_decoder"
+        - "model.action_model.state_encoder"
