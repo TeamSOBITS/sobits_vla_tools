@@ -180,8 +180,13 @@ class TrainNode(Node):
             'peft.lora_dropout', 0.05, _p('LoRA dropout probability'))
         self.declare_parameter(
             'peft.target_modules', '', _p('LoRA target modules (empty = policy default)'))
-        self.declare_parameter(
-            'peft.full_training_modules', [], _p('Modules to fully fine-tune alongside LoRA'))
+        # dynamic_typing: an empty [] default infers BYTE_ARRAY and clashes
+        # with YAML STRING_ARRAY overrides (and a hard STRING_ARRAY type
+        # would clash with the `[]` most configs set). Values are normalized
+        # to list[str] in _collect_params.
+        _ftm_desc = _p('Modules to fully fine-tune alongside LoRA')
+        _ftm_desc.dynamic_typing = True
+        self.declare_parameter('peft.full_training_modules', [], _ftm_desc)
 
         from rclpy.parameter import Parameter
         self.declare_parameter('robot.descriptor_id', '', _p('Robot descriptor ID'))
@@ -221,6 +226,13 @@ class TrainNode(Node):
                 params[name] = self.get_parameter(name).value
             except Exception:
                 pass
+
+        # dynamic_typing param: YAML may deliver bytes/None; normalize to
+        # list[str] so build_peft_config always sees a string list.
+        ftm = params.get('peft.full_training_modules')
+        params['peft.full_training_modules'] = (
+            [str(m) for m in ftm] if ftm else []
+        )
 
         # Collect policy_overrides
         po: dict[str, Any] = {}
