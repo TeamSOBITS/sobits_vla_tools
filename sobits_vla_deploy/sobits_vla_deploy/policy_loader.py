@@ -74,12 +74,18 @@ def _state_dim_from_preprocessor(preprocessor) -> Optional[int]:
     normalization compat patch already touches, so this is one private-API
     coupling instead of two.
     """
+    # Per-dimension stats only — the stats dict also holds scalars like
+    # 'count' (shape (1,)), and grabbing an arbitrary entry once returned
+    # expected_state_dim=1, truncating the 19-dim state to garbage.
+    _PER_DIM_STATS = ('mean', 'std', 'q01', 'q99', 'q10', 'q90', 'min', 'max')
     for step in getattr(preprocessor, 'steps', []):
         stats = getattr(step, '_tensor_stats', None) or {}
         state_stats = stats.get('observation.state')
         if state_stats:
-            any_stat = next(iter(state_stats.values()))
-            return int(any_stat.shape[-1])
+            for key in _PER_DIM_STATS:
+                stat = state_stats.get(key)
+                if stat is not None:
+                    return int(stat.shape[-1])
     return None
 
 

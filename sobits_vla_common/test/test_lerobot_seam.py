@@ -200,6 +200,26 @@ def test_compat_patches_apply():
     # Untouched tensors are passed through, not copied.
     assert resized['observation.images.a'] is batch['observation.images.a']
 
+    # State-dim introspection must read a per-dimension stat, never scalars
+    # like 'count' — that once yielded expected_state_dim=1 and truncated
+    # the 19-dim state at deploy time.
+    sys.path.insert(0, str(_REPO_ROOT / 'sobits_vla_deploy'))
+    from sobits_vla_deploy.policy_loader import _state_dim_from_preprocessor
+
+    class _FakeStep:
+        _tensor_stats = {
+            'observation.state': {
+                'count': torch.ones(1),
+                'mean': torch.zeros(19),
+                'std': torch.ones(19),
+            }
+        }
+
+    class _FakePipeline:
+        steps = [_FakeStep()]
+
+    assert _state_dim_from_preprocessor(_FakePipeline()) == 19
+
     # Patch targets import and are (still) patched in place — hard fail if
     # the target class/attr is missing outright, since every patch below is
     # unconditionally active on lerobot 0.6.0 (see lerobot_compat.py).
