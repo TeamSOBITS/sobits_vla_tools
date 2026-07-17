@@ -253,6 +253,19 @@ class PolicyLoader:
             )
             return None
 
+    def _repo_has_serialized_processors(self) -> bool:
+        """True when the model repo ships a serialized postprocessor pipeline."""
+        try:
+            if Path(self.model_repo_id).is_dir():
+                files = [p.name for p in Path(self.model_repo_id).iterdir()]
+            else:
+                from huggingface_hub import list_repo_files
+
+                files = list_repo_files(self.model_repo_id)
+            return 'policy_postprocessor.json' in files
+        except Exception:
+            return False
+
     @staticmethod
     def _fetch_model_file(repo_id: str, filename: str) -> str:
         local = Path(repo_id) / filename
@@ -280,6 +293,20 @@ class PolicyLoader:
         module_path, class_name = self.policy_class_path.rsplit('.', 1)
         policy_module = import_module(module_path)
         policy_cls = getattr(policy_module, class_name)
+
+        # Register the policy's custom processor steps (e.g.
+        # vla_jepa_clip_actions, molmoact2 steps): they live in a sibling
+        # processor_<pkg> module that neither modeling_<pkg> nor lerobot's
+        # make_pre_post_processors pretrained-path branch imports — without
+        # this, loading a serialized pipeline fails registry lookup and the
+        # node silently falls back to NO postprocessor, executing normalized
+        # [-1, 1] actions as radians.
+        if module_path.startswith('lerobot.policies.'):
+            pkg = module_path.split('.')[2]
+            try:
+                import_module(f'lerobot.policies.{pkg}.processor_{pkg}')
+            except ImportError:
+                pass
 
         rtc_cfg = self._build_rtc_config()
         cfg = self._build_policy_config(rtc_cfg)
@@ -608,6 +635,16 @@ class PolicyLoader:
                     policy.config, self.model_repo_id, **processor_kwargs
                 )
             except Exception as exc:
+                # If the repo ships serialized pipelines, running without them
+                # executes NORMALIZED [-1, 1] actions as radians — refuse
+                # instead of degrading silently (10 wasted eval episodes, and
+                # dangerous on real hardware).
+                if self._repo_has_serialized_processors():
+                    raise RuntimeError(
+                        'Repo {!r} ships processor pipelines but they failed '
+                        'to build: {}. Refusing to run without '
+                        'normalization.'.format(self.model_repo_id, exc)
+                    ) from exc
                 self.log_warn(
                     'Could not build pre/post processors: {}. '
                     'Direct policy.select_action will be used.'.format(exc)
