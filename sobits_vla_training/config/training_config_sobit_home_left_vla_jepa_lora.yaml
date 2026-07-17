@@ -49,14 +49,14 @@
       save_checkpoint: true
 
     training:
-      steps: 30000
+      steps: 60000
       # Backprop now traverses the 2B backbone and the world model loads
       # 8-frame windows per sample — batch is activation-bound. Measured on
       # the RTX 5090 (32.6 GB): batch 4 -> ~21 GB (~11 GB of it
       # activations), so batch 8 is right at the ceiling — if it OOMs in
       # the first steps, fall back to 4 and raise training.steps to 60000
       # together with policy_overrides.scheduler_decay_steps: 60000.
-      batch_size: 8
+      batch_size: 4
       seed: 1000
       use_policy_training_preset: true
       log_freq: 100
@@ -99,6 +99,9 @@
         - "video_predictor"
 
     policy_overrides:
+      # Cosine decay must span the full run — the policy preset pins it at
+      # 30k otherwise and the second half would idle at the floor LR.
+      scheduler_decay_steps: 60000
       chunk_size: 7
       n_action_steps: 7
       # Gradients reach the backbone through the adapters, so the JEPA
