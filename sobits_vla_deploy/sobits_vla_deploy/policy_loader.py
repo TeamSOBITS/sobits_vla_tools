@@ -259,8 +259,76 @@ class PolicyLoader:
             )
             return None
 
+    def _build_pi_adapter_config(self, policy_cls, fallback_cfg) -> Optional[Any]:
+        """
+        Rebuild a pi-family policy config from the adapter repo's config.json.
+
+        Pi configs (pi0/pi05/pi0_fast) need explicit variant/dim fields; the
+        generic repo-json rebuild is used for every other policy family.
+        """
+        try:
+            from sobits_vla_common.lerobot_adapter import FeatureType as FT
+            from sobits_vla_common.lerobot_adapter import PolicyFeature
+
+            adapter_policy_json_path = self._fetch_model_file(
+                self.model_repo_id, 'config.json'
+            )
+            with open(adapter_policy_json_path) as fh:
+                adapter_policy_dict = json.load(fh)
+            in_feats = {
+                k: PolicyFeature(type=FT[v['type']], shape=tuple(v['shape']))
+                for k, v in adapter_policy_dict.get('input_features', {}).items()
+            }
+            out_feats = {
+                k: PolicyFeature(type=FT[v['type']], shape=tuple(v['shape']))
+                for k, v in adapter_policy_dict.get('output_features', {}).items()
+            }
+            _img_res_raw = adapter_policy_dict.get('image_resolution', [224, 224])
+            _img_res = (
+                tuple(_img_res_raw)
+                if not isinstance(_img_res_raw, tuple)
+                else _img_res_raw
+            )
+            adapter_policy_cfg = policy_cls.config_class(
+                input_features=in_feats,
+                output_features=out_feats,
+                device='cpu',
+                chunk_size=adapter_policy_dict.get('chunk_size', 50),
+                n_action_steps=adapter_policy_dict.get('n_action_steps', 50),
+                paligemma_variant=adapter_policy_dict.get(
+                    'paligemma_variant', 'gemma_2b'
+                ),
+                action_expert_variant=adapter_policy_dict.get(
+                    'action_expert_variant', 'gemma_300m'
+                ),
+                max_action_dim=adapter_policy_dict.get('max_action_dim', 32),
+                max_state_dim=adapter_policy_dict.get('max_state_dim', 32),
+                image_resolution=_img_res,
+                dtype=adapter_policy_dict.get('dtype', 'bfloat16'),
+            )
+            for _key in (
+                'action_feature_names',
+                'use_relative_actions',
+                'relative_exclude_joints',
+            ):
+                if _key in adapter_policy_dict:
+                    setattr(adapter_policy_cfg, _key, adapter_policy_dict[_key])
+            self.log_info(
+                'Built adapter policy config. Image features: {}'.format(
+                    list(getattr(adapter_policy_cfg, 'image_features', {}).keys())
+                )
+            )
+            return adapter_policy_cfg
+        except Exception as exc:
+            self.log_warn(
+                'Could not build adapter policy config ({}). Using ROS-built config.'.format(
+                    exc
+                )
+            )
+            return fallback_cfg
+
     def _repo_has_serialized_processors(self) -> bool:
-        """True when the model repo ships a serialized postprocessor pipeline."""
+        """Check whether the model repo ships a serialized postprocessor pipeline."""
         try:
             if Path(self.model_repo_id).is_dir():
                 files = [p.name for p in Path(self.model_repo_id).iterdir()]
@@ -334,94 +402,28 @@ class PolicyLoader:
                 )
             )
 
-            try:
-                from sobits_vla_common.lerobot_adapter import FeatureType as FT
-                from sobits_vla_common.lerobot_adapter import PolicyFeature
-
-                adapter_policy_json_path = self._fetch_model_file(
-                    self.model_repo_id, 'config.json'
-                )
-                with open(adapter_policy_json_path) as fh:
-                    adapter_policy_dict = json.load(fh)
-                in_feats = {
-                    k: PolicyFeature(
-                        type=FT[v['type']], shape=tuple(v['shape'])
-                    )
-                    for k, v in adapter_policy_dict.get(
-                        'input_features', {}
-                    ).items()
-                }
-                out_feats = {
-                    k: PolicyFeature(
-                        type=FT[v['type']], shape=tuple(v['shape'])
-                    )
-                    for k, v in adapter_policy_dict.get(
-                        'output_features', {}
-                    ).items()
-                }
-                _img_res_raw = adapter_policy_dict.get(
-                    'image_resolution', [224, 224]
-                )
-                _img_res = (
-                    tuple(_img_res_raw)
-                    if not isinstance(_img_res_raw, tuple)
-                    else _img_res_raw
-                )
-                adapter_policy_cfg = policy_cls.config_class(
-                    input_features=in_feats,
-                    output_features=out_feats,
-                    device='cpu',
-                    chunk_size=adapter_policy_dict.get('chunk_size', 50),
-                    n_action_steps=adapter_policy_dict.get(
-                        'n_action_steps', 50
-                    ),
-                    paligemma_variant=adapter_policy_dict.get(
-                        'paligemma_variant', 'gemma_2b'
-                    ),
-                    action_expert_variant=adapter_policy_dict.get(
-                        'action_expert_variant', 'gemma_300m'
-                    ),
-                    max_action_dim=adapter_policy_dict.get(
-                        'max_action_dim', 32
-                    ),
-                    max_state_dim=adapter_policy_dict.get('max_state_dim', 32),
-                    image_resolution=_img_res,
-                    dtype=adapter_policy_dict.get('dtype', 'bfloat16'),
-                )
-                if 'action_feature_names' in adapter_policy_dict:
-                    adapter_policy_cfg.action_feature_names = (
-                        adapter_policy_dict['action_feature_names']
-                    )
-                if 'use_relative_actions' in adapter_policy_dict:
-                    adapter_policy_cfg.use_relative_actions = (
-                        adapter_policy_dict['use_relative_actions']
-                    )
-                if 'relative_exclude_joints' in adapter_policy_dict:
-                    adapter_policy_cfg.relative_exclude_joints = (
-                        adapter_policy_dict['relative_exclude_joints']
-                    )
-                self.log_info(
-                    'Built adapter policy config. Image features: {}'.format(
-                        list(
-                            getattr(
-                                adapter_policy_cfg, 'image_features', {}
-                            ).keys()
-                        )
-                    )
-                )
-                load_cfg = adapter_policy_cfg
-            except Exception as exc:
-                self.log_warn(
-                    'Could not build adapter policy config ({}). Using ROS-built config.'.format(
-                        exc
-                    )
-                )
-                load_cfg = cfg
-
-            load_kwargs: Dict[str, Any] = {
-                'strict': False,
-                'torch_dtype': torch.bfloat16,
+            from dataclasses import fields as _cfg_fields
+            _is_pi_family = 'paligemma_variant' in {
+                f.name for f in _cfg_fields(policy_cls.config_class)
             }
+            if not _is_pi_family:
+                # Generic policies (vla_jepa, molmoact2, ...): the adapter
+                # repo's config.json is a complete serialized policy config —
+                # rebuild it generically. It carries reinit_modules, so base
+                # weights with mismatched shapes (e.g. our 19-dim projections
+                # vs the 7-dim pretrained base) re-initialise and the fully
+                # trained modules_to_save from the adapter overwrite them.
+                load_cfg = self._build_cfg_from_repo_json(policy_cls) or cfg
+                self.log_info(
+                    'Non-pi adapter repo: using generic repo-json config '
+                    'rebuild for {}.'.format(policy_cls.config_class.__name__)
+                )
+            else:
+                load_cfg = self._build_pi_adapter_config(policy_cls, cfg)
+
+            load_kwargs: Dict[str, Any] = {'strict': False}
+            if _registry_flag(self.policy_class_path, 4, default=True):
+                load_kwargs['torch_dtype'] = torch.bfloat16
             if load_cfg is not None:
                 load_kwargs['config'] = load_cfg
 
@@ -451,11 +453,12 @@ class PolicyLoader:
                 policy = policy.merge_and_unload()
                 self.log_info('LoRA adapter merged.')
             except Exception as exc:
-                self.log_warn(
-                    'PEFT merge failed ({}). Running without adapter.'.format(
-                        exc
-                    )
-                )
+                # The repo IS the adapter — running the bare base model would
+                # silently evaluate untrained weights.
+                raise RuntimeError(
+                    'PEFT adapter merge from {!r} failed: {}. Refusing to '
+                    'run the bare base model.'.format(self.model_repo_id, exc)
+                ) from exc
         else:
             repo_cfg = self._build_cfg_from_repo_json(policy_cls)
             load_cfg = repo_cfg if repo_cfg is not None else cfg
