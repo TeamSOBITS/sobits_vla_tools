@@ -133,6 +133,7 @@ private:
   
   void publishStatus(const std::string & status);
   void publishCurrentStatus();
+  std::string formatRecordingElapsed() const;
 
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::TimerBase::SharedPtr status_timer_;

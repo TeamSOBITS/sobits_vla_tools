@@ -344,12 +344,31 @@ void RosbagCollection::publishStatus(const std::string & status)
   status_pub_->publish(msg);
 }
 
+std::string RosbagCollection::formatRecordingElapsed() const
+{
+  const auto elapsed = std::chrono::steady_clock::now() - recording_start_time_;
+  auto total_seconds = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+  if (total_seconds < 0) {
+    total_seconds = 0;
+  }
+
+  const auto hours = total_seconds / 3600;
+  const auto minutes = (total_seconds % 3600) / 60;
+  const auto seconds = total_seconds % 60;
+
+  std::ostringstream ss;
+  ss << std::setfill('0') << std::setw(2) << hours << ":"
+     << std::setw(2) << minutes << ":"
+     << std::setw(2) << seconds;
+  return ss.str();
+}
+
 void RosbagCollection::publishCurrentStatus()
 {
   if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::RECORDING) {
-    publishStatus("recording");
+    publishStatus("recording " + formatRecordingElapsed());
   } else if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::PAUSED) {
-    publishStatus("paused");
+    publishStatus("paused " + formatRecordingElapsed());
   } else if (current_state_ == sobits_interfaces::action::VlaRecordState_Result::ERROR) {
     publishStatus("error");
   } else {
@@ -741,7 +760,7 @@ void RosbagCollection::createRosbag()
   max_duration_triggered_ = false;
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::action::VlaRecordState_Result::RECORDING;
-  publishStatus("recording_started");
+  publishStatus("recording 00:00:00");
 
   // Configure rosbag2 transport options
   rosbag2_storage::StorageOptions storage_options;
