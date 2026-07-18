@@ -389,6 +389,25 @@ class TrainNode(Node):
                     f'{ckpt_cfg} — check output_dir and the checkpoints/last '
                     'symlink (and that checkpoint.overwrite is false).'
                 )
+
+            # PEFT checkpoints save adapter_model.safetensors but lerobot
+            # writes policy.use_peft=false into train_config.json (the flag
+            # is only set on the config after wrapping) — resume then takes
+            # the plain-weights branch and dies on the missing
+            # model.safetensors. Repair the flag when the checkpoint is
+            # unambiguously an adapter.
+            import json as _json
+
+            if (ckpt_cfg.parent / 'adapter_model.safetensors').exists():
+                ckpt_dict = _json.loads(ckpt_cfg.read_text())
+                if ckpt_dict.get('policy', {}).get('use_peft') is False:
+                    ckpt_dict['policy']['use_peft'] = True
+                    ckpt_cfg.write_text(_json.dumps(ckpt_dict, indent=4))
+                    self.get_logger().info(
+                        'Repaired checkpoint train_config.json: '
+                        'policy.use_peft false -> true (adapter checkpoint).'
+                    )
+
             _sys.argv = list(_sys.argv) + [f'--config_path={ckpt_cfg}']
             self.get_logger().info(f'Resuming from checkpoint: {ckpt_cfg}')
 
