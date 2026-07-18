@@ -372,6 +372,26 @@ class TrainNode(Node):
             f'output={train_cfg.output_dir}'
         )
 
+        if train_cfg.resume:
+            # lerobot's resume path reads --config_path from sys.argv
+            # (draccus CLI plumbing our in-process train() call never
+            # provides). Point it at this run's latest checkpoint.
+            import sys as _sys
+
+            ckpt_cfg = (
+                Path(train_cfg.output_dir)
+                / 'checkpoints' / 'last' / 'pretrained_model'
+                / 'train_config.json'
+            )
+            if not ckpt_cfg.exists():
+                raise RuntimeError(
+                    'checkpoint.resume=true but no checkpoint found at '
+                    f'{ckpt_cfg} — check output_dir and the checkpoints/last '
+                    'symlink (and that checkpoint.overwrite is false).'
+                )
+            _sys.argv = list(_sys.argv) + [f'--config_path={ckpt_cfg}']
+            self.get_logger().info(f'Resuming from checkpoint: {ckpt_cfg}')
+
         apply_training_patches()
 
         from sobits_vla_common.lerobot_adapter import train
