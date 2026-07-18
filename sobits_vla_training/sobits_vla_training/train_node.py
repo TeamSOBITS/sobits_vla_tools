@@ -405,6 +405,15 @@ class TrainNode(Node):
                     'loading branch (policy.use_peft=true).'
                 )
 
+            # validate() only builds the optimizer/scheduler presets when NOT
+            # resuming (the CLI flow reloads them from the saved train
+            # config, which our in-process config never was) — build them
+            # here or make_optimizer_and_scheduler raises. The optimizer
+            # STATE is still restored from the checkpoint's training_state/.
+            if train_cfg.use_policy_training_preset and train_cfg.optimizer is None:
+                train_cfg.optimizer = train_cfg.policy.get_optimizer_preset()
+                train_cfg.scheduler = train_cfg.policy.get_scheduler_preset()
+
             _sys.argv = list(_sys.argv) + [f'--config_path={ckpt_cfg}']
             self.get_logger().info(f'Resuming from checkpoint: {ckpt_cfg}')
 
