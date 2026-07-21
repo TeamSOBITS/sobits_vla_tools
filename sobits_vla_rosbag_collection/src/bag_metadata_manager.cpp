@@ -430,7 +430,15 @@ void BagMetadataManager::updateEpisodeYaml(
     }
 
     YAML::Node episode_node = YAML::Node(YAML::NodeType::Map);
-    episode_node["bag_path"] = current_bag_path;
+    // Store the path relative to the yaml's own directory (recording_dir_)
+    // so the metadata stays valid when the rosbags folder moves between
+    // machines. Consumers join relative paths against the yaml location.
+    std::string stored_bag_path = current_bag_path;
+    const std::string recording_prefix = recording_dir_ + "/";
+    if (stored_bag_path.rfind(recording_prefix, 0) == 0) {
+      stored_bag_path = stored_bag_path.substr(recording_prefix.size());
+    }
+    episode_node["bag_path"] = stored_bag_path;
 
     if (!current_episode_subtasks.empty()) {
       YAML::Node subtasks_list = YAML::Node(YAML::NodeType::Sequence);
