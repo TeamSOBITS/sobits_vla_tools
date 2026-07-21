@@ -729,13 +729,18 @@ class RosbagConversionNode(Node):
 
         # Count total episodes for progress logging
         total_episodes = 0
-        for _, task_info in all_tasks:
+        for task_name, task_info in all_tasks:
             meta_src = task_info.get('_meta_source_dir', self.rosbag_directory)
             bag_group = task_info.get('bag_path', task_info.get('bag_dir', ''))
             if bag_group.startswith('/'):
                 group_dir = bag_group
             else:
                 group_dir = os.path.join(meta_src, bag_group)
+            # Same fallback as the conversion loop below — metadata written
+            # on another machine may carry stale absolute paths, but the
+            # task dir name is stable relative to the yaml.
+            if not os.path.isdir(group_dir):
+                group_dir = os.path.join(meta_src, task_name)
             if os.path.isdir(group_dir):
                 total_episodes += sum(
                     1 for ep in os.listdir(group_dir)
