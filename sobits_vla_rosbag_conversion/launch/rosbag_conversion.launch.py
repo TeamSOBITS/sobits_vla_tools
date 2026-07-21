@@ -33,6 +33,12 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from sobits_vla_common.launch.utils import default_pixi_manifest, pixi_prefix
+
+# Conversion imports pandas/scipy/matplotlib/rosbags/torch -> conversion env.
+_DEFAULT_PIXI_ENV = 'conversion-gpu'
+_DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
+
 
 def generate_launch_description_impl(context, *args, **kwargs):
     conversion_share = get_package_share_directory('sobits_vla_rosbag_conversion')
@@ -60,19 +66,32 @@ def generate_launch_description_impl(context, *args, **kwargs):
     )
 
     # Default rosbag_directory: src-tree sobits_vla_rosbag_collection/rosbags/
-    # os.path.realpath resolves the --symlink-install symlink back to the src file,
-    # then we walk up to the workspace src root and locate the collection package.
+    # With --symlink-install, realpath resolves the installed launch file back
+    # into the source tree and the sibling check finds it directly. With
+    # regular copy installs realpath stays in the install space, so also look
+    # for the package under the workspace's src/ while walking up.
     if not rosbag_directory:
-        src_file = os.path.realpath(__file__)  # resolves symlink → actual src path
-        # Walk up until we find the sobits_vla_rosbag_collection sibling package
+        src_file = os.path.realpath(__file__)
         candidate = os.path.dirname(src_file)
-        for _ in range(6):
+        import glob as _glob
+        for _ in range(8):
             sibling = os.path.join(
                 candidate, 'sobits_vla_rosbag_collection', 'rosbags'
             )
             if os.path.isdir(sibling):
                 rosbag_directory = sibling
                 break
+            src_root = os.path.join(candidate, 'src')
+            if os.path.isdir(src_root):
+                hits = (
+                    _glob.glob(os.path.join(
+                        src_root, 'sobits_vla_rosbag_collection', 'rosbags'))
+                    + _glob.glob(os.path.join(
+                        src_root, '*', 'sobits_vla_rosbag_collection', 'rosbags'))
+                )
+                if hits:
+                    rosbag_directory = hits[0]
+                    break
             candidate = os.path.dirname(candidate)
         if not rosbag_directory:
             rosbag_directory = os.path.join(collection_share, 'rosbags')
@@ -99,11 +118,17 @@ def generate_launch_description_impl(context, *args, **kwargs):
     if override_params:
         parameters.append(override_params)
 
+    prefix = pixi_prefix(
+        LaunchConfiguration('pixi_env').perform(context),
+        LaunchConfiguration('pixi_manifest').perform(context),
+    )
+
     rosbag_conversion_node = Node(
         package='sobits_vla_rosbag_conversion',
         executable='ros2bag_to_lerobotdataset',
         name='rosbag_conversion_node',
         output='screen',
+        prefix=prefix or None,
         parameters=parameters,
     )
 
@@ -157,6 +182,19 @@ def generate_launch_description():
                 'overwrite',
                 default_value='false',
                 description='Delete existing output dataset before converting.',
+            ),
+            DeclareLaunchArgument(
+                'pixi_env',
+                default_value=_DEFAULT_PIXI_ENV,
+                description=(
+                    'pixi environment (Python deps) to run conversion in. '
+                    'Use conversion-cpu without a GPU, or "" to disable the prefix.'
+                ),
+            ),
+            DeclareLaunchArgument(
+                'pixi_manifest',
+                default_value=_DEFAULT_PIXI_MANIFEST,
+                description='Path to pixi.toml (override for installed layouts).',
             ),
             OpaqueFunction(function=generate_launch_description_impl),
         ]
