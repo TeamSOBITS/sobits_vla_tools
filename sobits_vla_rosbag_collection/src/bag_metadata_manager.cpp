@@ -325,7 +325,17 @@ void BagMetadataManager::updateRosbagYaml(
 
   yaml_node["recorded_bags"]["tasks_list"].push_back(current_task_label);
   yaml_node["recorded_bags"]["tasks"][current_task_label]["label"] = current_task_name;
-  yaml_node["recorded_bags"]["tasks"][current_task_label]["bag_dir"] = current_task_path;
+  // Store bag_dir relative to the yaml's own directory (recording_dir_) so
+  // the metadata survives moving the rosbags folder between machines —
+  // same convention as the per-episode bag_path below.
+  std::string stored_task_path = current_task_path;
+  {
+    const std::string recording_prefix = recording_dir_ + "/";
+    if (stored_task_path.rfind(recording_prefix, 0) == 0) {
+      stored_task_path = stored_task_path.substr(recording_prefix.size());
+    }
+  }
+  yaml_node["recorded_bags"]["tasks"][current_task_label]["bag_dir"] = stored_task_path;
   yaml_node["recorded_bags"]["tasks"][current_task_label]["gamepad"] = gamepad_name;
 
   for (const auto & sensor_type : robot_info_.sensor_types) {
