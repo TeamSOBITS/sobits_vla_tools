@@ -127,6 +127,22 @@ class LeRobotDeployNode(Node):
         self._preprocessor = loaded['preprocessor']
         self._postprocessor = loaded['postprocessor']
 
+        # model.use_relative_actions was dead (checkpoint always won silently);
+        # enforce that an explicit config value agrees with the checkpoint.
+        if (
+            self._model_use_relative_actions_set
+            and self._model_use_relative_actions_param != self._model_use_relative_actions
+        ):
+            raise RuntimeError(
+                'model.use_relative_actions={} but checkpoint {!r} resolves '
+                'to use_relative_actions={} -- refusing to guess which is '
+                'correct.'.format(
+                    self._model_use_relative_actions_param,
+                    self._model_repo_id,
+                    self._model_use_relative_actions,
+                )
+            )
+
         # Initialize ObsBuilder
         self._obs_builder = ObsBuilder(
             joint_features=self._joint_features,
@@ -401,6 +417,14 @@ class LeRobotDeployNode(Node):
         self._model_device = str(self.get_parameter('model.device').value)
         self._model_use_amp = bool(self.get_parameter('model.use_amp').value)
         self._model_dataset_repo_id = str(self.get_parameter('model.dataset_repo_id').value)
+        self._model_use_relative_actions_param = bool(
+            self.get_parameter('model.use_relative_actions').value
+        )
+        # Only enforce when the config explicitly set this key -- otherwise
+        # it's just the declared default, not an operator claim to check.
+        self._model_use_relative_actions_set = (
+            'model.use_relative_actions' in (getattr(self, '_parameter_overrides', None) or {})
+        )
 
         self._control_hz = float(self.get_parameter('runtime.control_hz').value)
         self._actions_per_chunk = int(self.get_parameter('runtime.actions_per_chunk').value)
