@@ -81,7 +81,7 @@ from pathlib import Path
 import subprocess
 import threading
 from time import monotonic
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -123,19 +123,6 @@ def _lerobot_version_str() -> str:
         return '.'.join(str(p) for p in LEROBOT_VERSION)
     except Exception:
         return 'unknown'
-
-
-def _rpy_from_quat(x: float, y: float, z: float, w: float) -> Tuple[float, float, float]:
-    """Quaternion → (roll, pitch, yaw) in radians."""
-    sinr = 2.0 * (w * x + y * z)
-    cosr = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr, cosr)
-    sinp = 2.0 * (w * y - z * x)
-    pitch = math.asin(max(-1.0, min(1.0, sinp)))
-    siny = 2.0 * (w * z + x * y)
-    cosy = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(siny, cosy)
-    return roll, pitch, yaw
 
 
 def _gz_set_pose(

@@ -110,17 +110,9 @@ class ObsBuilder:
 
                 rpy = _R.from_quat([q.x, q.y, q.z, q.w]).as_euler('xyz')
             except ImportError:
-                import math as _math
+                from sobits_vla_common.geometry import quat_to_rpy
 
-                sinr = 2.0 * (q.w * q.x + q.y * q.z)
-                cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
-                roll = _math.atan2(sinr, cosr)
-                sinp = 2.0 * (q.w * q.y - q.z * q.x)
-                pitch = _math.asin(max(-1.0, min(1.0, sinp)))
-                siny = 2.0 * (q.w * q.z + q.x * q.y)
-                cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-                yaw = _math.atan2(siny, cosy)
-                rpy = [roll, pitch, yaw]
+                rpy = quat_to_rpy(q.x, q.y, q.z, q.w)
             return np.array(
                 [tx.x, tx.y, tx.z, rpy[0], rpy[1], rpy[2]], dtype=np.float32
             )
