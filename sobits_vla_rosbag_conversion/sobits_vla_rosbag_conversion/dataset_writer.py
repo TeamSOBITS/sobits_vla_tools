@@ -40,6 +40,7 @@ from sobits_vla_common.lerobot_adapter import (
     LEROBOT_VERSION,
     LeRobotDataset,
     RGBEncoderConfig,
+    depth_encoder_defaults,
 )
 import yaml
 
@@ -123,6 +124,7 @@ def _make_create_kwargs(
     rgb_encoder.resolve_vcodec()
     if rgb_encoder.vcodec.endswith('_nvenc') and 'bf' not in rgb_encoder.extra_options:
         rgb_encoder.extra_options = {**rgb_encoder.extra_options, 'bf': 0}
+    # Gemini 330's 0.1-20m range fits lerobot's default 0.01-10m depth window.
     return {
         'repo_id': dataset_name,
         'fps': fps,
@@ -131,6 +133,7 @@ def _make_create_kwargs(
         'robot_type': robot_type,
         'video_backend': 'auto',
         'rgb_encoder': rgb_encoder,
+        'depth_encoder': depth_encoder_defaults(),
         'streaming_encoding': True,
     }
 

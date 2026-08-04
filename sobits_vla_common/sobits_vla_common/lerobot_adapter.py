@@ -92,6 +92,8 @@ _SYMBOLS: dict[str, str] = {
     'ProcessorStepRegistry':             'lerobot.processor.pipeline',
     'AbsoluteActionsProcessorStep':      'lerobot.processor.relative_action_processor',
     'RGBEncoderConfig':                  'lerobot.configs.video',
+    'DepthEncoderConfig':                'lerobot.configs.video',
+    'depth_encoder_defaults':            'lerobot.configs.video',
     'train':                             'lerobot.scripts.lerobot_train',
     'SGDConfig':                         'lerobot.optim.optimizers',
     'ConstantWithWarmupSchedulerConfig': 'lerobot.optim.schedulers',
