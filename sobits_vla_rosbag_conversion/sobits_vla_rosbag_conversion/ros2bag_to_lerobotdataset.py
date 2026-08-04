@@ -180,15 +180,21 @@ class RosbagConversionNode(Node):
             self.get_parameter('robot_descriptor_id').get_parameter_value().string_value
         )
 
+        # Ros names allowed by the descriptor's active groups, or None in legacy mode (no inclusion filter, only excluded_joints applies).
+        self.active_ros_names = None
+
         if self.robot_descriptor_id:
             from sobits_vla_common.robot_descriptor import load_robot_descriptor
             desc = load_robot_descriptor(self.robot_descriptor_id)
 
-            # Excluded joints
+            # Excluded joints (mimics/inactive groups still listed with active: false)
             self.excluded_joints = desc.all_excluded_ros_names
+            # Inclusion filter: groups omitted entirely (e.g. commented out) aren't caught by all_excluded_ros_names above.
+            self.active_ros_names = set(desc.active_ros_names)
 
-            # EE config
-            if desc.ee_poses:
+            # EE config: respect the config's own ee_pose.enabled, don't force it on just because the descriptor has poses
+            ee_pose_param_enabled = self.get_parameter('ee_pose.enabled').get_parameter_value().bool_value
+            if desc.ee_poses and ee_pose_param_enabled:
                 self.ee_pose_enabled = True
                 self.ee_configs = [
                     (ee.name, ee.source_frame, ee.target_frame)
@@ -417,8 +423,11 @@ class RosbagConversionNode(Node):
                                 self.odom_topic = part_info.get('odom_topic', '')
                             else:
                                 for j in part_info.get('joint_names', []):
-                                    if j not in self.excluded_joints:
-                                        self.action_features.append(j)
+                                    if j in self.excluded_joints:
+                                        continue
+                                    if self.active_ros_names is not None and j not in self.active_ros_names:
+                                        continue
+                                    self.action_features.append(j)
                                 cmd_topic = part_info.get('command_topic', '')
                                 if cmd_topic:
                                     self.part_command_topics.add(cmd_topic)

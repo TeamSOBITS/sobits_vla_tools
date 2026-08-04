@@ -87,6 +87,14 @@ class RobotDescriptor:
         return features
 
     @property
+    def active_ros_names(self) -> List[str]:
+        ros_names = []
+        for g in self.active_groups:
+            for j in g.joints:
+                ros_names.append(j.ros_name)
+        return ros_names
+
+    @property
     def all_excluded_ros_names(self) -> List[str]:
         ros_names = list(self.excluded_joints)
         for g in self.groups:
