@@ -1,0 +1,39 @@
+# Multi-Task DiT training defaults.
+# All fields map 1-to-1 to MultiTaskDiTConfig dataclass fields.
+#
+# Multi-Task DiT trains FROM SCRATCH (CLIP vision/text encoders provide
+# frozen-ish features, DiT trunk trains from scratch) — no pretrained
+# policy checkpoint. IS language-conditioned via a CLIP text encoder, so
+# treat it as a cheaper multi-task alternative to the VLM policies, not a
+# non-VLM baseline like ACT/Diffusion/VQ-BeT.
+#
+# CAVEATS:
+#  - vision_encoder_name / text_encoder_name must both be CLIP models.
+#  - horizon/n_action_steps/n_obs_steps interact via drop_n_last_frames,
+#    auto-computed in __post_init__ — leave drop_n_last_frames unset.
+
+policy_type: multi_task_dit
+
+# From scratch — leave empty.
+pretrained_path: ""
+
+# --- Action chunking ---
+n_obs_steps: 2
+horizon: 32
+n_action_steps: 24
+
+# --- Objective ---
+objective: "diffusion"
+
+# --- Architecture (lerobot defaults) ---
+hidden_dim: 512
+num_layers: 6
+timestep_embed_dim: 256
+
+# --- Text conditioning (CLIP) ---
+tokenizer_max_length: 77
+tokenizer_padding_side: "right"
+
+# --- Optimisation ---
+optimizer_lr: 2.0e-5
+scheduler_warmup_steps: 0

@@ -122,6 +122,39 @@ _REGISTRY: dict[str, PolicyEntry] = {
         # Model manages its own dtype via config model_dtype ('bfloat16').
         cast_bf16=False,
     ),
+    'diffusion': PolicyEntry(
+        policy_id='diffusion',
+        class_path='lerobot.policies.diffusion.modeling_diffusion.DiffusionPolicy',
+        config_module='lerobot.policies.diffusion.configuration_diffusion',
+        config_class='DiffusionConfig',
+        default_yaml='diffusion.yaml',
+        default_pretrained='',
+        has_device_field=True,
+        supports_rtc=False,
+        cast_bf16=False,
+    ),
+    'vqbet': PolicyEntry(
+        policy_id='vqbet',
+        class_path='lerobot.policies.vqbet.modeling_vqbet.VQBeTPolicy',
+        config_module='lerobot.policies.vqbet.configuration_vqbet',
+        config_class='VQBeTConfig',
+        default_yaml='vqbet.yaml',
+        default_pretrained='',
+        has_device_field=True,
+        supports_rtc=False,
+        cast_bf16=False,
+    ),
+    'multi_task_dit': PolicyEntry(
+        policy_id='multi_task_dit',
+        class_path='lerobot.policies.multi_task_dit.modeling_multi_task_dit.MultiTaskDiTPolicy',
+        config_module='lerobot.policies.multi_task_dit.configuration_multi_task_dit',
+        config_class='MultiTaskDiTConfig',
+        default_yaml='multi_task_dit.yaml',
+        default_pretrained='',
+        has_device_field=True,
+        supports_rtc=False,
+        cast_bf16=False,
+    ),
 }
 
 _CLASS_PATH_TO_ENTRY: dict[str, PolicyEntry] = {

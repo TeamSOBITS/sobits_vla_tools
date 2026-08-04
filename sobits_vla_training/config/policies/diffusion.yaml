@@ -1,0 +1,32 @@
+# Diffusion Policy training defaults.
+# All fields map 1-to-1 to DiffusionConfig dataclass fields.
+#
+# Diffusion Policy trains FROM SCRATCH (ResNet vision backbone with ImageNet
+# weights) — there is no pretrained policy checkpoint. Data-efficient action
+# generation via denoising, an alternative baseline to ACT.
+#
+# CAVEATS vs the pi-family:
+#  - NO language conditioning: the task instruction is ignored. Fine for a
+#    single-task dataset; useless for multi-task.
+#  - horizon must stay a multiple of 2**len(down_dims) (8 by default) — do
+#    not change horizon without also checking down_dims.
+#  - Normalization is MEAN_STD for images, MIN_MAX for state/action.
+
+policy_type: diffusion
+
+# From scratch — leave empty (ResNet18 ImageNet weights load automatically).
+pretrained_path: ""
+
+# --- Action chunking ---
+n_obs_steps: 2
+horizon: 64
+n_action_steps: 32
+
+# --- Architecture (lerobot defaults) ---
+vision_backbone: "resnet18"
+pretrained_backbone_weights: "ResNet18_Weights.IMAGENET1K_V1"
+down_dims: [512, 1024, 2048]
+
+# --- Optimisation ---
+optimizer_lr: 1.0e-4
+scheduler_warmup_steps: 500
