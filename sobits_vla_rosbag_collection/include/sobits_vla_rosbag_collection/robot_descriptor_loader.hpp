@@ -50,6 +50,7 @@ struct CameraSpecCpp
   std::string encoding;
   bool compressed;
   bool active;
+  bool is_depth{false};
 };
 
 struct RobotDescriptorCpp

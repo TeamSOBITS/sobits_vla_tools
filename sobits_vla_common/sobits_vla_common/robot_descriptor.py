@@ -50,6 +50,7 @@ class CameraSpec:
     encoding: str
     compressed: bool
     active: bool
+    is_depth: bool = False
 
 
 @dataclass
@@ -76,7 +77,12 @@ class RobotDescriptor:
     @property
     def active_cameras(self) -> List[CameraSpec]:
         cameras = self.sensors.get('cameras', [])
-        return [c for c in cameras if c.active]
+        return [c for c in cameras if c.active and not c.is_depth]
+
+    @property
+    def active_depth_cameras(self) -> List[CameraSpec]:
+        cameras = self.sensors.get('cameras', [])
+        return [c for c in cameras if c.active and c.is_depth]
 
     @property
     def all_joint_features(self) -> List[str]:
@@ -190,7 +196,8 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
                     info_topic=c.get('info_topic', ''),
                     encoding=c.get('encoding', ''),
                     compressed=bool(c.get('compressed', False)),
-                    active=bool(c.get('active', True))
+                    active=bool(c.get('active', True)),
+                    is_depth=bool(c.get('is_depth', False))
                 ))
             sensors['cameras'] = cameras
         else:

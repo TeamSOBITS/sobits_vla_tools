@@ -149,9 +149,7 @@ sensors:
     # Head camera depth stream (Orbbec Gemini 330), 16UC1 millimetres, already
     # registered to the color frame by the driver. compressedDepth is PNG-based
     # and lossless, unlike the lossy JPEG used for color.
-    # NOTE: recorded only. Do NOT add to cameras.names in the conversion config
-    # until conversion learns depth: decode_image_message() rescales 16UC1 to
-    # 8-bit RGB, which silently destroys the metric values.
+    # is_depth marks this for the metric-preserving depth path in conversion.
     - name: head_camera_depth
       compressed_topic: /sobit_home/head_camera/depth/image_raw/compressedDepth
       raw_topic: /sobit_home/head_camera/depth/image_raw
@@ -159,6 +157,7 @@ sensors:
       encoding: "16UC1"
       compressed: true
       active: true
+      is_depth: true
 
 ee_poses:
   - name: left

@@ -100,6 +100,7 @@ RobotDescriptorCpp loadRobotDescriptor(const std::string & robot_id)
       c.encoding = c_node["encoding"] ? c_node["encoding"].as<std::string>() : "";
       c.compressed = c_node["compressed"] ? c_node["compressed"].as<bool>() : false;
       c.active = c_node["active"] ? c_node["active"].as<bool>() : true;
+      c.is_depth = c_node["is_depth"] ? c_node["is_depth"].as<bool>() : false;
       desc.cameras.push_back(c);
     }
   }
