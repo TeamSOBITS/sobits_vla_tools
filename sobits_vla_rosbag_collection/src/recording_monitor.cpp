@@ -129,35 +129,41 @@ void RecordingMonitor::runMonitorTick()
     return;
   }
 
-  std::lock_guard<std::mutex> lock(monitor_mutex_);  // guard maps vs. concurrent stop()/start()
+  {
+    // Scoped: only the map-touching checks need monitor_mutex_. The
+    // max-duration callback below must run unlocked — it joins the
+    // previous auto-save thread, which calls back into stop() and
+    // would deadlock against this lock if held here.
+    std::lock_guard<std::mutex> lock(monitor_mutex_);  // guard maps vs. concurrent stop()/start()
 
-  // FPS checks
-  if (expected_sensor_fps_ > 0) {
-    if (fps_warmup_) {
-      for (auto & [topic, prev_count] : monitor_prev_counts_) {
-        auto it = monitor_counts_.find(topic);
-        if (it != monitor_counts_.end()) {
-          prev_count = it->second->load();
+    // FPS checks
+    if (expected_sensor_fps_ > 0) {
+      if (fps_warmup_) {
+        for (auto & [topic, prev_count] : monitor_prev_counts_) {
+          auto it = monitor_counts_.find(topic);
+          if (it != monitor_counts_.end()) {
+            prev_count = it->second->load();
+          }
         }
-      }
-      fps_warmup_ = false;
-    } else {
-      double interval = 2.0;
-      double threshold = expected_sensor_fps_ * 0.8;
-      for (auto & [topic, prev_count] : monitor_prev_counts_) {
-        auto it = monitor_counts_.find(topic);
-        if (it != monitor_counts_.end()) {
-          uint64_t current = it->second->load();
-          double rate = static_cast<double>(current - prev_count) / interval;
-          prev_count = current;
+        fps_warmup_ = false;
+      } else {
+        double interval = 2.0;
+        double threshold = expected_sensor_fps_ * 0.8;
+        for (auto & [topic, prev_count] : monitor_prev_counts_) {
+          auto it = monitor_counts_.find(topic);
+          if (it != monitor_counts_.end()) {
+            uint64_t current = it->second->load();
+            double rate = static_cast<double>(current - prev_count) / interval;
+            prev_count = current;
 
-          if (rate < threshold && rate > 0.0) {
-            RCLCPP_WARN(node_->get_logger(),
-              "FPS DROP: '%s' publishing at %.1f Hz (expected >= %.1f Hz)",
-              topic.c_str(), rate, static_cast<double>(expected_sensor_fps_));
-          } else if (rate == 0.0 && current > 0) {
-            RCLCPP_ERROR(node_->get_logger(),
-              "FPS STALL: '%s' stopped publishing!", topic.c_str());
+            if (rate < threshold && rate > 0.0) {
+              RCLCPP_WARN(node_->get_logger(),
+                "FPS DROP: '%s' publishing at %.1f Hz (expected >= %.1f Hz)",
+                topic.c_str(), rate, static_cast<double>(expected_sensor_fps_));
+            } else if (rate == 0.0 && current > 0) {
+              RCLCPP_ERROR(node_->get_logger(),
+                "FPS STALL: '%s' stopped publishing!", topic.c_str());
+            }
           }
         }
       }
