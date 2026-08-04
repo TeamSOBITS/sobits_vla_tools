@@ -95,7 +95,7 @@ class TrainNode(Node):
             'dataset.rename_map', [], _p('Feature rename map {old: new}'))
 
         self.declare_parameter(
-            'checkpoint.output_dir', './outputs/train', _p('Output directory for checkpoints'))
+            'checkpoint.output_dir', '', _p('Output directory for checkpoints'))
         self.declare_parameter(
             'checkpoint.resume', False, _p('Resume from last checkpoint in output_dir'))
         self.declare_parameter(
