@@ -58,8 +58,14 @@ from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from sobits_vla_common.launch.utils import default_pixi_manifest, pixi_prefix
+
 # Required for PI05 bfloat16 model loading on CUDA without OOM.
 os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
+
+# Both nodes here are sobits_vla_deploy executables -> same pixi env.
+_DEFAULT_PIXI_ENV = 'deploy-gpu'
+_DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
 def _str_to_bool(value: str) -> bool:
@@ -80,7 +86,7 @@ def _setup(context, *args, **kwargs):
     )
     lift_success_m = float(LaunchConfiguration('lift_success_m').perform(context))
     fall_z_drop_m = float(LaunchConfiguration('fall_z_drop_m').perform(context))
-    reset_settle_s = float(LaunchConfiguration('reset_settle_s').perform(context))
+    done_wait_margin_s = float(LaunchConfiguration('done_wait_margin_s').perform(context))
 
     pkg_config_dir = os.path.join(
         get_package_share_directory('sobits_vla_deploy'), 'config'
@@ -100,6 +106,11 @@ def _setup(context, *args, **kwargs):
         'gamepad_config.yaml',
     )
 
+    prefix = pixi_prefix(
+        LaunchConfiguration('pixi_env').perform(context),
+        LaunchConfiguration('pixi_manifest').perform(context),
+    )
+
     episode_log_dir = os.path.join(log_dir, model_label)
 
     overrides = {
@@ -117,6 +128,7 @@ def _setup(context, *args, **kwargs):
         name='sobits_vla_deploy',
         namespace=robot_name,
         output='screen',
+        prefix=prefix or None,
         parameters=[gamepad_config, config_file, overrides],
     )
 
@@ -125,13 +137,14 @@ def _setup(context, *args, **kwargs):
         executable='vla_experiment_runner',
         name='vla_experiment_runner',
         output='screen',
+        prefix=prefix or None,
         parameters=[{
             'use_sim_time': use_sim_time,
             'num_episodes': num_episodes,
             'command_service': '/vla/command',
             'episode_done_topic': '/vla/episode_done',
             'episode_timeout_s': episode_timeout_s,
-            'reset_settle_s': reset_settle_s,
+            'done_wait_margin_s': done_wait_margin_s,
         }],
     )
 
@@ -144,11 +157,59 @@ def _setup(context, *args, **kwargs):
         )
     )
 
-    return [deploy_node, runner_node, shutdown_on_runner_exit]
+    actions = [deploy_node, runner_node, shutdown_on_runner_exit]
+
+    # Optional controller bring-up for REAL trial runs: teleop input drivers
+    # (joy only — no teleop control node) + the gamepad client in deploy
+    # mode (play toggle, reset button, deadman trigger source).
+    controller = LaunchConfiguration('controller').perform(context).strip()
+    if controller:
+        from launch.actions import IncludeLaunchDescription
+        from launch.launch_description_sources import PythonLaunchDescriptionSource
+
+        actions.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(
+                get_package_share_directory('sobits_teleop'),
+                'launch', 'include', 'controller_input.launch.py')),
+            launch_arguments={
+                'robot_name': robot_name,
+                'device': controller,
+                'ros_ip': LaunchConfiguration('ros_ip').perform(context),
+                'use_sim_time': 'true' if use_sim_time else 'false',
+            }.items(),
+        ))
+        actions.append(Node(
+            package='sobits_vla_common',
+            executable='gamepad_clt_node',
+            name='gamepad_client',
+            namespace=robot_name,
+            output='screen',
+            parameters=[
+                gamepad_config,
+                {'gamepad.mode': 'deploy',
+                 'use_sim_time': use_sim_time},
+            ],
+        ))
+
+    return actions
 
 
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'controller',
+            default_value='',
+            description=(
+                'Bring up controller input (quest, ps4, ps5, keyboard) + '
+                'gamepad client in deploy mode for REAL trial runs. '
+                'Empty = none (sim default).'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'ros_ip',
+            default_value='127.0.0.1',
+            description='ROS IP for the Quest tcp endpoint (controller:=quest).',
+        ),
         DeclareLaunchArgument(
             'deploy_config',
             default_value='deploy_config_sobit_home_left_smolvla',
@@ -171,6 +232,28 @@ def generate_launch_description() -> LaunchDescription:
             'robot_name',
             default_value='sobit_home',
             description='Robot namespace for the deploy node.',
+        ),
+        DeclareLaunchArgument(
+            'pixi_env',
+            default_value=_DEFAULT_PIXI_ENV,
+            description=(
+                'pixi environment (Python deps) for both deploy nodes. '
+                'Use deploy-cpu without a GPU, or "" to disable the prefix.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'pixi_manifest',
+            default_value=_DEFAULT_PIXI_MANIFEST,
+            description='Path to pixi.toml (override for installed layouts).',
+        ),
+        DeclareLaunchArgument(
+            'done_wait_margin_s',
+            default_value='30.0',
+            description=(
+                'Runner grace period beyond episode_timeout_s before forcing '
+                'a STOP. Raise for real-robot runs where the scene is staged '
+                'with the safety trigger released after auto-PLAY.'
+            ),
         ),
         DeclareLaunchArgument(
             'num_episodes',
@@ -196,11 +279,6 @@ def generate_launch_description() -> LaunchDescription:
             'fall_z_drop_m',
             default_value='0.15',
             description='Robot world-z drop (m) above which it counts as fallen.',
-        ),
-        DeclareLaunchArgument(
-            'reset_settle_s',
-            default_value='6.0',
-            description='Seconds to wait for the world reset to settle between episodes.',
         ),
         OpaqueFunction(function=_setup),
     ])

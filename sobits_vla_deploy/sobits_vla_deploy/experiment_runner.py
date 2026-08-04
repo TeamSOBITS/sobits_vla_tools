@@ -32,8 +32,9 @@ Drives the sobits_vla_deploy node through N episodes:
   1. Call the /vla/command service with PLAY.
   2. Wait for /vla/episode_done (published by the deploy node when an episode
      auto-terminates on success / fall / timeout, or on a manual stop).
-  3. The deploy node resets the world on stop; wait reset_settle_s for the
-     teleport + detecting_pose move to settle.
+  3. The deploy node resets the world on stop and publishes episode_done
+     once the reset (teleports in sim + reset pose motion) has completed —
+     the next PLAY follows immediately, no time-based settle.
   4. Repeat.
 
 After the last episode the node logs a tally and shuts down so the launch
@@ -61,8 +62,6 @@ class ExperimentRunner(Node):
         self.declare_parameter('num_episodes', 20)
         self.declare_parameter('command_service', '/vla/command')
         self.declare_parameter('episode_done_topic', '/vla/episode_done')
-        # Time to let the world reset + detecting_pose move settle after a stop.
-        self.declare_parameter('reset_settle_s', 6.0)
         # Pause between settle and the next PLAY.
         self.declare_parameter('inter_episode_pause_s', 1.0)
         # Safety: how long to wait for an episode_done before forcing a STOP.
@@ -76,7 +75,6 @@ class ExperimentRunner(Node):
 
         self._num_episodes = int(self.get_parameter('num_episodes').value)
         self._command_service = str(self.get_parameter('command_service').value)
-        self._reset_settle_s = float(self.get_parameter('reset_settle_s').value)
         self._inter_episode_pause_s = float(
             self.get_parameter('inter_episode_pause_s').value
         )
@@ -125,10 +123,8 @@ class ExperimentRunner(Node):
 
     def run(self) -> None:
         self.get_logger().info(
-            'Experiment runner: {} episodes, service={}, done-wait={}s, '
-            'settle={}s.'.format(
-                self._num_episodes, self._command_service,
-                self._done_wait_s, self._reset_settle_s,
+            'Experiment runner: {} episodes, service={}, done-wait={}s.'.format(
+                self._num_episodes, self._command_service, self._done_wait_s,
             )
         )
         # Block until the deploy node finishes loading its policy and
@@ -148,8 +144,13 @@ class ExperimentRunner(Node):
         # spawn pose (a STOP while idle teleports robot+block + moves to
         # initial_pose). Without this, episode 1 begins from a stale pose.
         self.get_logger().info('Resetting world to start pose before episode 1 ...')
+        self._done_event.clear()
         self._send_command(VlaCommand.Request.STOP)
-        self._sleep(self._reset_settle_s + self._inter_episode_pause_s)
+        # episode_done is published once the reset (teleports + pose motion)
+        # has completed — no time-based settle needed.
+        if not self._done_event.wait(60.0):
+            self.get_logger().warn('Initial reset did not confirm within 60s; continuing.')
+        self._sleep(self._inter_episode_pause_s)
 
         outcomes: Counter = Counter()
         for ep in range(1, self._num_episodes + 1):
@@ -169,8 +170,9 @@ class ExperimentRunner(Node):
                     .format(ep, self._done_wait_s)
                 )
                 self._send_command(VlaCommand.Request.STOP)
-                # The forced STOP itself publishes episode_done; consume it.
-                self._done_event.wait(5.0)
+                # The forced STOP publishes episode_done after the reset
+                # (incl. the reset pose motion) completes.
+                self._done_event.wait(30.0)
                 outcome = self._last_outcome or 'forced_stop'
             else:
                 outcome = self._last_outcome
@@ -179,8 +181,8 @@ class ExperimentRunner(Node):
                 'Episode {}/{} outcome: {}'.format(ep, self._num_episodes, outcome)
             )
 
-            # Let the deploy node's world reset + detecting_pose settle.
-            self._sleep(self._reset_settle_s + self._inter_episode_pause_s)
+            # episode_done already confirmed the reset completed; brief pause.
+            self._sleep(self._inter_episode_pause_s)
 
         self.get_logger().info(
             'Experiment complete. Outcomes: {}'.format(dict(outcomes))
