@@ -7,12 +7,12 @@
       # NOTE: smolvla has no action_feature_names — the node maps actions
       # positionally, which is correct because the robot.groups order below
       # matches the dataset feature order exactly. Do not reorder groups.
-      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_smolvla_vlmft"
+      repo_id: "team-sobits/sobit_home_pnp_bottle_bin_merged_left_abs_smolvla_vlmft"
       policy_class: "lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy"
       device: "cuda"
       use_amp: false
       use_relative_actions: false
-      default_task_label: "Pick up the block"
+      default_task_label: "Throw the plastic bottle into the trash bin"
       dataset_repo_id: ""
 
     runtime:
@@ -51,9 +51,21 @@
       log_dir: "/tmp/vla_logs"
       tilt_threshold_deg: 30.0
       # Automatic episode termination thresholds.
-      episode_timeout_s: 60.0   # stop after 60 sim seconds
+      episode_timeout_s: 120.0   # stop after 60 sim seconds
       lift_success_m: 0.05      # block lifted > 5 cm -> success
       fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
+
+    reset:
+      # Reset moves the robot to this predefined pose via the action server
+      # with the given time allowance. Sim vs real is auto-detected from
+      # use_sim_time: in sim the world reset also teleports robot+block via
+      # Gazebo first and gz-based auto-termination is active; on the real
+      # robot only the pose motion runs (episode timeout still applies when
+      # logging is enabled).
+      pose_name: "vla_pose_on_table"
+      # Slower transition on the real robot (sim used 1.5 s).
+      duration_s: 10.0
+      action_name: "/sobit_home/move_to_pose"
 
     robot:
       # Morphology (joint groups, command topics, joints, max_joint_delta,
@@ -61,13 +73,19 @@
       #   sobits_vla_common/robots/sobit_home.robot.yaml
       # active_groups / active_cameras / active_mobile_base select the subset
       # used for this task (left-arm pickup) without re-listing joints/topics.
-      descriptor_id: sobit_home
+      # sobit_home_frozen == sobit_home with body + mobile_base immobilized.
+      # body and active_mobile_base MUST stay listed here: this model has no
+      # action_feature_names, so actions map positionally over
+      # joint_features + mobile_base_features. Removing body (-1) or the base
+      # (-3) would shrink the 20-dim vector the model was trained on and shift
+      # every arm/hand index. Freezing happens in the descriptor instead.
+      descriptor_id: sobit_home_frozen
       active_groups:
         - head
-        - body
+        - body          # frozen (max_joint_delta 0.0005) -- keeps slot 2
         - arm_left
         - hand_left
       active_cameras:
         - head_camera
         - hand_left_camera
-      active_mobile_base: true
+      active_mobile_base: true   # frozen via max_vel_* -- keeps slots 17-19
