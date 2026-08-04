@@ -355,6 +355,11 @@ class EpisodeLogger:
         self._prev_joint_delta = None
         self._reset_accumulators()
         with self._lock:
+            if self._file is not None:
+                # Defense in depth: begin_episode should be unreachable while a
+                # file is open, but don't leak the fd if it ever happens.
+                print('[WARN] begin_episode: closing already-open episode file.')
+                self._file.close()
             self._episode_idx += 1
             self._step_idx = 0
             self._t0 = monotonic()
