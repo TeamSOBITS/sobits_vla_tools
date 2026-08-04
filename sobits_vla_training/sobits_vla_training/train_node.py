@@ -124,6 +124,25 @@ class TrainNode(Node):
             'training.eval_freq', 20000, _p('Evaluate every N steps (0=disable)'))
 
         self.declare_parameter(
+            'training.optimizer_type', '',
+            _p("Override optimizer algorithm (empty=preset, 'sgd'=SGDConfig)"))
+        self.declare_parameter(
+            'training.optimizer_sgd.lr', 1e-3, _p('SGD learning rate'))
+        self.declare_parameter(
+            'training.optimizer_sgd.momentum', 0.0, _p('SGD momentum'))
+        self.declare_parameter(
+            'training.optimizer_sgd.dampening', 0.0, _p('SGD dampening'))
+        self.declare_parameter(
+            'training.optimizer_sgd.nesterov', False, _p('SGD Nesterov momentum'))
+        self.declare_parameter(
+            'training.optimizer_sgd.weight_decay', 0.0, _p('SGD weight decay'))
+        self.declare_parameter(
+            'training.optimizer_sgd.grad_clip_norm', 10.0, _p('SGD gradient clip norm'))
+        self.declare_parameter(
+            'training.scheduler_warmup_steps_override', 1000,
+            _p('Warmup steps for the override scheduler (optimizer_type set)'))
+
+        self.declare_parameter(
             'num_gpus', 1, _p('Number of GPUs (0=CPU, 1=single, >1=DDP)'))
 
         self.declare_parameter(
@@ -212,6 +231,11 @@ class TrainNode(Node):
             'training.steps', 'training.batch_size',
             'training.seed', 'training.use_policy_training_preset',
             'training.log_freq', 'training.eval_freq',
+            'training.optimizer_type', 'training.optimizer_sgd.lr',
+            'training.optimizer_sgd.momentum', 'training.optimizer_sgd.dampening',
+            'training.optimizer_sgd.nesterov', 'training.optimizer_sgd.weight_decay',
+            'training.optimizer_sgd.grad_clip_norm',
+            'training.scheduler_warmup_steps_override',
             'num_gpus',
             'wandb.enable', 'wandb.project', 'wandb.entity',
             'wandb.run_name', 'wandb.notes',

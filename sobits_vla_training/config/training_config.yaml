@@ -51,12 +51,24 @@
       # Random seed for reproducibility.
       seed: 1000
       # Use policy config's built-in optimizer / scheduler presets (recommended: true).
-      # Set false to override with training.optimizer / training.scheduler below.
+      # Automatically set false when optimizer_type below is non-empty.
       use_policy_training_preset: true
       # Log metrics every N steps.
       log_freq: 200
       # Run validation every N steps (0 = disable).
       eval_freq: 20000
+      # Set "sgd" to bypass the policy preset with SGDConfig (see optimizer_sgd below).
+      optimizer_type: ""
+      # SGDConfig fields, used only when optimizer_type is "sgd".
+      optimizer_sgd:
+        lr: 0.001
+        momentum: 0.0
+        dampening: 0.0
+        nesterov: false
+        weight_decay: 0.0
+        grad_clip_norm: 10.0
+      # Warmup steps for the constant-with-warmup scheduler paired with optimizer_type.
+      scheduler_warmup_steps_override: 1000
 
     # =========================================================================
     # Multi-GPU

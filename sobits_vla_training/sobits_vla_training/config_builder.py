@@ -221,7 +221,7 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
 
     peft_cfg, peft_extra = build_peft_config(params)
 
-    train_cfg = TrainPipelineConfig(
+    train_kwargs: dict[str, Any] = dict(
         dataset=dataset_cfg,
         policy=policy_cfg,
         output_dir=output_dir,
@@ -241,7 +241,52 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
         rename_map=rename_map,
     )
 
+    optimizer_override, scheduler_override = build_optimizer_scheduler_override(params)
+    if optimizer_override is not None:
+        # Override active: bypass the policy preset entirely.
+        train_kwargs['use_policy_training_preset'] = False
+        train_kwargs['optimizer'] = optimizer_override
+        train_kwargs['scheduler'] = scheduler_override
+
+    train_cfg = TrainPipelineConfig(**train_kwargs)
+
     return train_cfg, peft_extra
+
+
+def build_optimizer_scheduler_override(params: dict[str, Any]):
+    """
+    Build an (optimizer, scheduler) override pair, or (None, None) if unset.
+
+    Only active when training.optimizer_type is non-empty. Bypasses the
+    policy's own optimizer/scheduler preset entirely (see TrainPipelineConfig
+    .validate(): the preset always overwrites .optimizer/.scheduler unless
+    use_policy_training_preset=False, and both become mandatory in that mode).
+    Currently wires up SGDConfig only; add another `elif optimizer_type == ...`
+    branch here to support a second optimizer type.
+    """
+    optimizer_type: str = params.get('training.optimizer_type', '') or ''
+    if not optimizer_type:
+        return None, None
+
+    from sobits_vla_common.lerobot_adapter import ConstantWithWarmupSchedulerConfig, SGDConfig
+
+    if optimizer_type != 'sgd':
+        raise ValueError(
+            f"Unsupported training.optimizer_type: {optimizer_type!r} (only 'sgd' is wired up)"
+        )
+
+    optimizer_override = SGDConfig(
+        lr=params.get('training.optimizer_sgd.lr', 1e-3),
+        momentum=params.get('training.optimizer_sgd.momentum', 0.0),
+        dampening=params.get('training.optimizer_sgd.dampening', 0.0),
+        nesterov=params.get('training.optimizer_sgd.nesterov', False),
+        weight_decay=params.get('training.optimizer_sgd.weight_decay', 0.0),
+        grad_clip_norm=params.get('training.optimizer_sgd.grad_clip_norm', 10.0),
+    )
+    scheduler_override = ConstantWithWarmupSchedulerConfig(
+        num_warmup_steps=params.get('training.scheduler_warmup_steps_override', 1000),
+    )
+    return optimizer_override, scheduler_override
 
 
 def build_peft_config(params: dict[str, Any]):
