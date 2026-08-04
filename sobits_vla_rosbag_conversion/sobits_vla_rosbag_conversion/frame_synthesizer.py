@@ -80,14 +80,15 @@ class FrameSynthesizer:
         else:
             print(f'[ERROR] {msg}')
 
-    def _interpolate_vector(self, series, target_time, dim):
+    def _interpolate_vector(self, series, target_time, dim, times=None):
         """Linearly interpolates a time-series list of (t, list_of_floats) at target_time."""
         if not series:
             return [0.0] * dim
         if len(series) == 1:
             return series[0][1]
 
-        times = [s[0] for s in series]
+        if times is None:
+            times = [s[0] for s in series]
         idx = bisect.bisect_right(times, target_time)
 
         if idx == 0:
@@ -105,14 +106,15 @@ class FrameSynthesizer:
         alpha = (target_time - t_prev) / dt
         return [(1.0 - alpha) * val_prev[j] + alpha * val_next[j] for j in range(dim)]
 
-    def _interpolate_dict(self, series, target_time, keys):
+    def _interpolate_dict(self, series, target_time, keys, times=None):
         """Linearly interpolates a time-series list of (t, dict_of_floats) at target_time."""
         if not series:
             return {k: 0.0 for k in keys}
         if len(series) == 1:
             return {k: series[0][1].get(k, 0.0) for k in keys}
 
-        times = [s[0] for s in series]
+        if times is None:
+            times = [s[0] for s in series]
         idx = bisect.bisect_right(times, target_time)
 
         if idx == 0:
@@ -135,7 +137,7 @@ class FrameSynthesizer:
             res[k] = (1.0 - alpha) * v_prev + alpha * v_next
         return res
 
-    def _hold_dict(self, series, target_time, keys):
+    def _hold_dict(self, series, target_time, keys, times=None):
         """Zero-order hold of a (t, dict_of_floats) series at target_time.
 
         Commanded positions are discrete set-points, not samples of a
@@ -149,7 +151,8 @@ class FrameSynthesizer:
         if not series:
             return {k: 0.0 for k in keys}
 
-        times = [s[0] for s in series]
+        if times is None:
+            times = [s[0] for s in series]
         idx = bisect.bisect_right(times, target_time) - 1
         if idx < 0:
             # target_time precedes every command; the first one is the best
@@ -157,7 +160,7 @@ class FrameSynthesizer:
             idx = 0
         return {k: series[idx][1].get(k, 0.0) for k in keys}
 
-    def _get_nearest_image(self, series, target_time):
+    def _get_nearest_image(self, series, target_time, times=None):
         """Get the nearest image (msg, rawdata, connection, t) to target_time in the series."""
         if not series:
             return None, None, None, 0.0
@@ -165,7 +168,8 @@ class FrameSynthesizer:
             # entry is (t_sec, msg, rawdata, connection)
             return series[0][1], series[0][2], series[0][3], series[0][0]
 
-        times = [s[0] for s in series]
+        if times is None:
+            times = [s[0] for s in series]
         idx = bisect.bisect_right(times, target_time)
 
         if idx == 0:
@@ -181,11 +185,12 @@ class FrameSynthesizer:
         else:
             return msg_next, raw_next, conn_next, t_next
 
-    def _any_arrived_in_interval(self, series, t_start, t_end):
+    def _any_arrived_in_interval(self, series, t_start, t_end, times=None):
         """Check if any message in the series arrived in the interval (t_start, t_end]."""
         if not series:
             return False
-        times = [s[0] for s in series]
+        if times is None:
+            times = [s[0] for s in series]
         idx = bisect.bisect_right(times, t_start)
         if idx < len(times) and times[idx] <= t_end:
             return True
@@ -215,6 +220,26 @@ class FrameSynthesizer:
         # Separate pos and vel for joints to simplify interpolation dict helper
         joint_pos_series = [(s[0], s[1]) for s in joint_states_series]
         joint_vel_series = [(s[0], s[2]) for s in joint_states_series]
+
+        # Precompute timestamp arrays once; series are fixed for the episode
+        joint_pos_times = [s[0] for s in joint_pos_series]
+        joint_vel_times = [s[0] for s in joint_vel_series]
+        joint_states_times = [s[0] for s in joint_states_series]
+        cmd_vel_times = [s[0] for s in cmd_vel_series]
+        odom_times = [s[0] for s in odom_series]
+        cam_series_times = {
+            cam_name: [s[0] for s in series] for cam_name, series in cam_series.items()
+        }
+
+        # Partition commands by feature once, instead of per-frame per-feature
+        cmd_series_by_feature = {feat: [] for feat in self.action_features}
+        for t, d in cmd_joints_series:
+            for feat in self.action_features:
+                if feat in d:
+                    cmd_series_by_feature[feat].append((t, d))
+        cmd_series_by_feature_times = {
+            feat: [t for t, _ in series] for feat, series in cmd_series_by_feature.items()
+        }
 
         frames = []
         skipped_static = 0
@@ -259,7 +284,9 @@ class FrameSynthesizer:
                 if cam_name == self.primary_camera:
                     continue
                 msg_img, raw_img, conn_img, t_img = (
-                    self._get_nearest_image(cam_series[cam_name], t_sec)
+                    self._get_nearest_image(
+                        cam_series[cam_name], t_sec, times=cam_series_times[cam_name]
+                    )
                 )
                 if msg_img is None:
                     decoding_failed = True
@@ -284,29 +311,39 @@ class FrameSynthesizer:
             max_camera_diff = max(img_times) - min(img_times)
 
             # Interpolate joint state
-            joint_pos = self._interpolate_dict(joint_pos_series, t_sec, self.action_features)
-            joint_vel = self._interpolate_dict(joint_vel_series, t_sec, self.action_features)
+            joint_pos = self._interpolate_dict(
+                joint_pos_series, t_sec, self.action_features, times=joint_pos_times
+            )
+            joint_vel = self._interpolate_dict(
+                joint_vel_series, t_sec, self.action_features, times=joint_vel_times
+            )
 
             # Check if we have active base
             if self.has_mobile_base:
-                cmd_vel = self._interpolate_vector(cmd_vel_series, t_sec, len(self.base_keys))
-                odom_vel = self._interpolate_vector(odom_series, t_sec, len(self.base_keys))
+                cmd_vel = self._interpolate_vector(
+                    cmd_vel_series, t_sec, len(self.base_keys), times=cmd_vel_times
+                )
+                odom_vel = self._interpolate_vector(
+                    odom_series, t_sec, len(self.base_keys), times=odom_times
+                )
             else:
                 cmd_vel = None
                 odom_vel = None
 
             # Check sync differences
-            closest_joint_t = self._get_closest_t(joint_states_series, t_sec)
+            closest_joint_t = self._get_closest_t(
+                joint_states_series, t_sec, times=joint_states_times
+            )
             joint_diff = abs(t_sec - closest_joint_t)
 
             cmd_vel_diff = 0.0
             if self.has_mobile_base:
-                closest_cmd_vel_t = self._get_closest_t(cmd_vel_series, t_sec)
+                closest_cmd_vel_t = self._get_closest_t(cmd_vel_series, t_sec, times=cmd_vel_times)
                 cmd_vel_diff = abs(t_sec - closest_cmd_vel_t)
 
             odom_diff = 0.0
             if self.has_mobile_base:
-                closest_odom_t = self._get_closest_t(odom_series, t_sec)
+                closest_odom_t = self._get_closest_t(odom_series, t_sec, times=odom_times)
                 odom_diff = abs(t_sec - closest_odom_t)
 
             max_sync = max(max_camera_diff, joint_diff, cmd_vel_diff, odom_diff)
@@ -333,14 +370,19 @@ class FrameSynthesizer:
             # next one arrives (see _hold_dict).
             action = []
             for i, feat in enumerate(self.action_features):
-                cmd_series_for_feat = [(t, d) for t, d in cmd_joints_series if feat in d]
+                cmd_series_for_feat = cmd_series_by_feature[feat]
                 if cmd_series_for_feat and t_sec >= cmd_series_for_feat[0][0]:
-                    cmd_val = self._hold_dict(cmd_series_for_feat, t_sec, [feat])[feat]
+                    cmd_val = self._hold_dict(
+                        cmd_series_for_feat, t_sec, [feat],
+                        times=cmd_series_by_feature_times[feat],
+                    )[feat]
                     action.append(cmd_val)
                 else:
                     # Fall back to future measured state
                     t_next = t_sec + (1.0 / self.fps if self.fps > 0 else 0.1)
-                    next_joint_pos = self._interpolate_dict(joint_pos_series, t_next, [feat])
+                    next_joint_pos = self._interpolate_dict(
+                        joint_pos_series, t_next, [feat], times=joint_pos_times
+                    )
                     action.append(next_joint_pos[feat])
 
             # If use_relative_actions is True, subtract joint state from
@@ -458,10 +500,11 @@ class FrameSynthesizer:
             skipped_downsample,
         )
 
-    def _get_closest_t(self, series, target):
+    def _get_closest_t(self, series, target, times=None):
         if not series:
             return target
-        times = [s[0] for s in series]
+        if times is None:
+            times = [s[0] for s in series]
         idx = bisect.bisect_left(times, target)
         if idx == 0:
             return times[0]
