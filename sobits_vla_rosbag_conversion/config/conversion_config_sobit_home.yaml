@@ -70,3 +70,10 @@
       primary: "head_camera"
       names: ["head_camera", "hand_left_camera", "hand_right_camera"]
       compressed: [true, true, true]
+
+    # Depth cameras: metric-preserving path, synced like a secondary RGB camera.
+    # Disabled by default (empty names) — first real-world validation pending.
+    # To enable: names: ["head_camera_depth"], compressed: [true].
+    depth_cameras:
+      names: [""]
+      compressed: [false]
