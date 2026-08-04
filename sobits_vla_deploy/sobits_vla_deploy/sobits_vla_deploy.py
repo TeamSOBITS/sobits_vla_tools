@@ -35,8 +35,6 @@ from threading import Lock, Thread  # noqa: E402
 from typing import Any, Dict, List, Optional  # noqa: E402
 
 from builtin_interfaces.msg import Duration  # noqa: E402
-import cv2  # noqa: E402
-from cv_bridge import CvBridge  # noqa: E402
 from geometry_msgs.msg import Twist  # noqa: E402
 from nav_msgs.msg import Odometry  # noqa: E402
 import numpy as np  # noqa: E402
@@ -52,6 +50,7 @@ from sensor_msgs.msg import CompressedImage, Image, JointState, Joy  # noqa: E40
 from sobits_interfaces.action import MoveToPose  # noqa: E402
 from sobits_interfaces.srv import VlaCommand, VlaUpdateTask  # noqa: E402
 from sobits_vla_common import runtime_deps  # noqa: E402
+from sobits_vla_common.image_codec import decode_image_message  # noqa: E402
 from sobits_vla_common.lerobot_compat import apply_deploy_patches  # noqa: E402
 from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.action_executor import ActionExecutor  # noqa: E402
@@ -95,7 +94,6 @@ class LeRobotDeployNode(Node):
 
         self._cb_group = ReentrantCallbackGroup()
         self._lock = Lock()
-        self._bridge = CvBridge()
 
         self._configure_parameters()
         self._load_robot_profile()
@@ -970,26 +968,19 @@ class LeRobotDeployNode(Node):
     def _on_image(self, msg: Any, cam_name: str) -> None:
         encoding = self._camera_encodings.get(cam_name, 'rgb8')
         is_compressed = self._camera_compressed.get(cam_name, False)
+        # cv_bridge segfaults under this env's NumPy 2; avoid it entirely.
         try:
-            if is_compressed:
-                # NOT cv_bridge.compressed_imgmsg_to_cv2: apt's cv_bridge_boost
-                # is built against NumPy 1.x and SEGFAULTS (SIGSEGV, not an
-                # exception -- the except below cannot catch it) under this
-                # env's NumPy 2 whenever desired_encoding forces a cvtColor2
-                # conversion, which 'rgb8' always does. cv2.imdecode is the
-                # env's own NumPy-2-native build, and this is exactly what
-                # cv_bridge does internally: decode to BGR, then convert.
-                buf = np.frombuffer(msg.data, dtype=np.uint8)
-                image = cv2.imdecode(buf, cv2.IMREAD_COLOR)  # always BGR
-                if image is None:
-                    raise ValueError('cv2.imdecode returned None')
-                if encoding == 'rgb8':
-                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            else:
-                image = self._bridge.imgmsg_to_cv2(msg, desired_encoding=encoding)
+            image = decode_image_message(msg)
         except Exception as exc:
+            image = None
+            decode_exc = exc
+        else:
+            decode_exc = None
+        if image is None:
             self.get_logger().warn(
-                'Image decode failed for {!r}: {}'.format(cam_name, exc),
+                'Image decode failed for {!r} (encoding={!r}, compressed={}): {}'.format(
+                    cam_name, encoding, is_compressed, decode_exc
+                ),
                 throttle_duration_sec=5.0,
             )
             return

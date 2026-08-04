@@ -20,7 +20,6 @@
 
   <buildtool_depend>ament_python</buildtool_depend>
   <depend>sobits_vla_common</depend>
-  <exec_depend>cv_bridge</exec_depend>
   <!-- controller:=... bring-up includes the teleop input-driver launch -->
   <exec_depend>sobits_teleop</exec_depend>
   <exec_depend>launch</exec_depend>

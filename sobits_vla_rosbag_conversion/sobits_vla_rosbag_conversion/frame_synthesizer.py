@@ -26,90 +26,11 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import bisect
-import io
 
-import cv2
 import numpy as np
+from sobits_vla_common.image_codec import decode_image_message
 from sobits_vla_rosbag_conversion.tf_buffer import mat_to_pose6d, OfflineTFTree
 import torch
-
-try:
-    from PIL import Image as PILImage
-except Exception:
-    PILImage = None
-
-
-def decode_image_message(msg) -> np.ndarray | None:
-    """Decode ROS image/compressed-image message into RGB uint8 HWC array."""
-    # CompressedImage-like messages usually expose a `format` field.
-    if hasattr(msg, 'format'):
-        data = msg.data
-        if isinstance(data, memoryview):
-            data = data.tobytes()
-        if isinstance(data, (bytes, bytearray)):
-            encoded = np.frombuffer(data, dtype=np.uint8)
-        else:
-            # rosbags can surface sequence payloads as Python lists/arrays.
-            encoded = np.asarray(data, dtype=np.uint8)
-
-        if encoded.size == 0:
-            return None
-
-        # Preferred path: OpenCV decode (fast). Some environments can fail due
-        # OpenCV/Numpy ABI mismatch, so we fall back to Pillow decode.
-        try:
-            img = cv2.imdecode(np.ascontiguousarray(encoded), cv2.IMREAD_UNCHANGED)
-        except Exception:
-            img = None
-
-        if img is not None:
-            if img.ndim == 2:
-                return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-            if img.shape[2] == 4:
-                return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
-            return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        if PILImage is None:
-            return None
-        try:
-            pil_img = PILImage.open(io.BytesIO(encoded.tobytes())).convert('RGB')
-            return np.asarray(pil_img, dtype=np.uint8)
-        except Exception:
-            return None
-
-    # Raw Image message path — decode manually
-    encoding = getattr(msg, 'encoding', '')
-    data = msg.data
-    if isinstance(data, memoryview):
-        data = bytes(data)
-    raw = np.frombuffer(data, dtype=np.uint8)
-    h, w = msg.height, msg.width
-    if encoding in ('mono8', '8UC1'):
-        img = raw.reshape(h, w)
-        return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-    if encoding in ('mono16', '16UC1'):
-        img = np.frombuffer(data, dtype=np.uint16).reshape(h, w)
-        img8 = (img >> 8).astype(np.uint8)
-        return cv2.cvtColor(img8, cv2.COLOR_GRAY2RGB)
-    if encoding in ('rgb8',):
-        return raw.reshape(h, w, 3).copy()
-    if encoding in ('bgr8',):
-        img = raw.reshape(h, w, 3)
-        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    if encoding in ('rgba8',):
-        img = raw.reshape(h, w, 4)
-        return cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
-    if encoding in ('bgra8',):
-        img = raw.reshape(h, w, 4)
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
-    # Fallback: try to reshape as BGR and convert
-    channels = len(raw) // (h * w) if h * w > 0 else 3
-    img = raw.reshape(h, w, channels)
-    if img.ndim == 2:
-        return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-    if img.shape[2] == 4:
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
-    return img
 
 
 class FrameSynthesizer:
