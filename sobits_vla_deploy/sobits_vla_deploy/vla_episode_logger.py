@@ -283,6 +283,7 @@ class EpisodeLogger:
         fall_z_drop_m: float = 0.15,
         enabled: bool = True,
         model_repo_id: str = '',
+        sim_enabled: bool = True,
     ) -> None:
         self._model_repo_id = model_repo_id
         self._log_dir = Path(log_dir)
@@ -321,9 +322,15 @@ class EpisodeLogger:
         self._poller_stop = threading.Event()
         self._poller_thread: Optional[threading.Thread] = None
 
+        # On the real robot (sim_enabled=False) there is no Gazebo to poll:
+        # cached poses stay None, so block-lift/fall auto-termination is
+        # unavailable (timeout still works) and per-step block/robot poses
+        # log as null. Skipping the poller avoids 5 Hz failing gz calls.
+        self._sim_enabled = sim_enabled
         if self.enabled:
             self._log_dir.mkdir(parents=True, exist_ok=True)
-            self._start_poller()
+            if self._sim_enabled:
+                self._start_poller()
 
     # ------------------------------------------------------------------
     # Public API

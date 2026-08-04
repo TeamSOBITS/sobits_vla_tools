@@ -35,18 +35,21 @@ from threading import Lock, Thread  # noqa: E402
 from typing import Any, Dict, List, Optional  # noqa: E402
 
 from builtin_interfaces.msg import Duration  # noqa: E402
+import cv2  # noqa: E402
 from cv_bridge import CvBridge  # noqa: E402
 from geometry_msgs.msg import Twist  # noqa: E402
 from nav_msgs.msg import Odometry  # noqa: E402
 import numpy as np  # noqa: E402
 import rclpy  # noqa: E402
+from rclpy.action import ActionClient  # noqa: E402
 from rclpy.callback_groups import ReentrantCallbackGroup  # noqa: E402
 import rclpy.duration  # noqa: E402
 from rclpy.executors import MultiThreadedExecutor  # noqa: E402
 from rclpy.node import Node  # noqa: E402
-from rclpy.qos import QoSProfile  # noqa: E402
+from rclpy.qos import QoSProfile, ReliabilityPolicy  # noqa: E402
 import rclpy.time  # noqa: E402
-from sensor_msgs.msg import CompressedImage, Image, JointState  # noqa: E402
+from sensor_msgs.msg import CompressedImage, Image, JointState, Joy  # noqa: E402
+from sobits_interfaces.action import MoveToPose  # noqa: E402
 from sobits_interfaces.srv import VlaCommand, VlaUpdateTask  # noqa: E402
 from sobits_vla_common import runtime_deps  # noqa: E402
 from sobits_vla_common.lerobot_compat import apply_deploy_patches  # noqa: E402
@@ -201,6 +204,13 @@ class LeRobotDeployNode(Node):
                 callback_group=self._cb_group,
             )
 
+        # Camera drivers (orbbec, realsense, ...) publish sensor data
+        # BEST_EFFORT. A RELIABLE subscriber is an incompatible QoS match and
+        # silently receives NOTHING -- no error, no callback, just a policy
+        # that never sees an image. Sensor QoS is required here.
+        image_qos = QoSProfile(depth=1)
+        image_qos.reliability = ReliabilityPolicy.BEST_EFFORT
+
         self._camera_subs = []
         for cam_name, cam_topic in self._camera_topics.items():
             is_compressed = self._camera_compressed.get(cam_name, False)
@@ -209,7 +219,7 @@ class LeRobotDeployNode(Node):
                 msg_type,
                 cam_topic,
                 lambda msg, name=cam_name: self._on_image(msg, name),
-                qos,
+                image_qos,
                 callback_group=self._cb_group,
             )
             self._camera_subs.append(sub)
@@ -298,10 +308,38 @@ class LeRobotDeployNode(Node):
             fall_z_drop_m=self._fall_z_drop_m,
             enabled=self._logging_enabled,
             model_repo_id=self._model_repo_id,
+            sim_enabled=self._sim_enabled,
         )
         if self._logging_enabled:
             self.get_logger().info(
                 'Episode logging enabled → {}'.format(self._log_dir)
+            )
+
+        # Reset pose action client — callbacks run on the node's reentrant
+        # group, served by the spinning MultiThreadedExecutor, so the reset
+        # worker thread can block on the futures safely.
+        self._reset_pose_client = ActionClient(
+            self, MoveToPose, self._reset_action_name,
+            callback_group=self._cb_group,
+        )
+        # Lazy ros_gz SetEntityPose client (sim teleports); falls back to
+        # the gz CLI when the bridge doesn't expose the service.
+        self._set_pose_client = None
+
+        # Deadman safety trigger state (Joy timestamped with a monotonic
+        # clock so a paused sim can't keep a stale press alive).
+        self._last_joy: Optional[Joy] = None
+        self._last_joy_rx: float = 0.0
+        self._safety_was_pressed = False
+        if self._safety_enabled:
+            self._joy_sub = self.create_subscription(
+                Joy, 'joy', self._on_joy, QoSProfile(depth=10)
+            )
+            self.get_logger().info(
+                'Safety trigger ENABLED (index {}, joy timeout {:.2f}s) — '
+                'actions are commanded only while held.'.format(
+                    self._safety_trigger_index, self._safety_joy_timeout_s
+                )
             )
 
         # Sim-time of the current episode start, and a topic the experiment
@@ -400,6 +438,21 @@ class LeRobotDeployNode(Node):
         self.declare_parameter('logging.fall_z_drop_m', 0.15)
 
         # Simulation reset parameters
+        # Reset motion (applies in sim AND on the real robot): move to a
+        # predefined pose via the action server with the given duration.
+        self.declare_parameter('reset.pose_name', 'initial_pose')
+        # Time allowance handed to the action for the reset motion — raise
+        # on the real robot where fast transitions are unsafe.
+        self.declare_parameter('reset.duration_s', 1.5)
+        self.declare_parameter('reset.action_name', '/sobit_home/move_to_pose')
+
+        # Deadman safety trigger (real robot): generated actions are only
+        # commanded while the trigger is held. Values come from the shared
+        # gamepad_config.yaml; index follows the GamepadClient convention
+        # (negative = axis with >0.5 pressed, non-negative = button).
+        self.declare_parameter('gamepad.safety.enabled', False)
+        self.declare_parameter('gamepad.safety.trigger_index', -4)
+        self.declare_parameter('gamepad.safety.joy_timeout_s', 0.5)
         self.declare_parameter('sim.world_name', 'simple_data_collection')
         self.declare_parameter('sim.robot_model_name', 'sobit_home')
         self.declare_parameter('sim.block_model_name', 'box_to_pick')
@@ -422,6 +475,23 @@ class LeRobotDeployNode(Node):
         )
         self._lift_success_m = float(self.get_parameter('logging.lift_success_m').value)
         self._fall_z_drop_m = float(self.get_parameter('logging.fall_z_drop_m').value)
+        # Sim vs real is derived from use_sim_time (set true by the sim
+        # launches): in sim, world resets also teleport robot+block via
+        # Gazebo and the episode logger polls gz poses; on the real robot
+        # only the reset pose motion runs.
+        self._sim_enabled = bool(self.get_parameter('use_sim_time').value)
+        self._reset_pose_name = str(self.get_parameter('reset.pose_name').value)
+        self._reset_pose_duration_s = float(
+            self.get_parameter('reset.duration_s').value
+        )
+        self._reset_action_name = str(self.get_parameter('reset.action_name').value)
+        self._safety_enabled = bool(self.get_parameter('gamepad.safety.enabled').value)
+        self._safety_trigger_index = int(
+            self.get_parameter('gamepad.safety.trigger_index').value
+        )
+        self._safety_joy_timeout_s = float(
+            self.get_parameter('gamepad.safety.joy_timeout_s').value
+        )
         self._sim_world_name = str(self.get_parameter('sim.world_name').value)
         self._sim_robot_model = str(self.get_parameter('sim.robot_model_name').value)
         self._sim_block_model = str(self.get_parameter('sim.block_model_name').value)
@@ -696,8 +766,15 @@ class LeRobotDeployNode(Node):
                 )
         return SetParametersResult(successful=True)
 
-    def _reset_episode_state(self) -> None:
-        """Reset all per-episode model state after a stop/world-reset."""
+    def _reset_episode_state(self, outcome: Optional[str] = None) -> None:
+        """
+        Reset all per-episode model state after a stop/world-reset.
+
+        When ``outcome`` is given, /vla/episode_done is published by the
+        reset thread AFTER the world/pose reset completes — so a listener
+        (the experiment runner) knows the system is ready for the next
+        PLAY without any time-based settle.
+        """
         self._chunk_buffer.clear()
         if hasattr(self._policy, 'reset'):
             self._policy.reset()
@@ -711,49 +788,132 @@ class LeRobotDeployNode(Node):
         self._obs_builder.clear_prev_ee_pose()
         self._inference_engine.clear_single_step_result()
         self.get_logger().info('Episode model state reset.')
-        Thread(target=self._do_world_reset, daemon=True).start()
+        Thread(target=self._do_world_reset, args=(outcome,), daemon=True).start()
 
-    def _do_world_reset(self) -> None:
-        """Teleport robot+block, then move robot to initial_pose via action."""
-        import subprocess
-        from sobits_vla_deploy.vla_episode_logger import _gz_set_pose
-        sx, sy, sz, sqx, sqy, sqz, sqw = self._sim_spawn
-        bx, by, bz = self._sim_block_reset
-        ok_robot = _gz_set_pose(
-            self._sim_world_name, self._sim_robot_model,
-            sx, sy, sz, sqx, sqy, sqz, sqw,
-        )
-        ok_block = _gz_set_pose(
-            self._sim_world_name, self._sim_block_model,
-            bx, by, bz, 0.0, 0.0, 0.0, 1.0,
-        )
-        self.get_logger().info(
-            'World reset: robot={} block={}'.format(ok_robot, ok_block)
-        )
-        goal = (
-            "pose_name: 'initial_pose'\n"
-            'time_allowance:\n'
-            '  sec: 1\n'
-            '  nanosec: 500000000'
-        )
+    @staticmethod
+    def _wait_future(future, timeout_s: float) -> bool:
+        """Block a worker thread until an rclpy future resolves (executor spins it)."""
+        from threading import Event
+        done = Event()
+        future.add_done_callback(lambda _f: done.set())
+        return done.wait(timeout=timeout_s)
+
+    def _set_entity_pose(
+        self, name: str,
+        x: float, y: float, z: float,
+        qx: float, qy: float, qz: float, qw: float,
+    ) -> bool:
+        """
+        Teleport a Gazebo entity.
+
+        Prefers the bridged ros_gz SetEntityPose service
+        (/world/<world>/set_pose); falls back to the `gz service` CLI when
+        the bridge does not expose it.
+        """
         try:
-            result = subprocess.run(
-                [
-                    'ros2', 'action', 'send_goal',
-                    '/sobit_home/move_to_pose',
-                    'sobits_interfaces/action/MoveToPose',
-                    goal,
-                ],
-                capture_output=True, text=True, timeout=10.0,
+            from ros_gz_interfaces.msg import Entity
+            from ros_gz_interfaces.srv import SetEntityPose
+
+            if self._set_pose_client is None:
+                self._set_pose_client = self.create_client(
+                    SetEntityPose,
+                    '/world/{}/set_pose'.format(self._sim_world_name),
+                    callback_group=self._cb_group,
+                )
+            if self._set_pose_client.wait_for_service(timeout_sec=1.0):
+                req = SetEntityPose.Request()
+                req.entity = Entity(name=name, type=Entity.MODEL)
+                req.pose.position.x = float(x)
+                req.pose.position.y = float(y)
+                req.pose.position.z = float(z)
+                req.pose.orientation.x = float(qx)
+                req.pose.orientation.y = float(qy)
+                req.pose.orientation.z = float(qz)
+                req.pose.orientation.w = float(qw)
+                fut = self._set_pose_client.call_async(req)
+                if self._wait_future(fut, timeout_s=3.0) and fut.result() is not None:
+                    return bool(fut.result().success)
+                self.get_logger().warn(
+                    'SetEntityPose service call timed out — falling back to gz CLI.'
+                )
+        except ImportError:
+            pass
+        from sobits_vla_deploy.vla_episode_logger import _gz_set_pose
+        return _gz_set_pose(self._sim_world_name, name, x, y, z, qx, qy, qz, qw)
+
+    def _do_world_reset(self, outcome: Optional[str] = None) -> None:
+        """Reset the scene: teleports (sim only), then the reset pose action."""
+        try:
+            self._run_world_reset()
+        finally:
+            if outcome is not None:
+                self._publish_episode_done(outcome)
+
+    def _run_world_reset(self) -> None:
+        """Teleports (sim only) + reset pose action; blocking."""
+        if self._sim_enabled:
+            sx, sy, sz, sqx, sqy, sqz, sqw = self._sim_spawn
+            bx, by, bz = self._sim_block_reset
+            ok_robot = self._set_entity_pose(
+                self._sim_robot_model, sx, sy, sz, sqx, sqy, sqz, sqw
             )
-            ok_pose = 'succeeded' in result.stdout.lower() or result.returncode == 0
-            self.get_logger().info('move_to_pose initial_pose: {}'.format(
-                'OK' if ok_pose else 'FAIL (rc={})'.format(result.returncode)
-            ))
-        except subprocess.TimeoutExpired:
-            self.get_logger().warn('move_to_pose timed out after 10s')
-        except Exception as exc:
-            self.get_logger().warn('move_to_pose error: {}'.format(exc))
+            ok_block = self._set_entity_pose(
+                self._sim_block_model, bx, by, bz, 0.0, 0.0, 0.0, 1.0
+            )
+            self.get_logger().info(
+                'World reset: robot={} block={}'.format(ok_robot, ok_block)
+            )
+        else:
+            self.get_logger().info(
+                'Real-robot reset: sending pose {!r} only.'.format(
+                    self._reset_pose_name
+                )
+            )
+
+        if not self._reset_pose_client.wait_for_server(timeout_sec=3.0):
+            self.get_logger().error(
+                'Reset action server {!r} unavailable — robot NOT re-posed.'.format(
+                    self._reset_action_name
+                )
+            )
+            return
+
+        goal = MoveToPose.Goal()
+        goal.pose_name = self._reset_pose_name
+        goal.time_allowance.sec = int(self._reset_pose_duration_s)
+        goal.time_allowance.nanosec = int(
+            (self._reset_pose_duration_s - int(self._reset_pose_duration_s)) * 1e9
+        )
+
+        send_fut = self._reset_pose_client.send_goal_async(goal)
+        if not self._wait_future(send_fut, timeout_s=5.0):
+            self.get_logger().error('Reset goal send timed out.')
+            return
+        goal_handle = send_fut.result()
+        if goal_handle is None or not goal_handle.accepted:
+            self.get_logger().error('Reset goal rejected by the action server.')
+            return
+
+        result_fut = goal_handle.get_result_async()
+        if not self._wait_future(
+            result_fut, timeout_s=self._reset_pose_duration_s + 10.0
+        ):
+            self.get_logger().error(
+                'Reset motion did not finish within {:.0f}s — cancelling.'.format(
+                    self._reset_pose_duration_s + 10.0
+                )
+            )
+            goal_handle.cancel_goal_async()
+            return
+
+        result = result_fut.result().result
+        self.get_logger().info(
+            'move_to_pose {}: {}{}'.format(
+                self._reset_pose_name,
+                'OK' if result.success else 'FAIL',
+                ' ({})'.format(result.message) if result.message else '',
+            )
+        )
 
     def _on_update_task(
         self,
@@ -781,7 +941,12 @@ class LeRobotDeployNode(Node):
                 self.get_logger().info('VLA execution started via service command PLAY.')
                 with self._lock:
                     self._cmd_vector = dict(self._obs_builder.state_vector)
-                self._episode_t0 = self.get_clock().now()
+                # With the safety trigger enabled the robot stays frozen until the
+                # operator engages it — start the episode clock on first
+                # engagement instead of at PLAY (see the safety gate).
+                self._episode_t0 = (
+                    None if self._safety_enabled else self.get_clock().now()
+                )
                 self._play_enabled = True
                 self._episode_logger.begin_episode()
                 self._inference_engine.update_play_enabled(True)
@@ -794,15 +959,13 @@ class LeRobotDeployNode(Node):
                 self._episode_logger.end_episode('manual_stop')
                 self._play_enabled = False
                 self._inference_engine.update_play_enabled(False)
-                self._reset_episode_state()
-                self._publish_episode_done('manual_stop')
+                self._reset_episode_state(outcome='manual_stop')
             else:
                 # Idle STOP = reset the world to the start pose. The experiment
                 # runner issues this before episode 1 so the first episode does
                 # not start from a stale (un-reset) pose.
                 self.get_logger().info('STOP while idle → resetting world to start pose.')
-                self._reset_episode_state()
-                self._publish_episode_done('reset')
+                self._reset_episode_state(outcome='reset')
             response.success = True
             response.message = 'STOP execution disabled'
             response.status = VlaCommand.Response.STATE_STOPPED
@@ -820,7 +983,12 @@ class LeRobotDeployNode(Node):
             self.get_logger().info('VLA execution started via /vla/play topic.')
             with self._lock:
                 self._cmd_vector = dict(self._obs_builder.state_vector)
-            self._episode_t0 = self.get_clock().now()
+            # With the safety trigger enabled the robot stays frozen until the
+                # operator engages it — start the episode clock on first
+                # engagement instead of at PLAY (see the safety gate).
+                self._episode_t0 = (
+                    None if self._safety_enabled else self.get_clock().now()
+                )
             self._play_enabled = True
             self._episode_logger.begin_episode()
             self._inference_engine.update_play_enabled(True)
@@ -829,8 +997,7 @@ class LeRobotDeployNode(Node):
             self._episode_logger.end_episode('manual_stop')
             self._play_enabled = False
             self._inference_engine.update_play_enabled(False)
-            self._reset_episode_state()
-            self._publish_episode_done('manual_stop')
+            self._reset_episode_state(outcome='manual_stop')
 
     def _auto_stop_episode(self, outcome: str) -> None:
         """Terminate the current episode automatically and notify the runner."""
@@ -843,8 +1010,7 @@ class LeRobotDeployNode(Node):
         # Stop the base immediately so the robot does not drift during reset.
         if self._base_pub is not None:
             self._base_pub.publish(Twist())
-        self._reset_episode_state()
-        self._publish_episode_done(outcome)
+        self._reset_episode_state(outcome=outcome)
 
     def _publish_episode_done(self, outcome: str) -> None:
         self._episode_t0 = None
@@ -883,7 +1049,19 @@ class LeRobotDeployNode(Node):
         is_compressed = self._camera_compressed.get(cam_name, False)
         try:
             if is_compressed:
-                image = self._bridge.compressed_imgmsg_to_cv2(msg, desired_encoding=encoding)
+                # NOT cv_bridge.compressed_imgmsg_to_cv2: apt's cv_bridge_boost
+                # is built against NumPy 1.x and SEGFAULTS (SIGSEGV, not an
+                # exception -- the except below cannot catch it) under this
+                # env's NumPy 2 whenever desired_encoding forces a cvtColor2
+                # conversion, which 'rgb8' always does. cv2.imdecode is the
+                # env's own NumPy-2-native build, and this is exactly what
+                # cv_bridge does internally: decode to BGR, then convert.
+                buf = np.frombuffer(msg.data, dtype=np.uint8)
+                image = cv2.imdecode(buf, cv2.IMREAD_COLOR)  # always BGR
+                if image is None:
+                    raise ValueError('cv2.imdecode returned None')
+                if encoding == 'rgb8':
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             else:
                 image = self._bridge.imgmsg_to_cv2(msg, desired_encoding=encoding)
         except Exception as exc:
@@ -893,6 +1071,26 @@ class LeRobotDeployNode(Node):
             )
             return
         self._obs_builder.update_image(cam_name, image)
+
+    def _on_joy(self, msg: Joy) -> None:
+        from time import monotonic
+        self._last_joy = msg
+        self._last_joy_rx = monotonic()
+
+    def _safety_pressed(self) -> bool:
+        """Deadman state; released when stale, missing, or not held."""
+        from time import monotonic
+        if self._last_joy is None:
+            return False
+        if monotonic() - self._last_joy_rx > self._safety_joy_timeout_s:
+            return False
+        idx = self._safety_trigger_index
+        try:
+            if idx < 0:
+                return float(self._last_joy.axes[abs(idx)]) > 0.5
+            return int(self._last_joy.buttons[idx]) != 0
+        except IndexError:
+            return False
 
     def _publish_next_action(self) -> None:
         if not self._play_enabled:
@@ -909,6 +1107,31 @@ class LeRobotDeployNode(Node):
             outcome = self._episode_logger.evaluate_termination(elapsed)
             if outcome is not None:
                 self._auto_stop_episode(outcome)
+                return
+
+        if self._safety_enabled:
+            if not self._safety_pressed():
+                if self._safety_was_pressed:
+                    self.get_logger().warn(
+                        'Safety trigger released — holding commands.'
+                    )
+                    self._safety_was_pressed = False
+                if self._base_pub is not None:
+                    self._base_pub.publish(Twist())
+                return
+            if not self._safety_was_pressed:
+                # (Re)engaged: drop actions queued while held so execution
+                # resumes only with freshly inferred chunks.
+                self._chunk_buffer.clear()
+                self._safety_was_pressed = True
+                if self._episode_t0 is None:
+                    # Deferred episode clock: timing (and the episode
+                    # timeout) starts now, not while the scene was being
+                    # staged with the trigger released.
+                    self._episode_t0 = self.get_clock().now()
+                self.get_logger().info(
+                    'Safety trigger engaged — resuming with fresh actions.'
+                )
                 return
 
         if self._single_step_mode:

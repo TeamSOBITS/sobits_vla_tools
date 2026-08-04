@@ -34,9 +34,16 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+from sobits_vla_common.launch.utils import default_pixi_manifest, pixi_prefix
+
 # Required for PI05 bfloat16 model loading on CUDA without OOM.
 # Set before any child process is spawned so it is inherited.
 os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
+
+# Default pixi env for the deploy node. Override with pixi_env:=deploy-cpu on
+# machines without a GPU, or pixi_env:="" to disable the prefix.
+_DEFAULT_PIXI_ENV = 'deploy-gpu'
+_DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
 def _str_to_bool(value: str) -> bool:
@@ -72,6 +79,11 @@ def _create_deploy_node(context, *args, **kwargs):
     node_name = LaunchConfiguration('node_name').perform(context)
     use_sim_time = _str_to_bool(LaunchConfiguration('use_sim_time').perform(context))
 
+    prefix = pixi_prefix(
+        LaunchConfiguration('pixi_env').perform(context),
+        LaunchConfiguration('pixi_manifest').perform(context),
+    )
+
     model_repo_id = LaunchConfiguration('model_repo_id').perform(context).strip()
     model_policy_class = LaunchConfiguration('model_policy_class').perform(context).strip()
     model_device = LaunchConfiguration('model_device').perform(context).strip()
@@ -87,13 +99,14 @@ def _create_deploy_node(context, *args, **kwargs):
     if model_use_amp_raw:
         overrides['model.use_amp'] = _str_to_bool(model_use_amp_raw)
 
-    return [
+    actions = [
         Node(
             package='sobits_vla_deploy',
             executable='sobits_vla_deploy',
             name=node_name,
             namespace=robot_name,
             output='screen',
+            prefix=prefix or None,
             parameters=[
                 gamepad_config,
                 config_file,
@@ -101,6 +114,41 @@ def _create_deploy_node(context, *args, **kwargs):
             ],
         )
     ]
+
+    # Optional controller bring-up for REAL deployment: reuses the teleop
+    # package's input-driver include (quest/ps4/keyboard -> /<ns>/joy) —
+    # WITHOUT the teleop control node, which would fight the VLA for the
+    # arm — plus the gamepad client in deploy mode (play toggle + reset).
+    controller = LaunchConfiguration('controller').perform(context).strip()
+    if controller:
+        from launch.actions import IncludeLaunchDescription
+        from launch.launch_description_sources import PythonLaunchDescriptionSource
+
+        actions.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(
+                get_package_share_directory('sobits_teleop'),
+                'launch', 'include', 'controller_input.launch.py')),
+            launch_arguments={
+                'robot_name': robot_name,
+                'device': controller,
+                'ros_ip': LaunchConfiguration('ros_ip').perform(context),
+                'use_sim_time': 'true' if use_sim_time else 'false',
+            }.items(),
+        ))
+        actions.append(Node(
+            package='sobits_vla_common',
+            executable='gamepad_clt_node',
+            name='gamepad_client',
+            namespace=robot_name,
+            output='screen',
+            parameters=[
+                gamepad_config,
+                {'gamepad.mode': 'deploy',
+                 'use_sim_time': use_sim_time},
+            ],
+        ))
+
+    return actions
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -114,6 +162,21 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                'controller',
+                default_value='',
+                description=(
+                    'Bring up controller input for REAL deployment: quest, '
+                    'ps4, ps5 or keyboard. Includes sobits_teleop '
+                    'controller_input (joy drivers only) + the gamepad '
+                    'client in deploy mode. Empty = no controller bring-up.'
+                ),
+            ),
+            DeclareLaunchArgument(
+                'ros_ip',
+                default_value='127.0.0.1',
+                description='ROS IP for the Quest tcp endpoint (controller:=quest).',
+            ),
             DeclareLaunchArgument(
                 'deploy_config',
                 default_value='',
@@ -139,6 +202,20 @@ def generate_launch_description() -> LaunchDescription:
                 'node_name',
                 default_value='sobits_vla_deploy',
                 description='Node name for the deploy process.',
+            ),
+            DeclareLaunchArgument(
+                'pixi_env',
+                default_value=_DEFAULT_PIXI_ENV,
+                description=(
+                    'pixi environment (Python deps) to run the node in. '
+                    'Use deploy-cpu on machines without a GPU, or "" to disable '
+                    'the pixi prefix.'
+                ),
+            ),
+            DeclareLaunchArgument(
+                'pixi_manifest',
+                default_value=_DEFAULT_PIXI_MANIFEST,
+                description='Path to pixi.toml (override for installed layouts).',
             ),
             DeclareLaunchArgument(
                 'use_sim_time',
