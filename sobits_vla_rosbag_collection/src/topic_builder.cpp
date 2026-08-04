@@ -15,7 +15,9 @@ std::vector<std::string> TopicBuilder::buildTopicList(
     auto it_topics = robot_info.sensor_topics.find(sensor_type);
     if (it_topics != robot_info.sensor_topics.end()) {
       for (const auto & topic : it_topics->second) {
-        all_topics.push_back(topic);
+        if (!topic.empty()) {
+          all_topics.push_back(topic);
+        }
       }
     }
     // Compressed topics from the explicit compressed_topics list

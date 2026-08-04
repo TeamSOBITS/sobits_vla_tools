@@ -163,7 +163,9 @@ RobotInfo toRobotInfo(const RobotDescriptorCpp & desc)
       if (cam.active) {
         info.sensor_names["camera"].push_back(cam.name);
         info.sensor_models["camera"].push_back(cam.encoding.empty() ? "rgb8" : cam.encoding);
-        info.sensor_topics["camera"].push_back(cam.raw_topic);
+        if (!cam.raw_topic.empty()) {
+          info.sensor_topics["camera"].push_back(cam.raw_topic);
+        }
         info.sensor_info_topics["camera"].push_back(cam.info_topic);
         info.sensor_compressed_topics["camera"].push_back(cam.compressed_topic);
       }
