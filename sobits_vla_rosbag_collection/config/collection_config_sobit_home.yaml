@@ -7,9 +7,9 @@
     robot_descriptor_id: "sobit_home"
 
     user_info:
-      name: ""
-      location: ""
-      email: ""
+      name: "Keith Valentin"
+      location: "Soka University, Japan"
+      email: "kvalentincardenas@gmail.com"
 
     rosbag_config:
       record_directory: ""
