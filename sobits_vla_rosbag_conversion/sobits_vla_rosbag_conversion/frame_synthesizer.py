@@ -484,8 +484,8 @@ class FrameSynthesizer:
                         img_arr
                     )
 
-            # Subtask annotation
-            if self.subtask_label_to_idx and subtasks_map:
+            # Subtask annotation. Index 0 ("No Subtask") covers episodes with no subtasks_map.
+            if self.subtask_label_to_idx:
                 current_subtask_idx = 0
                 for _, st_info in (
                     subtasks_map.items()
