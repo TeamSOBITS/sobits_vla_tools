@@ -40,6 +40,29 @@ _DEFAULT_PIXI_ENV = 'conversion-gpu'
 _DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
+def _config_declares(config_file, key):
+    """Return True if *config_file* sets *key* to a non-empty value.
+
+    Used to tell a config file that deliberately points at an external
+    dataset tree apart from one that leaves the path empty and expects the
+    launch file to work it out.
+    """
+    try:
+        import yaml
+        with open(config_file) as f:
+            data = yaml.safe_load(f) or {}
+    except Exception:
+        # Unreadable or malformed config: fall back to the computed default
+        # rather than failing the launch here. The node reports the real error.
+        return False
+    for section in data.values():
+        if isinstance(section, dict):
+            params = section.get('ros__parameters')
+            if isinstance(params, dict) and params.get(key):
+                return True
+    return False
+
+
 def generate_launch_description_impl(context, *args, **kwargs):
     conversion_share = get_package_share_directory('sobits_vla_rosbag_conversion')
     collection_share = get_package_share_directory('sobits_vla_rosbag_collection')
@@ -64,6 +87,13 @@ def generate_launch_description_impl(context, *args, **kwargs):
     overwrite = (
         LaunchConfiguration('overwrite').perform(context).lower() == 'true'
     )
+
+    # Whether the caller passed these on the command line. Anything the CLI
+    # did not set must not be added to override_params below: override_params
+    # is appended after the config file, so a computed default would silently
+    # win over the value the config file declares.
+    rosbag_directory_from_cli = bool(rosbag_directory)
+    meta_file_from_cli = bool(recorded_bags_meta_file)
 
     # Default rosbag_directory: src-tree sobits_vla_rosbag_collection/rosbags/
     # With --symlink-install, realpath resolves the installed launch file back
@@ -103,11 +133,25 @@ def generate_launch_description_impl(context, *args, **kwargs):
 
     parameters = [config_file]
 
-    # Override from launch arguments if explicitly provided
+    # Override from launch arguments if explicitly provided.
+    # override_params is appended AFTER the config file, so anything placed
+    # here wins over the config. Only pass the computed rosbag_directory
+    # default when the config file does not declare one itself, otherwise a
+    # config pointing at an external dataset tree is silently ignored.
+    config_declares_rosbag_dir = _config_declares(config_file, 'rosbag_directory')
+    config_declares_meta_file = _config_declares(
+        config_file, 'recorded_bags_meta_file'
+    )
+
     override_params = {}
-    if rosbag_directory:
+    if rosbag_directory and (
+        rosbag_directory_from_cli or not config_declares_rosbag_dir
+    ):
         override_params['rosbag_directory'] = rosbag_directory
-    if recorded_bags_meta_file:
+    if recorded_bags_meta_file and (
+        meta_file_from_cli
+        or not (config_declares_meta_file or config_declares_rosbag_dir)
+    ):
         override_params['recorded_bags_meta_file'] = recorded_bags_meta_file
     if dataset_name:
         override_params['dataset_name'] = dataset_name
