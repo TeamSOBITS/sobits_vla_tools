@@ -315,6 +315,15 @@ class TrainNode(Node):
             params.get('checkpoint.overwrite', False)
             and not params.get('checkpoint.resume', False)
         ):
+            # Refuse to delete the shared outputs root (empty output_dir) —
+            # that is the parent of every run, not one run's directory.
+            if not out_dir_raw:
+                raise RuntimeError(
+                    'checkpoint.overwrite=true but checkpoint.output_dir is '
+                    'empty — this would delete the shared outputs root '
+                    f'({out}), containing every prior run. Set a run-named '
+                    'checkpoint.output_dir.'
+                )
             import shutil
             # Safety guard: only delete if it's a sub-directory and not CWD,
             # parent CWD, or root directory

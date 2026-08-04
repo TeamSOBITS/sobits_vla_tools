@@ -28,7 +28,7 @@
       # Resume from the last checkpoint inside output_dir (true) or start fresh (false).
       resume: false
       # Set to true to delete output_dir before training (ignored when resume is true).
-      overwrite: true
+      overwrite: false
       # Path or HuggingFace repo_id to initialise weights from before training.
       # Overrides policy_config.pretrained_path when non-empty.
       # Accepts: "" | "/abs/local/path" | "hf-user/repo-name"
