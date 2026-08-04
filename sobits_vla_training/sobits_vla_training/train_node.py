@@ -336,7 +336,7 @@ class TrainNode(Node):
                 shutil.rmtree(out)
                 self.get_logger().info(f'Overwrite: removed existing output dir {out}')
 
-        train_cfg, peft_extra = build_train_config(params)
+        train_cfg, peft_extra = build_train_config(params, output_dir=out)
 
         num_gpus: int = params.get('num_gpus', 1)
         use_amp: bool = getattr(train_cfg.policy, 'use_amp', False)

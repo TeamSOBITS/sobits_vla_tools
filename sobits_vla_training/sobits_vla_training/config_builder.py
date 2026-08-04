@@ -108,7 +108,7 @@ def _resolve_pretrained_path(raw: str) -> Path | str:
     return raw
 
 
-def build_train_config(params: dict[str, Any]):
+def build_train_config(params: dict[str, Any], output_dir: Path):
     """
     Construct a TrainPipelineConfig from a flat ROS parameter dict.
 
@@ -116,6 +116,8 @@ def build_train_config(params: dict[str, Any]):
     ----------
     params : dict
         Flat dict of ROS parameter names to values.
+    output_dir : Path
+        Resolved checkpoint output directory (caller owns default/overwrite logic).
 
     Returns
     -------
@@ -213,21 +215,6 @@ def build_train_config(params: dict[str, Any]):
     # wandb.run_name is the display name (job_name), not a resume id --
     # run_id stays unset so each run starts a fresh W&B run.
     job_name = params.get('wandb.run_name', '') or None
-
-    output_dir_raw = params.get('checkpoint.output_dir', '')
-    package_src_dir = find_package_src_dir()
-
-    if not output_dir_raw:
-        output_dir = package_src_dir / 'outputs'
-    else:
-        raw_path = Path(output_dir_raw).expanduser()
-        if raw_path.is_absolute():
-            output_dir = raw_path
-        else:
-            if raw_path.parts and raw_path.parts[0] == 'outputs':
-                output_dir = (package_src_dir / raw_path).resolve()
-            else:
-                output_dir = (package_src_dir / 'outputs' / raw_path).resolve()
 
     rename_map: dict = params.get('dataset.rename_map', {}) or {}
 
