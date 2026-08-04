@@ -117,8 +117,8 @@ class RosbagConversionNode(Node):
         self.declare_parameter('skip_static_threshold', 0.0)
         self.declare_parameter('excluded_joints', [''])
         self.declare_parameter('ee_pose.enabled', False)
-        self.declare_parameter('ee_pose.target_frame', 'base_link')
-        self.declare_parameter('ee_pose.source_frame', 'hand_palm_link')
+        self.declare_parameter('ee_pose.target_frame', '')
+        self.declare_parameter('ee_pose.source_frame', '')
         self.declare_parameter('ee_pose.names', [''])
         self.declare_parameter('ee_pose.source_frames', [''])
         self.declare_parameter('ee_pose.target_frames', [''])
@@ -255,6 +255,13 @@ class RosbagConversionNode(Node):
                     .get_parameter_value().string_value
                 )
                 self.ee_configs = [('', _src, _tgt)]
+            if self.ee_pose_enabled and any(
+                not src or not tgt for _, src, tgt in self.ee_configs
+            ):
+                raise RuntimeError(
+                    'ee_pose is enabled but a source/target frame is empty -- '
+                    'refusing to default to a robot-specific value.'
+                )
             self.skip_cameras = (
                 self.get_parameter('cameras.skip').get_parameter_value().bool_value
             )

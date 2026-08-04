@@ -382,7 +382,7 @@ class LeRobotDeployNode(Node):
         super().destroy_node()
 
     def _configure_parameters(self) -> None:
-        self.declare_parameter('model.repo_id', 'team-sobits/sobit_home_smolvla')
+        self.declare_parameter('model.repo_id', '')
         self.declare_parameter(
             'model.policy_class',
             'lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy',
@@ -413,6 +413,11 @@ class LeRobotDeployNode(Node):
         self.declare_parameter('gamepad.command_service', '/vla/command')
 
         self._model_repo_id = str(self.get_parameter('model.repo_id').value)
+        if not self._model_repo_id:
+            raise RuntimeError(
+                'model.repo_id is required -- refusing to default to a '
+                'robot-specific value.'
+            )
         self._policy_class_path = str(self.get_parameter('model.policy_class').value)
         self._model_device = str(self.get_parameter('model.device').value)
         self._model_use_amp = bool(self.get_parameter('model.use_amp').value)
@@ -468,7 +473,7 @@ class LeRobotDeployNode(Node):
         # Time allowance handed to the action for the reset motion — raise
         # on the real robot where fast transitions are unsafe.
         self.declare_parameter('reset.duration_s', 1.5)
-        self.declare_parameter('reset.action_name', '/sobit_home/move_to_pose')
+        self.declare_parameter('reset.action_name', '')
 
         # Deadman safety trigger (real robot): generated actions are only
         # commanded while the trigger is held. Values come from the shared
@@ -478,7 +483,7 @@ class LeRobotDeployNode(Node):
         self.declare_parameter('gamepad.safety.trigger_index', -4)
         self.declare_parameter('gamepad.safety.joy_timeout_s', 0.5)
         self.declare_parameter('sim.world_name', 'simple_data_collection')
-        self.declare_parameter('sim.robot_model_name', 'sobit_home')
+        self.declare_parameter('sim.robot_model_name', '')
         self.declare_parameter('sim.block_model_name', 'box_to_pick')
         self.declare_parameter('sim.spawn_x', 2.0)
         self.declare_parameter('sim.spawn_y', -1.5)
@@ -509,6 +514,12 @@ class LeRobotDeployNode(Node):
             self.get_parameter('reset.duration_s').value
         )
         self._reset_action_name = str(self.get_parameter('reset.action_name').value)
+        # Reset runs on every STOP -- required, no robot-specific default.
+        if not self._reset_action_name:
+            raise RuntimeError(
+                'reset.action_name is required -- refusing to default to a '
+                'robot-specific value.'
+            )
         self._safety_enabled = bool(self.get_parameter('gamepad.safety.enabled').value)
         self._safety_trigger_index = int(
             self.get_parameter('gamepad.safety.trigger_index').value
@@ -518,6 +529,11 @@ class LeRobotDeployNode(Node):
         )
         self._sim_world_name = str(self.get_parameter('sim.world_name').value)
         self._sim_robot_model = str(self.get_parameter('sim.robot_model_name').value)
+        if self._sim_enabled and not self._sim_robot_model:
+            raise RuntimeError(
+                'sim.robot_model_name is required when running in sim -- '
+                'refusing to default to a robot-specific value.'
+            )
         self._sim_block_model = str(self.get_parameter('sim.block_model_name').value)
         self._sim_spawn = (
             float(self.get_parameter('sim.spawn_x').value),
@@ -628,8 +644,11 @@ class LeRobotDeployNode(Node):
                 self._active_profile = active_profile
                 ns = 'robot'
             else:
-                self._active_profile = 'sobit_home'
-                ns = 'robot'
+                raise RuntimeError(
+                    'robot.descriptor_id, robot.name, and robot.active_profile '
+                    'are all unset -- refusing to default to a robot-specific '
+                    'profile.'
+                )
 
             self.declare_parameter(f'{ns}.joint_states_topic', '/joint_states')
             self.declare_parameter(f'{ns}.odom_topic', '')

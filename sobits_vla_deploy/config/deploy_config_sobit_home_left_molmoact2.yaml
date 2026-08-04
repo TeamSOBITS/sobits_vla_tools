@@ -50,6 +50,12 @@
       lift_success_m: 0.05      # block lifted > 5 cm -> success
       fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
 
+    reset:
+      action_name: "/sobit_home/move_to_pose"
+
+    sim:
+      robot_model_name: sobit_home
+
     robot:
       # Morphology (joint groups, command topics, joints, max_joint_delta,
       # mobile_base, cameras) is loaded from the shared robot descriptor:
