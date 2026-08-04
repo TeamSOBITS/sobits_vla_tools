@@ -102,7 +102,13 @@ _IMPORT_RE = re.compile(r'^\s*(from|import)\s+lerobot\b')
 
 
 def _iter_repo_python_files(repo_root: Path):
-    skip_dirs = {'.git', 'build', 'install', 'log', '__pycache__', 'lerobot_v510', 'lerobot_v600'}
+    skip_dirs = {
+        '.git', 'build', 'install', 'log', '__pycache__',
+        'lerobot_v510', 'lerobot_v600',
+        # pixi materializes entire environments (incl. lerobot's own
+        # sources) inside the repo — not our call sites.
+        '.pixi',
+    }
     for path in repo_root.rglob('*.py'):
         if any(part in skip_dirs for part in path.parts):
             continue

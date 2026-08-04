@@ -23,9 +23,12 @@
 
   <buildtool_depend>ament_python</buildtool_depend>
 
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-pandas</exec_depend>
-  <exec_depend>python3-matplotlib</exec_depend>
+  <!--
+    Python (non-ROS) deps — numpy, pandas, matplotlib — are managed by pixi
+    (see pixi.toml, feature.viz), NOT declared as rosdep keys. This package is
+    numpy-2 based; the apt python3-numpy/pandas are numpy-1 builds and would
+    ABI-clash. Run via `pixi run -e viz ...`.
+  -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

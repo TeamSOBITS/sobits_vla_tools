@@ -78,15 +78,49 @@ if(BUILD_TESTING)
   set(ament_cmake_copyright_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 
-  # lerobot seam smoke-test suite — the pass/fail gate for the 0.5.1 ->
-  # 0.6.0 port (see docs/lerobot_v060_phase0_plan.md). Also runnable
-  # standalone: `python3 -m pytest sobits_vla_common/test/ -v`.
+  # lerobot seam smoke-test suite — the pass/fail gate for lerobot upgrades.
+  # lerobot lives in the repo's pixi environments (not system python), so
+  # the test runs on the first materialized env interpreter that ships both
+  # pytest and lerobot. Standalone equivalent:
+  #   pixi run -e training-gpu python -m pytest sobits_vla_common/test/ -v
   find_package(ament_cmake_pytest QUIET)
   if(ament_cmake_pytest_FOUND)
-    ament_add_pytest_test(test_lerobot_seam test/test_lerobot_seam.py
-      APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
-      TIMEOUT 120
-    )
+    set(_pixi_envs_dir "${CMAKE_CURRENT_SOURCE_DIR}/../.pixi/envs")
+    set(_seam_probe_py
+      "import importlib.util as u, sys; sys.exit(int(not (u.find_spec('pytest') and u.find_spec('lerobot'))))")
+    set(_seam_env_candidates
+      common-gpu common-cpu training-gpu training-cpu
+      deploy-gpu deploy-cpu conversion-gpu conversion-cpu)
+    set(_seam_python "")
+    foreach(_env ${_seam_env_candidates})
+      set(_cand "${_pixi_envs_dir}/${_env}/bin/python")
+      if(EXISTS "${_cand}" AND _seam_python STREQUAL "")
+        execute_process(
+          COMMAND "${_cand}" -c "${_seam_probe_py}"
+          RESULT_VARIABLE _seam_probe
+          OUTPUT_QUIET
+          ERROR_QUIET
+        )
+        if(_seam_probe EQUAL 0)
+          set(_seam_python "${_cand}")
+        endif()
+      endif()
+    endforeach()
+    if(_seam_python STREQUAL "")
+      message(STATUS "lerobot seam suite: no pixi env with pytest+lerobot"
+        " - test skipped (run 'pixi install' in sobits_vla_tools)")
+    else()
+      message(STATUS "lerobot seam suite: using ${_seam_python}")
+      # PYTEST_DISABLE_PLUGIN_AUTOLOAD: the appended ROS PYTHONPATH exposes
+      # ROS pytest plugins (launch_testing -> rclpy -> lark) that the pixi
+      # interpreter cannot import; the suite needs no plugins.
+      ament_add_pytest_test(test_lerobot_seam test/test_lerobot_seam.py
+        PYTHON_EXECUTABLE "${_seam_python}"
+        APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+        TIMEOUT 120
+      )
+    endif()
   endif()
 endif()
 

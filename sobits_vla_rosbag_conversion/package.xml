@@ -24,18 +24,16 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
-  <exec_depend>python3-pandas</exec_depend>
-  <exec_depend>python3-pyarrow</exec_depend>
-  <exec_depend>python3-scipy</exec_depend>
-  <exec_depend>python3-yaml</exec_depend>
 
   <!--
-    Runtime note:
-    This package is typically executed with /opt/pytorch/.venv/bin/python3 where
-    lerobot, rosbags, and torch are installed. Keep that environment in sync with
-    the imports used in ros2bag_to_lerobotdataset.py.
+    Python (non-ROS) deps — numpy, pandas, scipy, pyarrow, pyyaml, matplotlib,
+    rosbags, torch, lerobot — are NOT declared as rosdep keys on purpose.
+    Declaring python3-numpy/pandas/scipy here pulls apt builds pinned to
+    numpy 1.x, which crash lerobot/pandas at import ("numpy.dtype size
+    changed" ABI error). Those packages are managed by pixi (see pixi.toml,
+    feature.conversion) and run via `pixi run -e conversion-{cpu,gpu} ...`.
+    python3-opencv is kept as apt to stay ABI-matched with cv_bridge.
   -->
 
   <test_depend>ament_copyright</test_depend>
