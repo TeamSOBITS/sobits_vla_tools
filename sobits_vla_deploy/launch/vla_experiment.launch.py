@@ -113,6 +113,8 @@ def _setup(context, *args, **kwargs):
 
     episode_log_dir = os.path.join(log_dir, model_label)
 
+    controller = LaunchConfiguration('controller').perform(context).strip()
+
     overrides = {
         'use_sim_time': use_sim_time,
         'logging.enabled': True,
@@ -121,6 +123,10 @@ def _setup(context, *args, **kwargs):
         'logging.lift_success_m': lift_success_m,
         'logging.fall_z_drop_m': fall_z_drop_m,
     }
+    if not controller:
+        # No /joy publisher without a controller -- the deadman would never
+        # be pressed and freeze every unattended episode.
+        overrides['gamepad.safety.enabled'] = False
 
     deploy_node = Node(
         package='sobits_vla_deploy',
