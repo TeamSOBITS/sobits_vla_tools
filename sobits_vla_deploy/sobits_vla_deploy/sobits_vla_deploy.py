@@ -1175,8 +1175,7 @@ class LeRobotDeployNode(Node):
                 return
 
         if self._single_step_mode:
-            step = self._inference_engine.get_single_step_result()
-            self._inference_engine.clear_single_step_result()
+            step = self._inference_engine.pop_single_step_result()
             if step is None:
                 self.get_logger().warn(
                     'Single-step inference not ready yet.',

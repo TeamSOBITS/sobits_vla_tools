@@ -159,6 +159,13 @@ class InferenceEngine:
         with self.single_step_lock:
             self.single_step_result = None
 
+    def pop_single_step_result(self) -> Optional[Dict[str, float]]:
+        """Atomically get-and-clear so a result can't be cleared unexecuted."""
+        with self.single_step_lock:
+            result = self.single_step_result
+            self.single_step_result = None
+            return result
+
     def start(
         self,
         obs_builder,
