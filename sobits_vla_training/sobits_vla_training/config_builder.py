@@ -239,6 +239,7 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
         wandb=wandb_cfg,
         peft=peft_cfg,
         rename_map=rename_map,
+        save_checkpoint_to_hub=params.get('hub.save_checkpoints', False),
     )
 
     optimizer_override, scheduler_override = build_optimizer_scheduler_override(params)

@@ -103,6 +103,8 @@
       repo_id: ""
       # Make the Hub repo private.
       private: false
+      # Also push every saved checkpoint (not just the final model); requires repo_id.
+      save_checkpoints: false
 
 
     # =========================================================================

@@ -162,6 +162,8 @@ class TrainNode(Node):
             'hub.repo_id', '', _p('HF Hub target repo_id for push'))
         self.declare_parameter(
             'hub.private', False, _p('Make Hub repo private'))
+        self.declare_parameter(
+            'hub.save_checkpoints', False, _p('Push each saved checkpoint to Hub, not just final'))
 
         # Policy override sub-parameters
         _po = 'policy_overrides.'
@@ -239,7 +241,7 @@ class TrainNode(Node):
             'num_gpus',
             'wandb.enable', 'wandb.project', 'wandb.entity',
             'wandb.run_name', 'wandb.notes',
-            'hub.push_to_hub', 'hub.repo_id', 'hub.private',
+            'hub.push_to_hub', 'hub.repo_id', 'hub.private', 'hub.save_checkpoints',
             'peft.method_type', 'peft.r', 'peft.lora_alpha', 'peft.lora_dropout',
             'peft.target_modules', 'peft.full_training_modules',
             'robot.descriptor_id', 'robot.active_groups',
