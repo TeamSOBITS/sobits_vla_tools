@@ -113,6 +113,18 @@ class ExperimentRunner(Node):
         if not future.done():
             self.get_logger().error('Command {} timed out.'.format(command))
             return False
+        try:
+            response = future.result()
+        except Exception as exc:
+            self.get_logger().error('Command {} raised: {}'.format(command, exc))
+            return False
+        if response is None or not response.success:
+            self.get_logger().error(
+                'Command {} failed: {}'.format(
+                    command, response.message if response else 'no response'
+                )
+            )
+            return False
         return True
 
     def _sleep(self, seconds: float) -> None:
