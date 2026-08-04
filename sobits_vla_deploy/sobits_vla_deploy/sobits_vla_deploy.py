@@ -54,6 +54,7 @@ from sobits_vla_common.image_codec import decode_image_message  # noqa: E402
 from sobits_vla_common.lerobot_compat import apply_deploy_patches  # noqa: E402
 from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.action_executor import ActionExecutor  # noqa: E402
+from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
 from sobits_vla_deploy.obs_builder import ObsBuilder  # noqa: E402
 from sobits_vla_deploy.policy_loader import PolicyLoader  # noqa: E402
@@ -152,6 +153,7 @@ class LeRobotDeployNode(Node):
 
         # Action chunk buffer
         self._chunk_buffer = ActionChunkBuffer(self._aggregate_fn_name)
+        self._interpolator = ActionInterpolator(self._action_interpolation_multiplier)
 
         self._task_label = str(self.get_parameter('model.default_task_label').value)
 
@@ -271,7 +273,7 @@ class LeRobotDeployNode(Node):
 
         self._step_duration = Duration(
             sec=0,
-            nanosec=int((1.0 / self._control_hz) * 1e9),
+            nanosec=int((1.0 / (self._control_hz * self._action_interpolation_multiplier)) * 1e9),
         )
 
         # Initialize ActionExecutor
@@ -288,7 +290,7 @@ class LeRobotDeployNode(Node):
         )
 
         self._control_timer = self.create_timer(
-            1.0 / self._control_hz,
+            1.0 / (self._control_hz * self._action_interpolation_multiplier),
             self._publish_next_action,
             callback_group=self._cb_group,
         )
@@ -394,6 +396,8 @@ class LeRobotDeployNode(Node):
         self.declare_parameter('runtime.aggregate_fn_name', 'weighted_average')
         self.declare_parameter('runtime.async_enabled', True)
         self.declare_parameter('runtime.single_step_mode', False)
+        # Chunked-mode Nx control rate via linear interp; 1 = off (default).
+        self.declare_parameter('runtime.action_interpolation_multiplier', 1)
 
         self.declare_parameter('rtc.enabled', True)
         self.declare_parameter('rtc.execution_horizon', 10)
@@ -435,6 +439,9 @@ class LeRobotDeployNode(Node):
         self._async_enabled = bool(self.get_parameter('runtime.async_enabled').value)
         self._single_step_mode = bool(
             self.get_parameter('runtime.single_step_mode').value
+        )
+        self._action_interpolation_multiplier = int(
+            self.get_parameter('runtime.action_interpolation_multiplier').value
         )
 
         self._rtc_enabled = bool(self.get_parameter('rtc.enabled').value)
@@ -548,6 +555,7 @@ class LeRobotDeployNode(Node):
         self._actions_per_chunk = max(self._actions_per_chunk, 1)
         self._control_hz = max(self._control_hz, 1.0)
         self._chunk_size_threshold = min(max(self._chunk_size_threshold, 0.0), 1.0)
+        self._action_interpolation_multiplier = max(self._action_interpolation_multiplier, 1)
 
     def _load_robot_profile(self) -> None:
         self.declare_parameter('robot.descriptor_id', '')
@@ -646,8 +654,9 @@ class LeRobotDeployNode(Node):
             elif p.name == 'runtime.control_hz':
                 hz = float(max(p.value, 1.0))
                 self._control_hz = hz
-                self._control_timer.timer_period_ns = int((1.0 / hz) * 1e9)
-                self._step_duration = Duration(sec=0, nanosec=int((1.0 / hz) * 1e9))
+                period_ns = int((1.0 / (hz * self._action_interpolation_multiplier)) * 1e9)
+                self._control_timer.timer_period_ns = period_ns
+                self._step_duration = Duration(sec=0, nanosec=period_ns)
                 self._action_executor.step_duration = self._step_duration
                 self._inference_engine.control_hz = hz
                 self.get_logger().info('control_hz → {}'.format(hz))
@@ -659,6 +668,16 @@ class LeRobotDeployNode(Node):
                 self._single_step_mode = bool(p.value)
                 self._inference_engine.single_step_mode = self._single_step_mode
                 self.get_logger().info('single_step_mode → {}'.format(self._single_step_mode))
+            elif p.name == 'runtime.action_interpolation_multiplier':
+                mult = max(int(p.value), 1)
+                self._action_interpolation_multiplier = mult
+                self._interpolator.multiplier = mult
+                self._interpolator.reset()
+                period_ns = int((1.0 / (self._control_hz * mult)) * 1e9)
+                self._control_timer.timer_period_ns = period_ns
+                self._step_duration = Duration(sec=0, nanosec=period_ns)
+                self._action_executor.step_duration = self._step_duration
+                self.get_logger().info('action_interpolation_multiplier → {}'.format(mult))
             elif p.name == 'logging.enabled':
                 self._logging_enabled = bool(p.value)
                 self._episode_logger.enabled = self._logging_enabled
@@ -700,6 +719,7 @@ class LeRobotDeployNode(Node):
         PLAY without any time-based settle.
         """
         self._chunk_buffer.clear()
+        self._interpolator.reset()
         if hasattr(self._policy, 'reset'):
             self._policy.reset()
         for pipeline in (self._preprocessor, self._postprocessor):
@@ -845,6 +865,7 @@ class LeRobotDeployNode(Node):
         response: VlaUpdateTask.Response,
     ) -> VlaUpdateTask.Response:
         self._chunk_buffer.clear()
+        self._interpolator.reset()
         if hasattr(self._policy, 'reset'):
             self._policy.reset()
         self._task_label = request.label
@@ -943,6 +964,7 @@ class LeRobotDeployNode(Node):
         label = msg.data.strip()
         if label:
             self._chunk_buffer.clear()
+            self._interpolator.reset()
             if hasattr(self._policy, 'reset'):
                 self._policy.reset()
             self._task_label = label
@@ -1040,6 +1062,7 @@ class LeRobotDeployNode(Node):
                 # (Re)engaged: drop actions queued while held so execution
                 # resumes only with freshly inferred chunks.
                 self._chunk_buffer.clear()
+                self._interpolator.reset()
                 self._safety_was_pressed = True
                 if self._episode_t0 is None:
                     # Deferred episode clock: timing (and the episode
@@ -1068,7 +1091,14 @@ class LeRobotDeployNode(Node):
             if self._async_enabled and queue_len <= threshold_len:
                 self._inference_engine.update_play_enabled(True)
 
-            step = self._chunk_buffer.pop()
+            if not self._interpolator.enabled:
+                step = self._chunk_buffer.pop()
+            else:
+                if self._interpolator.needs_new_action():
+                    popped = self._chunk_buffer.pop()
+                    if popped is not None:
+                        self._interpolator.add(popped)
+                step = self._interpolator.get()
             if step is None:
                 self.get_logger().warn(
                     'Action queue empty. Increase actions_per_chunk or lower control_hz.',
