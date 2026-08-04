@@ -973,6 +973,34 @@ class LeRobotDeployNode(Node):
         response.message = 'succeeded'
         return response
 
+    def _start_play(self) -> bool:
+        """Atomically start PLAY if not already running. Returns True if it started."""
+        with self._lock:
+            if self._play_enabled:
+                return False
+            self._cmd_vector = dict(self._obs_builder.state_vector)
+            # With the safety trigger enabled the robot stays frozen until the
+            # operator engages it — start the episode clock on first
+            # engagement instead of at PLAY (see the safety gate).
+            self._episode_t0 = (
+                None if self._safety_enabled else self.get_clock().now()
+            )
+            self._play_enabled = True
+        self._episode_logger.begin_episode()
+        self._inference_engine.update_play_enabled(True)
+        return True
+
+    def _stop_play(self, outcome: str) -> bool:
+        """Atomically stop PLAY if running. Returns True if it stopped."""
+        with self._lock:
+            if not self._play_enabled:
+                return False
+            self._play_enabled = False
+        self._episode_logger.end_episode(outcome)
+        self._inference_engine.update_play_enabled(False)
+        self._reset_episode_state(outcome=outcome)
+        return True
+
     def _on_command(
         self,
         request: VlaCommand.Request,
@@ -980,29 +1008,14 @@ class LeRobotDeployNode(Node):
     ) -> VlaCommand.Response:
         cmd = request.command
         if cmd == VlaCommand.Request.PLAY:
-            if not self._play_enabled:
+            if self._start_play():
                 self.get_logger().info('VLA execution started via service command PLAY.')
-                with self._lock:
-                    self._cmd_vector = dict(self._obs_builder.state_vector)
-                # With the safety trigger enabled the robot stays frozen until the
-                # operator engages it — start the episode clock on first
-                # engagement instead of at PLAY (see the safety gate).
-                self._episode_t0 = (
-                    None if self._safety_enabled else self.get_clock().now()
-                )
-                self._play_enabled = True
-                self._episode_logger.begin_episode()
-                self._inference_engine.update_play_enabled(True)
             response.success = True
             response.message = 'PLAY execution enabled'
             response.status = VlaCommand.Response.STATE_PLAYING
         elif cmd == VlaCommand.Request.STOP:
-            if self._play_enabled:
+            if self._stop_play('manual_stop'):
                 self.get_logger().info('VLA execution stopped via service command STOP.')
-                self._episode_logger.end_episode('manual_stop')
-                self._play_enabled = False
-                self._inference_engine.update_play_enabled(False)
-                self._reset_episode_state(outcome='manual_stop')
             else:
                 # Idle STOP = reset the world to the start pose. The experiment
                 # runner issues this before episode 1 so the first episode does
@@ -1022,38 +1035,22 @@ class LeRobotDeployNode(Node):
         return response
 
     def _on_play(self, msg: Bool) -> None:
-        if msg.data and not self._play_enabled:
-            self.get_logger().info('VLA execution started via /vla/play topic.')
-            with self._lock:
-                self._cmd_vector = dict(self._obs_builder.state_vector)
-            # With the safety trigger enabled the robot stays frozen until the
-                # operator engages it — start the episode clock on first
-                # engagement instead of at PLAY (see the safety gate).
-                self._episode_t0 = (
-                    None if self._safety_enabled else self.get_clock().now()
-                )
-            self._play_enabled = True
-            self._episode_logger.begin_episode()
-            self._inference_engine.update_play_enabled(True)
-        elif not msg.data and self._play_enabled:
-            self.get_logger().info('VLA execution stopped via /vla/play topic.')
-            self._episode_logger.end_episode('manual_stop')
-            self._play_enabled = False
-            self._inference_engine.update_play_enabled(False)
-            self._reset_episode_state(outcome='manual_stop')
+        if msg.data:
+            if self._start_play():
+                self.get_logger().info('VLA execution started via /vla/play topic.')
+        else:
+            if self._stop_play('manual_stop'):
+                self.get_logger().info('VLA execution stopped via /vla/play topic.')
 
     def _auto_stop_episode(self, outcome: str) -> None:
         """Terminate the current episode automatically and notify the runner."""
         self.get_logger().info(
             'Episode auto-terminated: {}. Resetting world.'.format(outcome)
         )
-        self._episode_logger.end_episode(outcome)
-        self._play_enabled = False
-        self._inference_engine.update_play_enabled(False)
         # Stop the base immediately so the robot does not drift during reset.
         if self._base_pub is not None:
             self._base_pub.publish(Twist())
-        self._reset_episode_state(outcome=outcome)
+        self._stop_play(outcome)
 
     def _publish_episode_done(self, outcome: str) -> None:
         self._episode_t0 = None
