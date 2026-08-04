@@ -237,6 +237,7 @@ class DatasetWriter:
             'lerobot_version': '.'.join(str(p) for p in LEROBOT_VERSION),
             'sobits_vla_tools_rev': _sobits_vla_tools_rev(),
         }
+        self.provenance = provenance  # reused by finalize() for the card description
         if self.user_info:
             if len(self.user_info) > 1 or not isinstance(self.user_info, list):
                 user_info = self.user_info
@@ -313,6 +314,20 @@ class DatasetWriter:
         if 'subtask_index' not in reloaded.features:
             raise RuntimeError("Feature 'subtask_index' is missing after reload.")
 
+    def _build_dataset_description(
+        self, total_episodes: int, total_frames: int, episode_stats: list
+    ) -> str:
+        """Build a short markdown description for the Hub dataset card."""
+        tasks = sorted({s['task'] for s in episode_stats if s.get('task')})
+        rev = self.provenance.get('sobits_vla_tools_rev', 'unknown')
+        lines = [
+            f'Robot: {self.robot_type or "unknown"}',
+            f'Episodes: {total_episodes}, Frames: {total_frames}',
+            f'Tasks: {", ".join(tasks) if tasks else "N/A"}',
+            f'Converted with sobits_vla_tools@{rev}',
+        ]
+        return '\n'.join(lines)
+
     def finalize(
         self,
         skipped_bags: list,
@@ -333,19 +348,25 @@ class DatasetWriter:
         self.log_info(f'Dataset saved to: {self.dataset.root}')
         self.log_info('Dataset creation completed!')
 
+        total_episodes = len(episode_stats)
+        total_frames = sum(s['frames'] for s in episode_stats)
+
         if self.push_to_hub:
             self.log_info(
                 f"Pushing dataset to HuggingFace Hub as '{self.dataset_name}'..."
             )
-            self.dataset.push_to_hub(private=self.hub_private)
+            description = self._build_dataset_description(
+                total_episodes, total_frames, episode_stats
+            )
+            self.dataset.push_to_hub(private=self.hub_private, dataset_description=description)
             self.log_info('Push to Hub completed!')
 
         # Build stats report
         stats_report = {
             'dataset_name': self.dataset_name,
             **conversion_params,
-            'total_episodes': len(episode_stats),
-            'total_frames': sum(s['frames'] for s in episode_stats),
+            'total_episodes': total_episodes,
+            'total_frames': total_frames,
             'skipped_bags': skipped_bags if skipped_bags else [],
             'fps_warnings': fps_warnings if fps_warnings else [],
             'episodes': episode_stats,
