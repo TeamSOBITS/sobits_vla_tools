@@ -322,10 +322,12 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     max_episode_duration_sec_,
     timestamp_jump_threshold_sec_,
     [this]() {
+      // join any previous auto-save before starting a new one (runs on timer thread)
+      if (auto_save_thread_.joinable()) {auto_save_thread_.join();}
       auto alive = node_alive_;
-      std::thread([this, alive]() {
+      auto_save_thread_ = std::thread([this, alive]() {
         if (alive->load()) {this->saveRosbag();}
-      }).detach();
+      });
     });
 
   // Initialize VlaCommand Service Server
@@ -343,8 +345,10 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 RosbagCollection::~RosbagCollection()
 {
   RCLCPP_INFO(this->get_logger(), "RosbagCollection destructor called");
-  node_alive_->store(false);  // prevent detached threads from calling back
+  node_alive_->store(false);  // prevent late auto-save from starting saveRosbag()
   stopRecordingMonitor();     // cancel timer before any further teardown
+  // join any in-flight auto-save before members it uses (this) get torn down
+  if (auto_save_thread_.joinable()) {auto_save_thread_.join();}
   if (is_recording_) {
     try {
       saveRosbag();

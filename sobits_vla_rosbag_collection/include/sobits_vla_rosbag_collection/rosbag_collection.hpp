@@ -139,6 +139,7 @@ private:
   std::shared_ptr<rosbag2_transport::Recorder> recorder_node_;
   std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> recorder_executor_;
   std::thread recorder_thread_;
+  std::thread auto_save_thread_;  // joinable; joined before teardown, see destructor
   std::mutex recorder_mutex_;
   std::atomic<bool> is_recording_{false};
   std::chrono::steady_clock::time_point recording_start_time_;
