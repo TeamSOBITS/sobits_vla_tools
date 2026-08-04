@@ -177,8 +177,9 @@ class OfflineTFTree:
         if not chain:
             return np.eye(4, dtype=np.float64)
 
-        # Compose: walk root→leaf then invert to get target→source convention
+        # Compose child->parent matrices root-to-leaf: this already is
+        # T(target<-source), no inversion needed.
         composed = chain[-1]
         for mat in reversed(chain[:-1]):
             composed = composed @ mat
-        return np.linalg.inv(composed)
+        return composed
