@@ -59,7 +59,7 @@
       enabled: false
       names: ["left", "right"]
       source_frames: ["hand_left_end_effector_link", "hand_right_end_effector_link"]
-      target_frames: ["base_link", "base_link"]
+      target_frames: ["base_footprint", "base_footprint"]
 
     # Camera configuration for sobit_home.
     # primary = sync trigger camera (one frame assembled per primary image).
