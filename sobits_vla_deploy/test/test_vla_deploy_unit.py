@@ -32,6 +32,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
 from sobits_vla_deploy.sobits_vla_deploy import ActionChunkBuffer  # noqa: E402
 
 
@@ -112,76 +113,82 @@ class TestActionChunkBufferAggregate:
 
 
 # ---------------------------------------------------------------------------
-# _to_action_steps tests (via VlaDeployNode with mocked ROS)
+# _to_action_steps tests (the live copy, InferenceEngine)
 # ---------------------------------------------------------------------------
 
 
-class MockNode:
-    """Minimal mock to allow importing VlaDeployNode._to_action_steps."""
-
-    def __init__(self):
-        self._joint_features = ['j0', 'j1', 'j2']
-        self._mobile_base_features = ['x.vel']
-
-    def _to_action_steps(self, raw_actions):
-        from sobits_vla_deploy.sobits_vla_deploy import LeRobotDeployNode as VlaDeployNode
-        return VlaDeployNode._to_action_steps(self, raw_actions)
+def _make_engine(joint_features=None, mobile_base_features=None) -> InferenceEngine:
+    """Minimal InferenceEngine with only what _to_action_steps reads set."""
+    return InferenceEngine(
+        policy=None,
+        model_device='cpu',
+        model_use_amp=False,
+        control_hz=10.0,
+        actions_per_chunk=50,
+        chunk_size_threshold=0.6,
+        async_enabled=True,
+        single_step_mode=False,
+        rtc_enabled=False,
+        rtc_inference_delay=4,
+        preprocessor=None,
+        postprocessor=None,
+        expected_state_dim=None,
+        model_action_feature_names=None,
+        model_use_relative_actions=False,
+        joint_features=joint_features if joint_features is not None else ['j0', 'j1', 'j2'],
+        mobile_base_features=mobile_base_features if mobile_base_features is not None else ['x.vel'],
+    )
 
 
 class TestToActionSteps:
 
-    def _node(self):
-        return MockNode()
-
     def test_1d_numpy(self):
-        node = self._node()
+        engine = _make_engine()
         raw = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
-        steps = node._to_action_steps(raw)
+        steps = engine._to_action_steps(raw)
         assert len(steps) == 1
         assert steps[0] == {'j0': 1.0, 'j1': 2.0, 'j2': 3.0, 'x.vel': 4.0}
 
     def test_2d_numpy(self):
-        node = self._node()
+        engine = _make_engine()
         raw = np.array([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]], dtype=np.float32)
-        steps = node._to_action_steps(raw)
+        steps = engine._to_action_steps(raw)
         assert len(steps) == 2
         assert steps[0]['j0'] == 1.0
         assert steps[1]['j0'] == 5.0
 
     def test_1d_truncated(self):
-        node = self._node()
+        engine = _make_engine()
         raw = np.array([1.0, 2.0], dtype=np.float32)
-        steps = node._to_action_steps(raw)
+        steps = engine._to_action_steps(raw)
         assert len(steps) == 1
         assert 'j0' in steps[0]
         assert 'j1' in steps[0]
         assert 'j2' not in steps[0]
 
     def test_empty_action_keys(self):
-        node = self._node()
-        node._joint_features = []
-        node._mobile_base_features = []
+        engine = _make_engine(joint_features=[], mobile_base_features=[])
         raw = np.array([1.0, 2.0], dtype=np.float32)
-        steps = node._to_action_steps(raw)
+        steps = engine._to_action_steps(raw)
         assert steps == []
 
     def test_dict_input_flat(self):
-        node = self._node()
+        engine = _make_engine()
         raw = {'j0': 0.5, 'j1': 1.5, 'j2': 2.5, 'x.vel': 0.1, 'extra': 99.0}
-        steps = node._to_action_steps(raw)
+        steps = engine._to_action_steps(raw)
         assert len(steps) == 1
         assert steps[0]['j0'] == 0.5
         assert 'extra' not in steps[0]
 
     def test_dict_input_chunked(self):
-        node = self._node()
+        engine = _make_engine()
         raw = {'j0': [0.0, 1.0], 'j1': [2.0, 3.0], 'j2': [4.0, 5.0], 'x.vel': [0.1, 0.2]}
-        steps = node._to_action_steps(raw)
+        steps = engine._to_action_steps(raw)
         assert len(steps) == 2
         assert steps[0]['j0'] == 0.0
         assert steps[1]['j0'] == 1.0
 
     def test_unsupported_returns_empty(self):
-        node = self._node()
-        steps = node._to_action_steps('not_a_valid_type')
+        engine = _make_engine()
+        steps = engine._to_action_steps('not_a_valid_type')
         assert steps == []
