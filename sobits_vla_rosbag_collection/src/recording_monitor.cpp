@@ -46,6 +46,8 @@ void RecordingMonitor::start()
   timestamp_monitor_initialized_ = false;
   recording_start_time_ = std::chrono::steady_clock::now();
 
+  std::lock_guard<std::mutex> lock(monitor_mutex_);  // guard population vs. a racing stop()/tick
+
   if (need_fps) {
     std::set<std::string> monitor_topics;
     monitor_topics.insert(robot_info_.joint_states_topic);
@@ -113,6 +115,7 @@ void RecordingMonitor::stop()
     fps_monitor_timer_->cancel();
     fps_monitor_timer_.reset();
   }
+  std::lock_guard<std::mutex> lock(monitor_mutex_);  // serialize against a racing tick
   monitor_subs_.clear();
   monitor_counts_.clear();
   monitor_prev_counts_.clear();
@@ -125,6 +128,8 @@ void RecordingMonitor::runMonitorTick()
   if (!is_recording_) {
     return;
   }
+
+  std::lock_guard<std::mutex> lock(monitor_mutex_);  // guard maps vs. concurrent stop()/start()
 
   // FPS checks
   if (expected_sensor_fps_ > 0) {

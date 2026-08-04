@@ -49,6 +49,7 @@ private:
   std::function<void()> on_max_duration_callback_;
 
   std::atomic<bool> is_recording_{false};
+  std::mutex monitor_mutex_;  // guards monitor_subs_/counts_ vs. concurrent tick
   std::vector<rclcpp::GenericSubscription::SharedPtr> monitor_subs_;
   std::map<std::string, std::shared_ptr<std::atomic<uint64_t>>> monitor_counts_;
   std::map<std::string, uint64_t> monitor_prev_counts_;
