@@ -1142,8 +1142,11 @@ class LeRobotDeployNode(Node):
         # Automatic termination: success (block lifted), failure (fall), or
         # timeout. Checked before consuming the action queue so an empty queue
         # cannot stall a timeout. Uses the sim-time-aware node clock.
-        if self._logging_enabled and self._episode_t0 is not None:
-            elapsed = (self.get_clock().now() - self._episode_t0).nanoseconds * 1e-9
+        # Snapshot to a local: the reset thread can null this out between the
+        # check and the subtraction below, raising TypeError.
+        episode_t0 = self._episode_t0
+        if self._logging_enabled and episode_t0 is not None:
+            elapsed = (self.get_clock().now() - episode_t0).nanoseconds * 1e-9
             outcome = self._episode_logger.evaluate_termination(elapsed)
             if outcome is not None:
                 self._auto_stop_episode(outcome)
