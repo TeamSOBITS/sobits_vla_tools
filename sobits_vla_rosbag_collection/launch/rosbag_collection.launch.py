@@ -20,7 +20,7 @@ def generate_launch_description_impl(context, *args, **kwargs):
     )
 
     gamepad_config = os.path.join(
-        pkg_share,
+        get_package_share_directory('sobits_vla_common'),
         'config',
         'gamepad_config.yaml',
     )

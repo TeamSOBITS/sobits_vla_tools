@@ -43,36 +43,22 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
       "joy", qos_profile,
       std::bind(&GamepadClient::joyCallback, this, std::placeholders::_1));
 
-  // Set values from parameters, supporting both "gamepad" and legacy "gamepad_config" namespaces
+  // Set values from parameters in the "gamepad" namespace.
   this->declare_parameter<std::string>("gamepad.command_service", "/vla/command");
-  this->declare_parameter<std::string>("gamepad_config.name", "");
   this->declare_parameter<std::string>("gamepad.controller", "dualshock4");
   this->declare_parameter<double>("gamepad.button_cooldown_duration", 0.5);
   // "collection" (default): record/pause/save/delete semantics.
   // "deploy": play button toggles PLAY/STOP, reset button always sends STOP
   // (the deploy node aborts + resets on STOP in any state).
   this->declare_parameter<std::string>("gamepad.mode", "collection");
-  this->declare_parameter<double>("gamepad_config.button_cooldown_duration", 0.5);
 
   command_service_name_ = this->get_parameter("gamepad.command_service").as_string();
   deploy_mode_ = this->get_parameter("gamepad.mode").as_string() == "deploy";
 
-  std::string old_name = this->get_parameter("gamepad_config.name").as_string();
-  std::string new_name = this->get_parameter("gamepad.controller").as_string();
-  std::string ns = "gamepad";
+  gamepad_name_ = this->get_parameter("gamepad.controller").as_string();
+  button_cooldown_duration_ = this->get_parameter("gamepad.button_cooldown_duration").as_double();
 
-  if (!old_name.empty()) {
-    gamepad_name_ = old_name;
-    ns = "gamepad_config";
-    button_cooldown_duration_ =
-      this->get_parameter("gamepad_config.button_cooldown_duration").as_double();
-  } else {
-    gamepad_name_ = new_name;
-    ns = "gamepad";
-    button_cooldown_duration_ = this->get_parameter("gamepad.button_cooldown_duration").as_double();
-  }
-
-  std::string base = ns + "." + gamepad_name_ + ".button_mapping.";
+  std::string base = std::string("gamepad.") + gamepad_name_ + ".button_mapping.";
   this->declare_parameter<int>(base + "record", -1);
   this->declare_parameter<int>(base + "pause", -1);
   this->declare_parameter<int>(base + "save", -1);

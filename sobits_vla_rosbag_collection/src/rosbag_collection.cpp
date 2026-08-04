@@ -192,9 +192,9 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     this->get_parameter("rosbag_config.rmw_serialization_format").as_string();
 
   // (4) Gamepad parameters
-  this->declare_parameter<std::string>("gamepad_config.name", "default_gamepad");
+  this->declare_parameter<std::string>("gamepad.controller", "dualshock4");
   this->declare_parameter<std::string>("gamepad.command_service", "/vla/command");
-  gamepad_name_ = this->get_parameter("gamepad_config.name").as_string();
+  gamepad_name_ = this->get_parameter("gamepad.controller").as_string();
   std::string command_service_name = this->get_parameter("gamepad.command_service").as_string();
 
   // Subscribe to info_topics per sensor type to obtain camera dimension
