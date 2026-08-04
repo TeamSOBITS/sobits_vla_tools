@@ -93,6 +93,8 @@ class TrainNode(Node):
             'dataset.num_workers', 4, _p('DataLoader worker count'))
         self.declare_parameter(
             'dataset.rename_map', [], _p('Feature rename map {old: new}'))
+        self.declare_parameter(
+            'dataset.eval_split', 0.0, _p('Fraction of episodes per task held out for eval'))
 
         self.declare_parameter(
             'checkpoint.output_dir', '', _p('Output directory for checkpoints'))
@@ -203,7 +205,7 @@ class TrainNode(Node):
         names = [
             'policy',
             'dataset.repo_id', 'dataset.num_workers',
-            'dataset.rename_map',
+            'dataset.rename_map', 'dataset.eval_split',
             'checkpoint.output_dir', 'checkpoint.resume', 'checkpoint.overwrite',
             'checkpoint.pretrained_path', 'checkpoint.save_freq',
             'checkpoint.save_checkpoint',

@@ -195,7 +195,8 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
     if not ds_repo_id:
         raise ValueError('dataset.repo_id must be set in training_config.yaml.')
 
-    dataset_cfg = DatasetConfig(repo_id=ds_repo_id)
+    eval_split: float = params.get('dataset.eval_split', 0.0)
+    dataset_cfg = DatasetConfig(repo_id=ds_repo_id, eval_split=eval_split)
 
     # Version provenance: fold the lerobot version into notes since
     # WandBConfig has no dedicated metadata field. Keeps the W&B run

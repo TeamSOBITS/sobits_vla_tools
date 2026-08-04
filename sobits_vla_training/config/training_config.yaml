@@ -18,6 +18,8 @@
       # Optional feature rename map: {"old_key": "new_key"}.
       # Useful when dataset keys differ from policy expectations.
       rename_map: []
+      # Fraction of episodes per task held out for eval (0.0 = off, current behavior).
+      eval_split: 0.0
 
     # =========================================================================
     # Checkpoint / resume
