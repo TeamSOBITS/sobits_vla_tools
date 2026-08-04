@@ -57,8 +57,9 @@ from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+import yaml
 
-from sobits_vla_common.launch.utils import default_pixi_manifest, pixi_prefix
+from sobits_vla_common.launch.utils import default_package_root, default_pixi_manifest, pixi_prefix
 
 # Required for PI05 bfloat16 model loading on CUDA without OOM.
 os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
@@ -111,7 +112,21 @@ def _setup(context, *args, **kwargs):
         LaunchConfiguration('pixi_manifest').perform(context),
     )
 
-    episode_log_dir = os.path.join(log_dir, model_label)
+    if log_dir:
+        episode_log_dir = os.path.join(log_dir, model_label)
+    else:
+        with open(config_file, 'r') as f:
+            cfg_data = yaml.safe_load(f) or {}
+        model_repo_id = (
+            cfg_data.get('/**', {}).get('ros__parameters', {})
+            .get('model', {}).get('repo_id', '')
+        ).strip()
+        logs_root = default_package_root('sobits_vla_deploy', 'logs', __file__)
+        # "<...>" placeholder repo_id (unedited template) is not a real org/id.
+        if model_repo_id and '<' not in model_repo_id:
+            episode_log_dir = os.path.join(logs_root, model_repo_id)
+        else:
+            episode_log_dir = os.path.join(logs_root, model_label)
 
     controller = LaunchConfiguration('controller').perform(context).strip()
 
@@ -231,8 +246,11 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             'log_dir',
-            default_value='/tmp/vla_logs',
-            description='Base log directory; episodes go to <log_dir>/<model_label>.',
+            default_value='',
+            description=(
+                'Base log directory; episodes go to <log_dir>/<model_label>. '
+                'Empty = <package_src>/logs/<model.repo_id or model_label>.'
+            ),
         ),
         DeclareLaunchArgument(
             'robot_name',

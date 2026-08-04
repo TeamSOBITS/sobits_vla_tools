@@ -76,6 +76,35 @@ def default_pixi_manifest() -> str:
     return 'pixi.toml'
 
 
+def default_package_root(package_name: str, subdir: str, start_file: str) -> str:
+    """
+    Resolve <package_src>/<subdir>/ for `package_name`, walking up from `start_file`.
+
+    Mirrors the source-tree / colcon-install / share-dir resolution used by the
+    conversion and training packages' own package-root helpers, generalised so
+    launch files (which run from source or an installed share/ dir, not a
+    Python site-packages tree) can share one implementation.
+    """
+    candidate = os.path.dirname(os.path.abspath(start_file))
+    for _ in range(8):
+        if (
+            os.path.isfile(os.path.join(candidate, 'package.xml'))
+            and os.path.isdir(os.path.join(candidate, subdir))
+        ):
+            return os.path.join(candidate, subdir)
+        src_root = os.path.join(candidate, 'src')
+        if os.path.isdir(src_root):
+            for root, dirs, _files in os.walk(src_root):
+                if os.path.basename(root) == package_name and os.path.isdir(
+                    os.path.join(root, subdir)
+                ):
+                    return os.path.join(root, subdir)
+        candidate = os.path.dirname(candidate)
+
+    from ament_index_python.packages import get_package_share_directory
+    return os.path.join(get_package_share_directory(package_name), subdir)
+
+
 def pixi_prefix(pixi_env: str, manifest: str = '') -> str:
     """
     Return a Node `prefix=` string that runs the node inside a pixi env.
