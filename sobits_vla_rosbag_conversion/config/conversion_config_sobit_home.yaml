@@ -37,11 +37,12 @@
       # Mimic joints (no independent signal)
       - hand_left_finger_r_mcp_joint
       - hand_right_finger_r_mcp_joint
-      # Right arm (6 DOF)
+      # Right arm (7 DOF)
       - arm_right_shoulder_tilt_joint
       - arm_right_upper_roll_joint
       - arm_right_upper_flex_joint
       - arm_right_elbow_joint
+      - arm_right_lower_flex_joint
       - arm_right_wrist_tilt_joint
       - arm_right_wrist_roll_joint
       # Right hand (8 DOF, including the mimic above)
