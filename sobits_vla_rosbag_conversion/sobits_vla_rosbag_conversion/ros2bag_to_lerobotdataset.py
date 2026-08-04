@@ -929,7 +929,7 @@ class RosbagConversionNode(Node):
                 # FPS validation
                 if len(frames) > 1:
                     duration = frames[-1][0] - frames[0][0]
-                    actual_fps = len(frames) / duration if duration > 0 else 0.0
+                    actual_fps = (len(frames) - 1) / duration if duration > 0 else 0.0
                     if actual_fps < self.fps * 0.8:
                         self.get_logger().warn(
                             f'Proceeding with {bagfile}: actual fps ({actual_fps:.1f}) is below '
