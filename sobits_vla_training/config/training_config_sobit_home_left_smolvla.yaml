@@ -62,11 +62,7 @@
       entity: ""
       run_name: "sobit_home-pnp_ball_bowl-left-abs-real-smolvla-vlmft"
       notes: "SmolVLA full fine-tune (VLM unfrozen) on sobit_home-pnp_ball_bowl-left-abs-real (10 fps, absolute actions, left arm, 102 real-robot episodes)"
-      tags:
-        - smolvla
-        - sobit_home
-        - pnp_ball_bowl
-        - real
+      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true

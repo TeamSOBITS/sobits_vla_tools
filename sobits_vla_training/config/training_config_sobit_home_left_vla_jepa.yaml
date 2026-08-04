@@ -63,11 +63,7 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-vla_jepa-headft"
       notes: "VLA-JEPA fine-tune from lerobot/VLA-JEPA-Pretrain on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only; reinit action/state projections for 19-dim joints)"
-      tags:
-        - vla_jepa
-        - sobit_home
-        - pickup_block
-        - gazebo
+      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true

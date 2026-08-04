@@ -70,11 +70,7 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-pi0fast"
       notes: "PI0-FAST fine-tune on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, chunk 10)"
-      tags:
-        - pi0_fast
-        - sobit_home
-        - pickup_block
-        - gazebo
+      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true

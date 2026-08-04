@@ -66,11 +66,7 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-molmoact2-vlmlora"
       notes: "MolmoAct2 LoRA-VLM fine-tune from allenai/MolmoAct2 on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
-      tags:
-        - molmoact2
-        - sobit_home
-        - pickup_block
-        - gazebo
+      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true

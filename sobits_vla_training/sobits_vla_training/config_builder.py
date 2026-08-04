@@ -190,9 +190,11 @@ def build_train_config(params: dict[str, Any]):
         enable=params.get('wandb.enable', True),
         project=params.get('wandb.project', 'sobits_vla_training'),
         entity=params.get('wandb.entity', None) or None,
-        run_id=params.get('wandb.run_name', None) or None,
         notes=notes,
     )
+    # wandb.run_name is the display name (job_name), not a resume id --
+    # run_id stays unset so each run starts a fresh W&B run.
+    job_name = params.get('wandb.run_name', '') or None
 
     output_dir_raw = params.get('checkpoint.output_dir', '')
     package_src_dir = find_package_src_dir()
@@ -217,6 +219,7 @@ def build_train_config(params: dict[str, Any]):
         dataset=dataset_cfg,
         policy=policy_cfg,
         output_dir=output_dir,
+        job_name=job_name,
         resume=params.get('checkpoint.resume', False),
         seed=params.get('training.seed', 1000),
         num_workers=params.get('dataset.num_workers', 4),

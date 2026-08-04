@@ -73,10 +73,9 @@
       project: "sobits_vla_training"
       # W&B entity (team or user). Leave empty to use default from wandb login.
       entity: ""
-      # W&B run name. Auto-generated from policy + timestamp when empty.
+      # W&B run display name. Auto-generated from policy + timestamp when empty.
       run_name: ""
-      # Tags attached to the run.
-      tags: []
+      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
       # Notes attached to the run.
       notes: ""
 

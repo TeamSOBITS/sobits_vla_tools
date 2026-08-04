@@ -59,11 +59,7 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-act"
       notes: "ACT from-scratch on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
-      tags:
-        - act
-        - sobit_home
-        - pickup_block
-        - gazebo
+      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true
