@@ -109,3 +109,46 @@ def decode_image_message(msg) -> np.ndarray | None:
     if img.shape[2] == 4:
         return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
     return img
+
+
+def decode_depth_message(msg) -> np.ndarray | None:
+    """Decode ROS 16UC1 depth message into raw uint16 millimetre HxW array."""
+    if hasattr(msg, 'format'):
+        data = msg.data
+        if isinstance(data, memoryview):
+            data = data.tobytes()
+        if isinstance(data, (bytes, bytearray)):
+            encoded = np.frombuffer(data, dtype=np.uint8)
+        else:
+            encoded = np.asarray(data, dtype=np.uint8)
+
+        if encoded.size == 0:
+            return None
+
+        # compressedDepth is a plain 16-bit PNG; IMREAD_UNCHANGED keeps depth.
+        try:
+            img = cv2.imdecode(np.ascontiguousarray(encoded), cv2.IMREAD_UNCHANGED)
+        except Exception:
+            img = None
+
+        if img is not None and img.dtype == np.uint16:
+            return img if img.ndim == 2 else img[..., 0]
+
+        if PILImage is None:
+            return None
+        try:
+            pil_img = PILImage.open(io.BytesIO(encoded.tobytes()))
+            arr = np.asarray(pil_img)
+            return arr.astype(np.uint16) if arr.dtype != np.uint16 else arr
+        except Exception:
+            return None
+
+    # Raw Image message path — no bit-shifting, preserve full depth range.
+    encoding = getattr(msg, 'encoding', '')
+    data = msg.data
+    if isinstance(data, memoryview):
+        data = bytes(data)
+    h, w = msg.height, msg.width
+    if encoding in ('16UC1', 'mono16'):
+        return np.frombuffer(data, dtype=np.uint16).reshape(h, w).copy()
+    return None
