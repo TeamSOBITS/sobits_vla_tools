@@ -159,8 +159,6 @@ class LeRobotDeployNode(Node):
 
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
-        self._ee_left_base_frame = 'base_footprint'
-        self._ee_left_target_frame = 'hand_left_end_effector_link'
         self._cmd_vector: Dict[str, float] = {}
 
         # Initialize InferenceEngine
@@ -304,8 +302,7 @@ class LeRobotDeployNode(Node):
             obs_builder=self._obs_builder,
             chunk_buffer=self._chunk_buffer,
             tf_buffer=self._tf_buffer,
-            ee_left_base_frame=self._ee_left_base_frame,
-            ee_left_target_frame=self._ee_left_target_frame,
+            ee_poses=[(ee.name, ee.source_frame, ee.target_frame) for ee in self._ee_poses],
         )
 
         sx, sy, sz, sqx, sqy, sqz, sqw = self._sim_spawn
@@ -575,6 +572,7 @@ class LeRobotDeployNode(Node):
             self._joint_groups = []
             self._joint_features = []
             self._joint_feature_to_ros = {}
+            self._ee_poses = desc.ee_poses or []
 
             for group in desc.groups:
                 if group.name in active_groups_list:
@@ -625,6 +623,8 @@ class LeRobotDeployNode(Node):
                     self._camera_encodings[cam.name] = cam.encoding if cam.encoding else 'rgb8'
 
         else:
+            # No EE support without a descriptor -- the legacy path is being phased out.
+            self._ee_poses = []
             self.declare_parameter('robot.name', '')
             self.declare_parameter('robot.active_profile', '')
 
@@ -1227,9 +1227,13 @@ class LeRobotDeployNode(Node):
                 'y': float(step.get('y.vel', 0.0)) if step else 0.0,
                 'theta': float(step.get('theta.vel', 0.0)) if step else 0.0,
             }
-            ee = self._obs_builder._get_ee_pose_left(
-                self._tf_buffer, self._ee_left_base_frame, self._ee_left_target_frame
-            )
+            # Episode logger takes a single EE pose; log the descriptor's first entry, if any.
+            ee = None
+            if self._ee_poses:
+                first = self._ee_poses[0]
+                ee = self._obs_builder._get_ee_pose(
+                    self._tf_buffer, first.target_frame, first.source_frame
+                )
             self._episode_logger.log_step(
                 joints=log_joints,
                 base_vel=log_base,

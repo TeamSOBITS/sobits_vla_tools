@@ -171,8 +171,7 @@ class InferenceEngine:
         obs_builder,
         chunk_buffer,
         tf_buffer,
-        ee_left_base_frame,
-        ee_left_target_frame,
+        ee_poses,
     ):
         self.chunk_buffer = chunk_buffer
         self.thread = Thread(
@@ -181,8 +180,7 @@ class InferenceEngine:
                 obs_builder,
                 chunk_buffer,
                 tf_buffer,
-                ee_left_base_frame,
-                ee_left_target_frame,
+                ee_poses,
             ),
             daemon=True,
         )
@@ -200,8 +198,7 @@ class InferenceEngine:
         obs_builder,
         chunk_buffer,
         tf_buffer,
-        ee_left_base_frame,
-        ee_left_target_frame,
+        ee_poses,
     ) -> None:
         import rclpy
 
@@ -216,8 +213,7 @@ class InferenceEngine:
 
                 obs_frame = obs_builder.snapshot_observation(
                     tf_buffer,
-                    ee_left_base_frame,
-                    ee_left_target_frame,
+                    ee_poses,
                     self.expected_state_dim,
                     self.model_action_feature_names,
                 )
@@ -272,8 +268,7 @@ class InferenceEngine:
             q_len_at_obs = chunk_buffer.size()
             obs_frame = obs_builder.snapshot_observation(
                 tf_buffer,
-                ee_left_base_frame,
-                ee_left_target_frame,
+                ee_poses,
                 self.expected_state_dim,
                 self.model_action_feature_names,
             )
