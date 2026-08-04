@@ -355,7 +355,7 @@ class EpisodeLogger:
             fname = self._log_dir / 'episode_{:04d}_{}.jsonl'.format(
                 self._episode_idx, ts
             )
-            self._file = open(fname, 'w', buffering=1)  # line-buffered
+            self._file = open(fname, 'w')  # buffered; flushed on close in end_episode
             sx, sy, sz, sqx, sqy, sqz, sqw = self._spawn
             bx, by, bz = self._block_reset
             meta = {
