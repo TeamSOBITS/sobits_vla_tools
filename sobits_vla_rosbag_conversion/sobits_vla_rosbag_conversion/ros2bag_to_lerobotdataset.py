@@ -332,6 +332,22 @@ class RosbagConversionNode(Node):
                 return False
         return True
 
+    def _sensors_match(self, ref_sensors: dict, other_sensors: dict) -> bool:
+        """Return True if the two sensors blocks declare the same topics/shapes."""
+        ref_types = ref_sensors.get('types', [])
+        other_types = other_sensors.get('types', [])
+        if sorted(ref_types) != sorted(other_types):
+            return False
+        for stype in ref_types:
+            rs = ref_sensors.get(stype, {})
+            os_ = other_sensors.get(stype, {})
+            for key in ['names', 'topics', 'compressed_topics', 'info_topics']:
+                if rs.get(key, []) != os_.get(key, []):
+                    return False
+            if rs.get('properties', {}) != os_.get('properties', {}):
+                return False
+        return True
+
     def convert(self):
         self.get_logger().info('Starting dataset conversion...')
         self.get_logger().info(f'Target dataset name: {self.dataset_name}')
@@ -365,6 +381,7 @@ class RosbagConversionNode(Node):
         robot_ref_name = None
         robot_ref_version = None
         ref_morphology = None
+        ref_sensors = None
         robot_info = {}
 
         for idx, meta_file in enumerate(meta_files):
@@ -375,11 +392,13 @@ class RosbagConversionNode(Node):
             r_name = robot_info.get('name')
             r_vers = robot_info.get('version')
             morphology = robot_info.get('morphology', {})
+            sensors_block = robot_info.get('sensors', {})
 
             if idx == 0:
                 robot_ref_name = r_name
                 robot_ref_version = r_vers
                 ref_morphology = morphology
+                ref_sensors = sensors_block
 
                 try:
                     self.joint_states_topic = morphology.get('joint_states_topic', '/joint_states')
@@ -428,6 +447,12 @@ class RosbagConversionNode(Node):
                         'robot morphology (parts, is_actionable flags, joint_names). Aborting.'
                     )
                     return
+                if not self._sensors_match(ref_sensors, sensors_block):
+                    self.get_logger().error(
+                        f'Sensor config mismatch in {meta_file}. All sessions must share identical '
+                        'sensor topics/shapes. Aborting.'
+                    )
+                    return
 
             u_info = meta.get('user_info')
             if u_info and u_info not in all_users:
@@ -437,8 +462,8 @@ class RosbagConversionNode(Node):
                 t_info['_meta_source_dir'] = os.path.dirname(meta_file)
                 all_tasks.append((t_name, t_info))
 
-        # Build flat per-camera maps from all sensor types
-        sensors = robot_info.get('sensors', {})
+        # Build flat per-camera maps from all sensor types (first file's block, now validated).
+        sensors = ref_sensors or {}
         sensor_types = sensors.get('types', [])
         all_cam_raw = {}         # name -> raw topic
         all_cam_compressed = {}  # name -> compressed topic
