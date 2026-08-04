@@ -1110,7 +1110,7 @@ class LeRobotDeployNode(Node):
                 'y': float(step.get('y.vel', 0.0)) if step else 0.0,
                 'theta': float(step.get('theta.vel', 0.0)) if step else 0.0,
             }
-            # Episode logger takes a single EE pose; log the descriptor's first entry, if any.
+            # Logger takes one EE pose; use the descriptor's first entry.
             ee = None
             if self._ee_poses:
                 first = self._ee_poses[0]

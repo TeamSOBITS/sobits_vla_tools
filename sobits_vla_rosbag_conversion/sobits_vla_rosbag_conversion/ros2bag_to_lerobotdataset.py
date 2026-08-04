@@ -180,7 +180,7 @@ class RosbagConversionNode(Node):
             self.get_parameter('robot_descriptor_id').get_parameter_value().string_value
         )
 
-        # Ros names allowed by the descriptor's active groups, or None in legacy mode (no inclusion filter, only excluded_joints applies).
+        # Descriptor mode: joints allowed by active groups. None = no inclusion filter (legacy mode).
         self.active_ros_names = None
 
         if self.robot_descriptor_id:
@@ -189,10 +189,10 @@ class RosbagConversionNode(Node):
 
             # Excluded joints (mimics/inactive groups still listed with active: false)
             self.excluded_joints = desc.all_excluded_ros_names
-            # Inclusion filter: groups omitted entirely (e.g. commented out) aren't caught by all_excluded_ros_names above.
+            # Catches groups omitted entirely, which all_excluded_ros_names above misses.
             self.active_ros_names = set(desc.active_ros_names)
 
-            # EE config: respect the config's own ee_pose.enabled, don't force it on just because the descriptor has poses
+            # Config's ee_pose.enabled gates it, not just the descriptor having poses.
             ee_pose_param_enabled = self.get_parameter('ee_pose.enabled').get_parameter_value().bool_value
             if desc.ee_poses and ee_pose_param_enabled:
                 self.ee_pose_enabled = True

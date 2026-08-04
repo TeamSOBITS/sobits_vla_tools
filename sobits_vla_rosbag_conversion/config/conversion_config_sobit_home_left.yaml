@@ -33,9 +33,9 @@
     # Skip frames where no joint exceeds this velocity (rad/s). 0.0 = disabled.
     skip_static_threshold: 0.0
 
-    # Robot morphology, excluded joints, EE frames, and cameras all come from this descriptor.
+    # Robot morphology, joints, EE frames, and cameras all come from this descriptor.
     robot_descriptor_id: sobit_home_frozen
 
-    # End-effector pose via TF tree; descriptor provides frames, this only gates whether it's emitted.
+    # Descriptor supplies EE frames; this only gates whether ee_pose is emitted.
     ee_pose:
       enabled: false
