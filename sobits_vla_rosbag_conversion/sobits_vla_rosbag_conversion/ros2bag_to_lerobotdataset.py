@@ -123,7 +123,7 @@ class RosbagConversionNode(Node):
         self.declare_parameter('ee_pose.source_frames', [''])
         self.declare_parameter('ee_pose.target_frames', [''])
         self.declare_parameter('cameras.skip', False)
-        self.declare_parameter('cameras.primary', 'head_camera')
+        self.declare_parameter('cameras.primary', '')
         self.declare_parameter('cameras.names', [''])
         self.declare_parameter('cameras.compressed', [False])
 
@@ -207,7 +207,7 @@ class RosbagConversionNode(Node):
                 primary_param = (
                     self.get_parameter('cameras.primary').get_parameter_value().string_value
                 )
-                if primary_param == 'head_camera':
+                if not primary_param:
                     self.primary_camera = active_cams[0].name
                 else:
                     self.primary_camera = primary_param
