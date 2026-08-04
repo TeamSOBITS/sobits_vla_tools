@@ -214,6 +214,28 @@ class FrameSynthesizer:
             res[k] = (1.0 - alpha) * v_prev + alpha * v_next
         return res
 
+    def _hold_dict(self, series, target_time, keys):
+        """Zero-order hold of a (t, dict_of_floats) series at target_time.
+
+        Commanded positions are discrete set-points, not samples of a
+        continuous signal: a trajectory point stays in force until the next
+        command arrives. Interpolating between two commands invents motion
+        that was never commanded — e.g. a grasp held closed for 11 s reads
+        back as the hand slowly reopening across the whole hold.
+
+        Returns the most recent command at or before *target_time*.
+        """
+        if not series:
+            return {k: 0.0 for k in keys}
+
+        times = [s[0] for s in series]
+        idx = bisect.bisect_right(times, target_time) - 1
+        if idx < 0:
+            # target_time precedes every command; the first one is the best
+            # available estimate of the set-point in force.
+            idx = 0
+        return {k: series[idx][1].get(k, 0.0) for k in keys}
+
     def _get_nearest_image(self, series, target_time):
         """Get the nearest image (msg, rawdata, connection, t) to target_time in the series."""
         if not series:
@@ -385,12 +407,14 @@ class FrameSynthesizer:
             # State: measured joint positions
             state = [joint_pos[feat] for feat in self.action_features]
 
-            # Action: commanded joint positions
+            # Action: commanded joint positions.
+            # Zero-order hold, not interpolation: a command holds until the
+            # next one arrives (see _hold_dict).
             action = []
             for i, feat in enumerate(self.action_features):
                 cmd_series_for_feat = [(t, d) for t, d in cmd_joints_series if feat in d]
                 if cmd_series_for_feat and t_sec >= cmd_series_for_feat[0][0]:
-                    cmd_val = self._interpolate_dict(cmd_series_for_feat, t_sec, [feat])[feat]
+                    cmd_val = self._hold_dict(cmd_series_for_feat, t_sec, [feat])[feat]
                     action.append(cmd_val)
                 else:
                     # Fall back to future measured state
