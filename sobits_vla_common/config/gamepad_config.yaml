@@ -9,8 +9,30 @@
       command_service: "/vla/command"
       # Active controller profile (selects which button_mapping block is used).
       controller: "quest"
+      # "collection" (default): record/pause/save/delete semantics.
+      # "deploy": play toggles PLAY/STOP; reset always sends STOP (abort
+      # episode + reset model + move to the reset pose).
+      mode: "collection"
       # Cooldown between accepted button presses (seconds).
       button_cooldown_duration: 0.5
+
+      # Deadman safety trigger for REAL deployment (sobits_vla_deploy):
+      # generated actions are commanded only while this control is held.
+      # trigger_index follows the GamepadClient convention — negative =
+      # axis index (pressed when value > 0.5), non-negative = button index.
+      # SAME control as teleop arm control: quest right grip, axis 7
+      # (sobits_teleop config/sobit_home/quest.yaml arm_enable_axis — keep
+      # these two in sync; teleop uses the identical axes[7] > 0.5 gate).
+      safety:
+        # Default ON: real-robot deploy must require a held deadman. Only the
+        # deploy node reads safety.* (rosbag collection ignores it), so this
+        # cannot gate teleop recording. Set false explicitly for hands-off
+        # sim runs.
+        enabled: true
+        trigger_index: -7
+        # Trigger counts as released when no Joy message arrives within this
+        # window (controller unplugged / driver died).
+        joy_timeout_s: 0.5
       dualshock4:
         button_mapping:
           record: 7
@@ -19,6 +41,7 @@
           delete: 6
           play: 7
           stop: 7
+          reset: 6
       quest:
         button_mapping:
           record: 4
@@ -27,3 +50,6 @@
           delete: 5
           play: 4
           stop: 4
+          # deploy mode: forces a fresh episode (button 5 is free there —
+          # save/delete are collection-only).
+          reset: 5

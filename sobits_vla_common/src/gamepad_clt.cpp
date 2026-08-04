@@ -48,9 +48,14 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("gamepad_config.name", "");
   this->declare_parameter<std::string>("gamepad.controller", "dualshock4");
   this->declare_parameter<double>("gamepad.button_cooldown_duration", 0.5);
+  // "collection" (default): record/pause/save/delete semantics.
+  // "deploy": play button toggles PLAY/STOP, reset button always sends STOP
+  // (the deploy node aborts + resets on STOP in any state).
+  this->declare_parameter<std::string>("gamepad.mode", "collection");
   this->declare_parameter<double>("gamepad_config.button_cooldown_duration", 0.5);
 
   command_service_name_ = this->get_parameter("gamepad.command_service").as_string();
+  deploy_mode_ = this->get_parameter("gamepad.mode").as_string() == "deploy";
 
   std::string old_name = this->get_parameter("gamepad_config.name").as_string();
   std::string new_name = this->get_parameter("gamepad.controller").as_string();
@@ -74,22 +79,27 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>(base + "delete", -1);
   this->declare_parameter<int>(base + "play", -1);
   this->declare_parameter<int>(base + "stop", -1);
+  this->declare_parameter<int>(base + "reset", -1);
 
   record_button_ = this->get_parameter(base + "record").as_int();
   pause_button_ = this->get_parameter(base + "pause").as_int();
   save_button_ = this->get_parameter(base + "save").as_int();
   delete_button_ = this->get_parameter(base + "delete").as_int();
 
-  // For deploy package (play and stop)
-  int play_button = this->get_parameter(base + "play").as_int();
-  int stop_button = this->get_parameter(base + "stop").as_int();
+  // For deploy mode (play/stop toggle + reset)
+  play_button_ = this->get_parameter(base + "play").as_int();
+  stop_button_ = this->get_parameter(base + "stop").as_int();
+  reset_button_ = this->get_parameter(base + "reset").as_int();
 
-  // If record/pause/save/delete are not set, try checking deploy parameters
-  if (record_button_ == -1 && play_button != -1) {
-    record_button_ = play_button;  // Alias record to play
-  }
-  if (pause_button_ == -1 && stop_button != -1) {
-    pause_button_ = stop_button;  // Alias pause to stop
+  // Collection-mode legacy aliasing: configs that only define play/stop
+  // still drive record/pause.
+  if (!deploy_mode_) {
+    if (record_button_ == -1 && play_button_ != -1) {
+      record_button_ = play_button_;  // Alias record to play
+    }
+    if (pause_button_ == -1 && stop_button_ != -1) {
+      pause_button_ = stop_button_;  // Alias pause to stop
+    }
   }
 
   // Log params
@@ -165,6 +175,28 @@ void GamepadClient::timerCallback()
       return static_cast<int>(idx) < static_cast<int>(last_joy_msg_->buttons.size()) &&
              last_joy_msg_->buttons[idx] != 0;
     };
+
+  if (deploy_mode_) {
+    // Reset: force a fresh episode — STOP in any state (the deploy node
+    // aborts a running episode, resets model state and re-poses the robot).
+    if (reset_button_ != -1 && pressed(reset_button_)) {
+      callService(sobits_interfaces::srv::VlaCommand::Request::STOP);
+      button_pressed = true;
+    }
+    // Play button: PLAY when stopped, STOP while playing.
+    if (!button_pressed && play_button_ != -1 && pressed(play_button_)) {
+      if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_PLAYING) {
+        callService(sobits_interfaces::srv::VlaCommand::Request::STOP);
+      } else {
+        callService(sobits_interfaces::srv::VlaCommand::Request::PLAY);
+      }
+      button_pressed = true;
+    }
+    if (button_pressed) {
+      last_button_press_time_ = now;
+    }
+    return;
+  }
 
   // Toggle Record/Pause/Resume
   if (record_button_ != -1 && pressed(record_button_)) {

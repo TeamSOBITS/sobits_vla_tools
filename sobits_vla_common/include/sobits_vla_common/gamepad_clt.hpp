@@ -66,6 +66,10 @@ private:
   int pause_button_;
   int save_button_;
   int delete_button_;
+  int play_button_;
+  int stop_button_;
+  int reset_button_;
+  bool deploy_mode_;
 
   double button_cooldown_duration_;
   rclcpp::Time last_button_press_time_;
