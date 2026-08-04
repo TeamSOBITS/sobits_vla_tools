@@ -28,6 +28,8 @@
 
 """Launch file for the sobits_vla_training ROS 2 node."""
 
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.actions import OpaqueFunction
@@ -37,9 +39,17 @@ from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+from sobits_vla_common.launch.utils import default_pixi_manifest, pixi_prefix
+
 
 def _str_to_bool(value: str) -> bool:
     return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+# Default pixi environment for this package's node. Machines without a GPU
+# override at launch time:  pixi_env:=training-cpu
+_DEFAULT_PIXI_ENV = 'training-gpu'
+_DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
 def _create_train_node(context, *args, **kwargs):
@@ -47,7 +57,6 @@ def _create_train_node(context, *args, **kwargs):
     robot = LaunchConfiguration('robot').perform(context).strip()
     if robot:
         from ament_index_python.packages import get_package_share_directory
-        import os
         config_file = os.path.join(
             get_package_share_directory('sobits_vla_training'),
             'config',
@@ -56,6 +65,10 @@ def _create_train_node(context, *args, **kwargs):
     else:
         config_file = LaunchConfiguration('config_file').perform(context)
     node_name = LaunchConfiguration('node_name').perform(context)
+
+    pixi_env = LaunchConfiguration('pixi_env').perform(context)
+    pixi_manifest = LaunchConfiguration('pixi_manifest').perform(context)
+    prefix = pixi_prefix(pixi_env, pixi_manifest)
 
     policy = LaunchConfiguration('policy').perform(context).strip()
     dataset_repo_id = LaunchConfiguration('dataset_repo_id').perform(context).strip()
@@ -99,6 +112,7 @@ def _create_train_node(context, *args, **kwargs):
             executable='train_node',
             name=node_name,
             output='screen',
+            prefix=prefix or None,
             parameters=[
                 config_file,
                 overrides,
@@ -140,6 +154,21 @@ def generate_launch_description() -> LaunchDescription:
                 'node_name',
                 default_value='sobits_vla_training',
                 description='ROS 2 node name.',
+            ),
+            DeclareLaunchArgument(
+                'pixi_env',
+                default_value=_DEFAULT_PIXI_ENV,
+                description=(
+                    'pixi environment to run the node in (Python deps). '
+                    'Use training-cpu on machines without a GPU. '
+                    'Set to empty ("") to disable the pixi prefix and run in '
+                    'the ambient interpreter.'
+                ),
+            ),
+            DeclareLaunchArgument(
+                'pixi_manifest',
+                default_value=_DEFAULT_PIXI_MANIFEST,
+                description='Path to pixi.toml (override for installed layouts).',
             ),
             DeclareLaunchArgument(
                 'policy',

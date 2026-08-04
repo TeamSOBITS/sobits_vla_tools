@@ -1,10 +1,10 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — SmolVLA
+    # sobits_vla_training — SOBIT HOME "pick and place ball over bowl" (REAL, left arm) — SmolVLA
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_smolvla
-    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Dataset : team-sobits/sobit_home-pnp_ball_bowl-left-abs-real (10 fps, absolute actions, 102 real episodes)
     # Policy  : SmolVLA (450M — lightweight; SmolVLM2 backbone + action expert)
     # Base    : lerobot/smolvla_base
     # Recipe  : per HF smolvla docs — FULL fine-tune (no LoRA: the model is
@@ -30,12 +30,12 @@
       active_mobile_base: true
 
     dataset:
-      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
+      repo_id: "team-sobits/sobit_home-pnp_ball_bowl-left-abs-real"
       num_workers: 4
       rename_map: []
 
     checkpoint:
-      output_dir: "sobit_home_pickup_block_smolvla"
+      output_dir: "sobit_home_pnp_ball_bowl_smolvla"
       resume: false
       overwrite: true
       pretrained_path: "lerobot/smolvla_base"
@@ -60,17 +60,17 @@
       enable: true
       project: "sobits_vla_training"
       entity: ""
-      run_name: "sobit_home-pickup_block-left-abs-smolvla-vlmft"
-      notes: "SmolVLA full fine-tune (VLM unfrozen) on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
+      run_name: "sobit_home-pnp_ball_bowl-left-abs-real-smolvla-vlmft"
+      notes: "SmolVLA full fine-tune (VLM unfrozen) on sobit_home-pnp_ball_bowl-left-abs-real (10 fps, absolute actions, left arm, 102 real-robot episodes)"
       tags:
         - smolvla
         - sobit_home
-        - pickup_block
-        - gazebo
+        - pnp_ball_bowl
+        - real
 
     hub:
       push_to_hub: true
-      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_smolvla_vlmft"
+      repo_id: "team-sobits/sobit_home_pnp_ball_bowl_left_abs_smolvla_vlmft"
       private: false
 
     peft:
