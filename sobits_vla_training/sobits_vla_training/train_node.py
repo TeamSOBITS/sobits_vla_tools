@@ -291,16 +291,25 @@ class TrainNode(Node):
         run_preflight_checks(params, ros_logger=self.get_logger())
 
         from sobits_vla_training.config_builder import (
+            _default_model_root,
             build_accelerator,
             build_train_config,
             find_package_src_dir,
         )
 
         out_dir_raw = params.get('checkpoint.output_dir', '')
+        hub_repo_id = params.get('hub.repo_id', '') or ''
         package_src_dir = find_package_src_dir()
 
         if not out_dir_raw:
-            out = package_src_dir / 'outputs'
+            # No identifier at all — this would collide on the shared root.
+            if not hub_repo_id:
+                raise RuntimeError(
+                    'checkpoint.output_dir and hub.repo_id are both empty — '
+                    'refusing to default to a shared output root; set one '
+                    'explicitly.'
+                )
+            out = _default_model_root() / hub_repo_id
         else:
             raw_path = Path(out_dir_raw).expanduser()
             if raw_path.is_absolute():
@@ -315,15 +324,6 @@ class TrainNode(Node):
             params.get('checkpoint.overwrite', False)
             and not params.get('checkpoint.resume', False)
         ):
-            # Refuse to delete the shared outputs root (empty output_dir) —
-            # that is the parent of every run, not one run's directory.
-            if not out_dir_raw:
-                raise RuntimeError(
-                    'checkpoint.overwrite=true but checkpoint.output_dir is '
-                    'empty — this would delete the shared outputs root '
-                    f'({out}), containing every prior run. Set a run-named '
-                    'checkpoint.output_dir.'
-                )
             import shutil
             # Safety guard: only delete if it's a sub-directory and not CWD,
             # parent CWD, or root directory

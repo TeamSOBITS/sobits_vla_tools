@@ -80,6 +80,24 @@ def find_package_src_dir() -> Path:
     return current_file.parent.parent
 
 
+def _default_model_root() -> Path:
+    """Resolve the default checkpoint output root: <package_src>/lerobotmodel/."""
+    candidate = Path(__file__).resolve().parent
+    for _ in range(8):
+        if (candidate / 'package.xml').exists() and (candidate / 'lerobotmodel').is_dir():
+            return candidate / 'lerobotmodel'
+        src_root = candidate / 'src'
+        if src_root.is_dir():
+            for pattern in ('*/sobits_vla_training', '*/*/sobits_vla_training'):
+                for pkg_dir in src_root.glob(pattern):
+                    if (pkg_dir / 'lerobotmodel').is_dir():
+                        return pkg_dir / 'lerobotmodel'
+        candidate = candidate.parent
+
+    from ament_index_python.packages import get_package_share_directory
+    return Path(get_package_share_directory('sobits_vla_training')) / 'lerobotmodel'
+
+
 def _resolve_pretrained_path(raw: str) -> Path | str:
     """Return a Path for local files, or pass through HF Hub repo_id strings."""
     if not raw:
