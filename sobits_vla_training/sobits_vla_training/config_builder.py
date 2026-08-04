@@ -259,8 +259,12 @@ def build_peft_config(params: dict[str, Any]):
     target_raw = params.get('peft.target_modules', '') or ''
     target_modules: list[str] | str | None = None
     if target_raw:
+        # peft treats a plain string as a single regex fullmatch — only
+        # split on ',' (a literal module-name list); a comma-free string
+        # is a regex and must stay a string.
         target_modules = (
-            target_raw if isinstance(target_raw, list) else target_raw
+            target_raw if isinstance(target_raw, list) or ',' not in target_raw
+            else [s.strip() for s in target_raw.split(',') if s.strip()]
         )
 
     full_training_modules = params.get('peft.full_training_modules', None)
