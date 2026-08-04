@@ -33,10 +33,16 @@ a known rotation, then checks resolve() returns T(target<-source) — not
 its inverse.
 """
 
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
-from sobits_vla_rosbag_conversion.tf_buffer import OfflineTFTree
+
+# Package is not installed in the pixi envs -- make the test runnable from any cwd.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from sobits_vla_rosbag_conversion.tf_buffer import OfflineTFTree  # noqa: E402
 
 
 class _Vector3:
