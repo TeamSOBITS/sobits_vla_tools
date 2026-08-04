@@ -555,195 +555,78 @@ class LeRobotDeployNode(Node):
         self.declare_parameter('robot.descriptor_id', '')
         desc_id = str(self.get_parameter('robot.descriptor_id').value)
 
-        if desc_id:
-            from sobits_vla_common.robot_descriptor import load_robot_descriptor
-            desc = load_robot_descriptor(desc_id)
-            self._active_profile = desc_id
-
-            self.declare_parameter('robot.active_groups', [g.name for g in desc.active_groups])
-            self.declare_parameter('robot.active_cameras', [c.name for c in desc.active_cameras])
-            self.declare_parameter('robot.active_mobile_base', True)
-
-            active_groups_list = list(self.get_parameter('robot.active_groups').value)
-            active_cameras_list = list(self.get_parameter('robot.active_cameras').value)
-            active_mobile_base = bool(self.get_parameter('robot.active_mobile_base').value)
-
-            self._joint_states_topic = desc.joint_states_topic
-            self._joint_groups = []
-            self._joint_features = []
-            self._joint_feature_to_ros = {}
-            self._ee_poses = desc.ee_poses or []
-
-            for group in desc.groups:
-                if group.name in active_groups_list:
-                    joints_ros = [j.ros_name for j in group.joints]
-                    features = [j.feature for j in group.joints]
-                    self._joint_groups.append(
-                        JointGroupConfig(
-                            name=group.name,
-                            command_topic=group.command_topic,
-                            joints_ros=joints_ros,
-                            features=features,
-                            max_joint_delta=group.max_joint_delta,
-                        )
-                    )
-                    for ros_name, feature in zip(joints_ros, features):
-                        self._joint_features.append(feature)
-                        self._joint_feature_to_ros[feature] = ros_name
-
-            if desc.mobile_base and active_mobile_base:
-                self._odom_topic = desc.mobile_base.odom_topic
-                self._mobile_base_cmd_topic = desc.mobile_base.command_topic
-                self._mobile_base_features = desc.mobile_base.features
-                self._max_vel_x = desc.mobile_base.max_vel_x
-                self._max_vel_y = desc.mobile_base.max_vel_y
-                self._max_vel_theta = desc.mobile_base.max_vel_theta
-            else:
-                self._odom_topic = ''
-                self._mobile_base_cmd_topic = ''
-                self._mobile_base_features = []
-                self._max_vel_x = 0.0
-                self._max_vel_y = 0.0
-                self._max_vel_theta = 0.0
-
-            self._camera_names = []
-            self._camera_topics = {}
-            self._camera_encodings = {}
-            self._camera_compressed = {}
-
-            for cam in desc.sensors.get('cameras', []):
-                if cam.name in active_cameras_list:
-                    self._camera_names.append(cam.name)
-                    if cam.compressed and cam.compressed_topic:
-                        self._camera_topics[cam.name] = cam.compressed_topic
-                        self._camera_compressed[cam.name] = True
-                    else:
-                        self._camera_topics[cam.name] = cam.raw_topic
-                        self._camera_compressed[cam.name] = False
-                    self._camera_encodings[cam.name] = cam.encoding if cam.encoding else 'rgb8'
-
-        else:
-            # No EE support without a descriptor -- the legacy path is being phased out.
-            self._ee_poses = []
-            self.declare_parameter('robot.name', '')
-            self.declare_parameter('robot.active_profile', '')
-
-            robot_name = str(self.get_parameter('robot.name').value)
-            active_profile = str(self.get_parameter('robot.active_profile').value)
-
-            if robot_name and active_profile and robot_name != active_profile:
-                self.get_logger().warn(
-                    'Both robot.name={!r} and robot.active_profile={!r} are set. '
-                    'Using robot.name.'.format(robot_name, active_profile)
-                )
-
-            if robot_name:
-                self._active_profile = robot_name
-                ns = 'robot'
-            elif active_profile:
-                self._active_profile = active_profile
-                ns = 'robot'
-            else:
-                raise RuntimeError(
-                    'robot.descriptor_id, robot.name, and robot.active_profile '
-                    'are all unset -- refusing to default to a robot-specific '
-                    'profile.'
-                )
-
-            self.declare_parameter(f'{ns}.joint_states_topic', '/joint_states')
-            self.declare_parameter(f'{ns}.odom_topic', '')
-            self.declare_parameter(f'{ns}.groups.names', ['arm'])
-            self.declare_parameter(f'{ns}.mobile_base.command_topic', '')
-            self.declare_parameter(f'{ns}.mobile_base.features', ['x.vel', 'theta.vel'])
-            self.declare_parameter(f'{ns}.mobile_base.max_vel_x', 0.0)
-            self.declare_parameter(f'{ns}.mobile_base.max_vel_y', 0.0)
-            self.declare_parameter(f'{ns}.mobile_base.max_vel_theta', 0.0)
-            self.declare_parameter(f'{ns}.cameras.names', ['head'])
-
-            self._joint_states_topic = str(self.get_parameter(f'{ns}.joint_states_topic').value)
-            self._odom_topic = str(self.get_parameter(f'{ns}.odom_topic').value)
-            self._mobile_base_cmd_topic = str(
-                self.get_parameter(f'{ns}.mobile_base.command_topic').value
+        if not desc_id:
+            raise RuntimeError(
+                'robot.descriptor_id, robot.name, and robot.active_profile '
+                'are all unset -- refusing to default to a robot-specific '
+                'profile.'
             )
-            self._mobile_base_features = list(
-                self.get_parameter(f'{ns}.mobile_base.features').value
-            )
-            self._max_vel_x = float(
-                self.get_parameter(f'{ns}.mobile_base.max_vel_x').value
-            )
-            self._max_vel_y = float(
-                self.get_parameter(f'{ns}.mobile_base.max_vel_y').value
-            )
-            self._max_vel_theta = float(
-                self.get_parameter(f'{ns}.mobile_base.max_vel_theta').value
-            )
-            self._camera_names = list(self.get_parameter(f'{ns}.cameras.names').value)
 
-            group_names = list(self.get_parameter(f'{ns}.groups.names').value)
-            self._joint_groups: List[JointGroupConfig] = []
-            self._joint_features: List[str] = []
-            self._joint_feature_to_ros: Dict[str, str] = {}
+        from sobits_vla_common.robot_descriptor import load_robot_descriptor
+        desc = load_robot_descriptor(desc_id)
+        self._active_profile = desc_id
 
-            for group_name in group_names:
-                group_ns = f'{ns}.groups.{group_name}'
-                self.declare_parameter(f'{group_ns}.command_topic', '')
-                self.declare_parameter(f'{group_ns}.joints_ros', [''])
-                self.declare_parameter(f'{group_ns}.features', [''])
-                self.declare_parameter(f'{group_ns}.max_joint_delta', -1.0)
+        self.declare_parameter('robot.active_groups', [g.name for g in desc.active_groups])
+        self.declare_parameter('robot.active_cameras', [c.name for c in desc.active_cameras])
+        self.declare_parameter('robot.active_mobile_base', True)
 
-                command_topic = str(self.get_parameter(f'{group_ns}.command_topic').value)
-                joints_ros = [j for j in self.get_parameter(f'{group_ns}.joints_ros').value if j]
-                features = [f for f in self.get_parameter(f'{group_ns}.features').value if f]
-                group_delta = float(self.get_parameter(f'{group_ns}.max_joint_delta').value)
+        active_groups_list = list(self.get_parameter('robot.active_groups').value)
+        active_cameras_list = list(self.get_parameter('robot.active_cameras').value)
+        active_mobile_base = bool(self.get_parameter('robot.active_mobile_base').value)
 
-                if not command_topic:
-                    raise RuntimeError(
-                        'Missing command topic for group {!r}.'.format(group_name)
-                    )
-                if len(joints_ros) != len(features):
-                    raise RuntimeError(
-                        'Group {!r} must have the same number of joints_ros and '
-                        'features.'.format(group_name)
-                    )
+        self._joint_states_topic = desc.joint_states_topic
+        self._joint_groups = []
+        self._joint_features = []
+        self._joint_feature_to_ros = {}
+        self._ee_poses = desc.ee_poses or []
 
+        for group in desc.groups:
+            if group.name in active_groups_list:
+                joints_ros = [j.ros_name for j in group.joints]
+                features = [j.feature for j in group.joints]
                 self._joint_groups.append(
                     JointGroupConfig(
-                        name=group_name,
-                        command_topic=command_topic,
+                        name=group.name,
+                        command_topic=group.command_topic,
                         joints_ros=joints_ros,
                         features=features,
-                        max_joint_delta=group_delta,
+                        max_joint_delta=group.max_joint_delta,
                     )
                 )
-
-                for joint_name, feature in zip(joints_ros, features):
+                for ros_name, feature in zip(joints_ros, features):
                     self._joint_features.append(feature)
-                    self._joint_feature_to_ros[feature] = joint_name
+                    self._joint_feature_to_ros[feature] = ros_name
 
-            self.declare_parameter(f'{ns}.cameras.default_encoding', 'rgb8')
-            self.declare_parameter(f'{ns}.cameras.default_compressed', True)
-            default_encoding = str(self.get_parameter(f'{ns}.cameras.default_encoding').value)
-            default_compressed = bool(
-                self.get_parameter(f'{ns}.cameras.default_compressed').value
-            )
-            self._camera_topics: Dict[str, str] = {}
-            self._camera_encodings: Dict[str, str] = {}
-            self._camera_compressed: Dict[str, bool] = {}
-            for cam_name in self._camera_names:
-                cam_ns = f'{ns}.cameras.{cam_name}'
-                self.declare_parameter(f'{cam_ns}.topic', '')
-                self.declare_parameter(f'{cam_ns}.encoding', default_encoding)
-                self.declare_parameter(f'{cam_ns}.compressed', default_compressed)
-                cam_topic = str(self.get_parameter(f'{cam_ns}.topic').value)
-                if not cam_topic:
-                    raise RuntimeError('Camera {!r} must define a topic.'.format(cam_name))
-                self._camera_topics[cam_name] = cam_topic
-                self._camera_encodings[cam_name] = str(
-                    self.get_parameter(f'{cam_ns}.encoding').value
-                )
-                self._camera_compressed[cam_name] = bool(
-                    self.get_parameter(f'{cam_ns}.compressed').value
-                )
+        if desc.mobile_base and active_mobile_base:
+            self._odom_topic = desc.mobile_base.odom_topic
+            self._mobile_base_cmd_topic = desc.mobile_base.command_topic
+            self._mobile_base_features = desc.mobile_base.features
+            self._max_vel_x = desc.mobile_base.max_vel_x
+            self._max_vel_y = desc.mobile_base.max_vel_y
+            self._max_vel_theta = desc.mobile_base.max_vel_theta
+        else:
+            self._odom_topic = ''
+            self._mobile_base_cmd_topic = ''
+            self._mobile_base_features = []
+            self._max_vel_x = 0.0
+            self._max_vel_y = 0.0
+            self._max_vel_theta = 0.0
+
+        self._camera_names = []
+        self._camera_topics = {}
+        self._camera_encodings = {}
+        self._camera_compressed = {}
+
+        for cam in desc.sensors.get('cameras', []):
+            if cam.name in active_cameras_list:
+                self._camera_names.append(cam.name)
+                if cam.compressed and cam.compressed_topic:
+                    self._camera_topics[cam.name] = cam.compressed_topic
+                    self._camera_compressed[cam.name] = True
+                else:
+                    self._camera_topics[cam.name] = cam.raw_topic
+                    self._camera_compressed[cam.name] = False
+                self._camera_encodings[cam.name] = cam.encoding if cam.encoding else 'rgb8'
 
     def _on_set_parameters(self, params: List[Any]) -> Any:
         from rcl_interfaces.msg import SetParametersResult
