@@ -97,6 +97,11 @@ class InferenceEngine:
         self.inference_cond = Condition()
         self.single_step_result: Optional[Dict[str, float]] = None
         self.single_step_lock = Lock()
+        # Play-session generation: bumped on every play toggle so results
+        # from an inference that started in a previous session (e.g. STOP +
+        # episode reset raced an in-flight predict) are discarded instead of
+        # landing in the freshly cleared chunk buffer.
+        self.session_gen = 0
 
         self.latency_tracker = None
         if self.rtc_enabled and _RTC_AVAILABLE and LatencyTracker is not None:
@@ -134,6 +139,15 @@ class InferenceEngine:
 
     def update_play_enabled(self, enabled: bool):
         with self.inference_cond:
+            # Bump the generation only on a real PLAY<->STOP transition. The
+            # async refill path calls this with enabled=True on every tick the
+            # queue is at/below threshold; bumping unconditionally invalidated
+            # the in-flight inference each time (tick 100 ms < inference
+            # ~130 ms), so every finished chunk was discarded as "stale", the
+            # queue never filled, and the arm never moved -- a livelock that
+            # only appears when a refill request overlaps an inference.
+            if enabled != self.play_enabled:
+                self.session_gen += 1
             self.play_enabled = enabled
             self.inference_cond.notify_all()
 
@@ -191,6 +205,7 @@ class InferenceEngine:
                     if not self.play_enabled:
                         self.inference_cond.wait(timeout=0.5)
                         continue
+                    gen = self.session_gen
 
                 obs_frame = obs_builder.snapshot_observation(
                     tf_buffer,
@@ -219,6 +234,13 @@ class InferenceEngine:
                     continue
 
                 if steps:
+                    with self.inference_cond:
+                        if gen != self.session_gen:
+                            self.log_info(
+                                'Discarding stale single-step result from a '
+                                'previous play session.'
+                            )
+                            continue
                     with self.single_step_lock:
                         self.single_step_result = steps[0]
             return
@@ -235,6 +257,7 @@ class InferenceEngine:
                     (self.async_enabled and queue_len <= threshold_len)
                     or (not self.async_enabled and queue_len == 0)
                 )
+                gen = self.session_gen
                 if not need_infer:
                     self.inference_cond.wait(timeout=0.5)
                     continue
@@ -269,6 +292,13 @@ class InferenceEngine:
                 continue
 
             if chunk:
+                with self.inference_cond:
+                    if gen != self.session_gen:
+                        self.log_info(
+                            'Discarding stale chunk from a previous play '
+                            'session (episode was reset mid-inference).'
+                        )
+                        continue
                 if self.rtc_enabled:
                     chunk_buffer.replace(raw_model_chunk, chunk, used_delay)
                 else:
