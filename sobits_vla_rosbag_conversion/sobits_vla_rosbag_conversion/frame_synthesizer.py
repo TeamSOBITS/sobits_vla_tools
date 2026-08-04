@@ -28,7 +28,7 @@
 import bisect
 
 import numpy as np
-from sobits_vla_common.image_codec import decode_image_message
+from sobits_vla_common.image_codec import decode_depth_message, decode_image_message
 from sobits_vla_rosbag_conversion.tf_buffer import mat_to_pose6d, OfflineTFTree
 import torch
 
@@ -50,6 +50,7 @@ class FrameSynthesizer:
         primary_camera: str,
         camera_topics: dict,
         subtask_label_to_idx: dict,
+        depth_camera_topics: dict | None = None,
         logger=None,
     ):
         self.fps = fps
@@ -65,6 +66,7 @@ class FrameSynthesizer:
         self.skip_cameras = skip_cameras
         self.primary_camera = primary_camera
         self.camera_topics = camera_topics
+        self.depth_camera_topics = depth_camera_topics or {}
         self.subtask_label_to_idx = subtask_label_to_idx
         self.logger = logger
 
@@ -306,6 +308,32 @@ class FrameSynthesizer:
                 skipped_img_decode += 1
                 continue
 
+            # Fetch depth images at nearest time, same sync pattern as secondaries
+            depth_images = {}
+            for cam_name in self.depth_camera_topics.keys():
+                msg_img, raw_img, conn_img, t_img = (
+                    self._get_nearest_image(
+                        cam_series[cam_name], t_sec, times=cam_series_times[cam_name]
+                    )
+                )
+                if msg_img is None:
+                    decoding_failed = True
+                    break
+                try:
+                    depth_img = decode_depth_message(msg_img)
+                    if depth_img is None:
+                        decoding_failed = True
+                        break
+                    depth_images[cam_name] = depth_img
+                    image_times[cam_name] = t_img
+                except Exception:
+                    decoding_failed = True
+                    break
+
+            if decoding_failed:
+                skipped_img_decode += 1
+                continue
+
             # Check sync difference for other cameras
             img_times = list(image_times.values())
             max_camera_diff = max(img_times) - min(img_times)
@@ -446,6 +474,10 @@ class FrameSynthesizer:
                     frame[f'observation.images.{c_name}'] = torch.from_numpy(
                         img_arr
                     )
+
+            for c_name in self.depth_camera_topics.keys():
+                depth_arr = np.ascontiguousarray(depth_images[c_name][..., np.newaxis])
+                frame[f'observation.images.{c_name}'] = torch.from_numpy(depth_arr)
 
             # Subtask annotation. Index 0 ("No Subtask") covers episodes with no subtasks_map.
             if self.subtask_label_to_idx:

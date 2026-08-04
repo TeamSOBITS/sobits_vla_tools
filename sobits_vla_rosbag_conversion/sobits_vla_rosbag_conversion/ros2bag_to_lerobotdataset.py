@@ -126,6 +126,8 @@ class RosbagConversionNode(Node):
         self.declare_parameter('cameras.primary', '')
         self.declare_parameter('cameras.names', [''])
         self.declare_parameter('cameras.compressed', [False])
+        self.declare_parameter('depth_cameras.names', [''])
+        self.declare_parameter('depth_cameras.compressed', [False])
 
         self.rosbag_directory = (
             self.get_parameter('rosbag_directory').get_parameter_value().string_value
@@ -221,6 +223,11 @@ class RosbagConversionNode(Node):
                 self.cameras_names = []
                 self.cameras_compressed = []
                 self.skip_cameras = True
+
+            # Depth cameras (parallel tracking, never merged with RGB above)
+            active_depth_cams = desc.active_depth_cameras
+            self.depth_cameras_names = [c.name for c in active_depth_cams]
+            self.depth_cameras_compressed = [c.compressed for c in active_depth_cams]
         else:
             # Fallback to legacy parameters
             raw_excluded = (
@@ -282,12 +289,23 @@ class RosbagConversionNode(Node):
                 self.get_parameter('cameras.compressed')
                 .get_parameter_value().bool_array_value
             )
+            raw_depth_names = (
+                self.get_parameter('depth_cameras.names').get_parameter_value().string_array_value
+            )
+            self.depth_cameras_names = [n for n in raw_depth_names if n]
+            self.depth_cameras_compressed = list(
+                self.get_parameter('depth_cameras.compressed')
+                .get_parameter_value().bool_array_value
+            )
 
         # Configuration attributes (populated from YAML)
         self.camera_topics = {}
         self.camera_info_topics = {}
         self.topic_to_cam = {}
         self.camera_shapes = {}
+        self.depth_camera_topics = {}
+        self.depth_camera_info_topics = {}
+        self.depth_camera_shapes = {}
         self.joint_states_topic = ''
         self.cmd_vel_topic = ''
         self.odom_topic = ''
@@ -353,6 +371,147 @@ class RosbagConversionNode(Node):
             if rs.get('properties', {}) != os_.get('properties', {}):
                 return False
         return True
+
+    def _resolve_cameras(
+        self,
+        selected_names,
+        selected_compressed,
+        all_cam_known,
+        all_cam_raw,
+        all_cam_compressed,
+        all_cam_info,
+        all_cam_props,
+        candidate_bag_dirs,
+        decode_fn,
+        label: str,
+    ):
+        """Resolve topics/info_topics/shapes for one camera group (RGB or depth)."""
+        if len(selected_compressed) < len(selected_names):
+            selected_compressed = selected_compressed + [False] * (
+                len(selected_names) - len(selected_compressed)
+            )
+
+        topics = {}
+        info_topics = {}
+        for name, use_compressed in zip(selected_names, selected_compressed):
+            if name not in all_cam_known:
+                self.get_logger().error(
+                    f"{label} '{name}' not found in metadata sensors. Aborting."
+                )
+                return None
+            if use_compressed:
+                topic = all_cam_compressed.get(name, '')
+                if not topic:
+                    self.get_logger().warn(
+                        f"{label} '{name}': no compressed topic in metadata, "
+                        'falling back to raw.'
+                    )
+                    topic = all_cam_raw.get(name, '')
+            else:
+                topic = all_cam_raw.get(name, '')
+            if not topic:
+                self.get_logger().error(
+                    f"{label} '{name}': no topic available (raw or compressed). Aborting."
+                )
+                return None
+            topics[name] = topic
+            info_topics[name] = all_cam_info.get(name, '')
+
+        shapes = {}
+        unresolved = []
+        for cam_name in topics.keys():
+            props = all_cam_props.get(cam_name, {})
+            width = props.get('width')
+            height = props.get('height')
+            if width and height:
+                shapes[cam_name] = (int(width), int(height))
+            else:
+                unresolved.append(cam_name)
+
+        if not unresolved:
+            return topics, info_topics, shapes
+
+        unresolved_set = set(unresolved)
+        for bag_dir in candidate_bag_dirs:
+            if not unresolved_set:
+                break
+            try:
+                with AnyReader([Path(bag_dir)]) as reader:
+                    info_topic_to_cam = {
+                        info_topics[name]: name
+                        for name in unresolved_set
+                        if info_topics.get(name)
+                    }
+                    if not info_topic_to_cam:
+                        break
+                    connections = [
+                        c for c in reader.connections
+                        if c.topic in info_topic_to_cam
+                    ]
+                    for connection, _, rawdata in reader.messages(connections=connections):
+                        cam_name = info_topic_to_cam.get(connection.topic)
+                        if not cam_name or cam_name not in unresolved_set:
+                            continue
+                        msg = reader.deserialize(rawdata, connection.msgtype)
+                        shapes[cam_name] = (int(msg.width), int(msg.height))
+                        unresolved_set.remove(cam_name)
+                        if not unresolved_set:
+                            break
+            except Exception:
+                continue
+
+        # If CameraInfo was unavailable, infer resolution from first image messages.
+        for bag_dir in candidate_bag_dirs:
+            if not unresolved_set:
+                break
+            try:
+                with AnyReader([Path(bag_dir)]) as reader:
+                    topic_to_cam = {
+                        topics[name]: name
+                        for name in unresolved_set
+                        if topics.get(name)
+                    }
+                    if not topic_to_cam:
+                        break
+                    connections = [c for c in reader.connections if c.topic in topic_to_cam]
+                    for connection, _, rawdata in reader.messages(connections=connections):
+                        cam_name = topic_to_cam.get(connection.topic)
+                        if not cam_name or cam_name not in unresolved_set:
+                            continue
+                        msg = reader.deserialize(rawdata, connection.msgtype)
+                        try:
+                            img = decode_fn(msg)
+                            if img is None:
+                                continue
+                        except Exception:
+                            continue
+                        h, w = img.shape[:2]
+                        shapes[cam_name] = (int(w), int(h))
+                        unresolved_set.remove(cam_name)
+                        if not unresolved_set:
+                            break
+            except Exception:
+                continue
+
+        if unresolved_set:
+            unresolved_msgs = []
+            for cam_name in sorted(unresolved_set):
+                info_topic = info_topics.get(cam_name, '')
+                image_topic = topics.get(cam_name, '')
+                unresolved_msgs.append(
+                    f"camera='{cam_name}', info_topic='{info_topic}', "
+                    f"image_topic='{image_topic}'"
+                )
+            self.get_logger().error(
+                f'Failed to resolve {label.lower()} dimensions from metadata, '
+                'camera_info, or image streams. '
+                'Please re-record metadata with sensor properties populated.'
+            )
+            for msg in unresolved_msgs:
+                self.get_logger().error(f'  unresolved: {msg}')
+            return None
+
+        return topics, info_topics, shapes
 
     def convert(self):
         self.get_logger().info('Starting dataset conversion...')
@@ -503,35 +662,35 @@ class RosbagConversionNode(Node):
         all_cam_known = set(all_cam_raw.keys()) | set(all_cam_compressed.keys())
         selected_names = self.cameras_names if self.cameras_names else list(all_cam_known)
         selected_compressed = list(self.cameras_compressed)
-        # Pad compressed flags with False if shorter than names
-        if len(selected_compressed) < len(selected_names):
-            selected_compressed += [False] * (len(selected_names) - len(selected_compressed))
 
-        self.camera_topics = {}
-        self.camera_info_topics = {}
-        for name, use_compressed in zip(selected_names, selected_compressed):
-            if name not in all_cam_known:
-                self.get_logger().error(
-                    f"Camera '{name}' not found in metadata sensors. Aborting."
-                )
-                return
-            if use_compressed:
-                topic = all_cam_compressed.get(name, '')
-                if not topic:
-                    self.get_logger().warn(
-                        f"Camera '{name}': no compressed topic in metadata, "
-                        'falling back to raw.'
-                    )
-                    topic = all_cam_raw.get(name, '')
+        # Candidate episode dirs, used by both RGB and depth shape-sniffing fallback.
+        candidate_bag_dirs = []
+        for _, task_info in all_tasks:
+            meta_src = task_info.get('_meta_source_dir', self.rosbag_directory)
+            bag_group = task_info.get('bag_path', task_info.get('bag_dir', ''))
+            if bag_group.startswith('/'):
+                group_dir = bag_group
             else:
-                topic = all_cam_raw.get(name, '')
-            if not topic:
-                self.get_logger().error(
-                    f"Camera '{name}': no topic available (raw or compressed). Aborting."
-                )
-                return
-            self.camera_topics[name] = topic
-            self.camera_info_topics[name] = all_cam_info.get(name, '')
+                group_dir = os.path.join(meta_src, bag_group)
+            if not os.path.isdir(group_dir):
+                continue
+            for ep in sorted(os.listdir(group_dir)):
+                ep_path = os.path.join(group_dir, ep)
+                if not os.path.isdir(ep_path):
+                    continue
+                if any(f.endswith('.db3') or f.endswith('.mcap') for f in os.listdir(ep_path)):
+                    candidate_bag_dirs.append(ep_path)
+
+        from sobits_vla_common.image_codec import decode_depth_message, decode_image_message
+
+        resolved = self._resolve_cameras(
+            selected_names, selected_compressed, all_cam_known,
+            all_cam_raw, all_cam_compressed, all_cam_info, all_cam_props,
+            candidate_bag_dirs, decode_image_message, 'Camera',
+        )
+        if resolved is None:
+            return
+        self.camera_topics, self.camera_info_topics, self.camera_shapes = resolved
 
         self.topic_to_cam = {v: k for k, v in self.camera_topics.items()}
 
@@ -543,118 +702,20 @@ class RosbagConversionNode(Node):
             )
             self.primary_camera = fallback
 
-        # Resolve camera dimensions without modifying the decoded frames.
-        self.camera_shapes = {}
-        unresolved_cameras = []
-        for cam_name in self.camera_topics.keys():
-            props = all_cam_props.get(cam_name, {})
-            width = props.get('width')
-            height = props.get('height')
-            if width and height:
-                self.camera_shapes[cam_name] = (int(width), int(height))
-            else:
-                unresolved_cameras.append(cam_name)
-
-        if unresolved_cameras:
-            candidate_bag_dirs = []
-            for _, task_info in all_tasks:
-                meta_src = task_info.get('_meta_source_dir', self.rosbag_directory)
-                bag_group = task_info.get('bag_path', task_info.get('bag_dir', ''))
-                if bag_group.startswith('/'):
-                    group_dir = bag_group
-                else:
-                    group_dir = os.path.join(meta_src, bag_group)
-                if not os.path.isdir(group_dir):
-                    continue
-                for ep in sorted(os.listdir(group_dir)):
-                    ep_path = os.path.join(group_dir, ep)
-                    if not os.path.isdir(ep_path):
-                        continue
-                    if any(f.endswith('.db3') or f.endswith('.mcap') for f in os.listdir(ep_path)):
-                        candidate_bag_dirs.append(ep_path)
-
-            unresolved_set = set(unresolved_cameras)
-            for bag_dir in candidate_bag_dirs:
-                if not unresolved_set:
-                    break
-                try:
-                    with AnyReader([Path(bag_dir)]) as reader:
-                        info_topic_to_cam = {
-                            self.camera_info_topics[name]: name
-                            for name in unresolved_set
-                            if self.camera_info_topics.get(name)
-                        }
-                        if not info_topic_to_cam:
-                            break
-                        connections = [
-                            c for c in reader.connections
-                            if c.topic in info_topic_to_cam
-                        ]
-                        for connection, _, rawdata in reader.messages(connections=connections):
-                            cam_name = info_topic_to_cam.get(connection.topic)
-                            if not cam_name or cam_name not in unresolved_set:
-                                continue
-                            msg = reader.deserialize(rawdata, connection.msgtype)
-                            self.camera_shapes[cam_name] = (int(msg.width), int(msg.height))
-                            unresolved_set.remove(cam_name)
-                            if not unresolved_set:
-                                break
-                except Exception:
-                    continue
-
-            # If CameraInfo was unavailable, infer resolution from first image messages.
-            for bag_dir in candidate_bag_dirs:
-                if not unresolved_set:
-                    break
-                try:
-                    with AnyReader([Path(bag_dir)]) as reader:
-                        topic_to_cam = {
-                            self.camera_topics[name]: name
-                            for name in unresolved_set
-                            if self.camera_topics.get(name)
-                        }
-                        if not topic_to_cam:
-                            break
-                        connections = [c for c in reader.connections if c.topic in topic_to_cam]
-                        for connection, _, rawdata in reader.messages(connections=connections):
-                            cam_name = topic_to_cam.get(connection.topic)
-                            if not cam_name or cam_name not in unresolved_set:
-                                continue
-                            msg = reader.deserialize(rawdata, connection.msgtype)
-                            try:
-                                from sobits_vla_rosbag_conversion.frame_synthesizer import (
-                                    decode_image_message,
-                                )
-                                img = decode_image_message(msg)
-                                if img is None:
-                                    continue
-                            except Exception:
-                                continue
-                            h, w = img.shape[:2]
-                            self.camera_shapes[cam_name] = (int(w), int(h))
-                            unresolved_set.remove(cam_name)
-                            if not unresolved_set:
-                                break
-                except Exception:
-                    continue
-
-            if unresolved_set:
-                unresolved_msgs = []
-                for cam_name in sorted(unresolved_set):
-                    info_topic = self.camera_info_topics.get(cam_name, '')
-                    image_topic = self.camera_topics.get(cam_name, '')
-                    unresolved_msgs.append(
-                        f"camera='{cam_name}', info_topic='{info_topic}', "
-                        f"image_topic='{image_topic}'"
-                    )
-                self.get_logger().error(
-                    'Failed to resolve camera dimensions from metadata, '
-                    'camera_info, or image streams. '
-                    'Please re-record metadata with sensor properties populated.'
-                )
-                for msg in unresolved_msgs:
-                    self.get_logger().error(f'  unresolved: {msg}')
+        if self.depth_cameras_names:
+            depth_resolved = self._resolve_cameras(
+                self.depth_cameras_names, list(self.depth_cameras_compressed), all_cam_known,
+                all_cam_raw, all_cam_compressed, all_cam_info, all_cam_props,
+                candidate_bag_dirs, decode_depth_message, 'Depth camera',
+            )
+            if depth_resolved is None:
                 return
+            self.depth_camera_topics, self.depth_camera_info_topics, self.depth_camera_shapes = (
+                depth_resolved
+            )
+            self.depth_topic_to_cam = {v: k for k, v in self.depth_camera_topics.items()}
+        else:
+            self.depth_topic_to_cam = {}
 
         # Subtask index
         all_subtasks_set = set()
@@ -731,6 +792,15 @@ class RosbagConversionNode(Node):
                     'names': ['channels', 'height', 'width'],
                 }
 
+        for cam_name in self.depth_camera_topics.keys():
+            w, h = self.depth_camera_shapes.get(cam_name, (640, 480))
+            features[f'observation.images.{cam_name}'] = {
+                'dtype': 'video',
+                'shape': (h, w, 1),
+                'names': ['height', 'width', 'channels'],
+                'info': {'is_depth_map': True},
+            }
+
         # Initialize dataset writer
         writer = DatasetWriter(
             dataset_name=self.dataset_name,
@@ -764,6 +834,7 @@ class RosbagConversionNode(Node):
             skip_cameras=self.skip_cameras,
             primary_camera=self.primary_camera,
             camera_topics=self.camera_topics,
+            depth_camera_topics=self.depth_camera_topics,
             subtask_label_to_idx=self.subtask_label_to_idx,
             logger=self.get_logger(),
         )
@@ -833,6 +904,7 @@ class RosbagConversionNode(Node):
 
                 # Construct expected topic set for BagReader check
                 wanted = set(self.camera_topics.values()) | {self.joint_states_topic}
+                wanted |= set(self.depth_camera_topics.values())
                 wanted |= self.part_command_topics
                 if self.has_mobile_base and self.cmd_vel_topic:
                     wanted.add(self.cmd_vel_topic)
@@ -858,6 +930,8 @@ class RosbagConversionNode(Node):
                             reason = 'base velocity command (action.base)'
                         elif m in self.topic_to_cam:
                             reason = f'camera image ({self.topic_to_cam[m]})'
+                        elif m in self.depth_topic_to_cam:
+                            reason = f'depth camera image ({self.depth_topic_to_cam[m]})'
                         elif m in ('/tf', '/tf_static'):
                             reason = 'TF transforms (ee_pose)'
                         else:
@@ -868,6 +942,8 @@ class RosbagConversionNode(Node):
                             'joint_command' if m in self.part_command_topics else
                             'base_velocity' if m == self.cmd_vel_topic else
                             f'camera:{self.topic_to_cam[m]}' if m in self.topic_to_cam else
+                            f'depth_camera:{self.depth_topic_to_cam[m]}'
+                            if m in self.depth_topic_to_cam else
                             'tf' if m in ('/tf', '/tf_static') else 'unknown'
                         )
                     self.skipped_bags.append({
@@ -878,9 +954,11 @@ class RosbagConversionNode(Node):
                     continue
 
                 try:
+                    # Merged for cam_series bucketing only, not decode routing.
+                    read_topic_to_cam = {**self.topic_to_cam, **self.depth_topic_to_cam}
                     bag_series = bag_reader.read_topic_series(
                         wanted_topics=wanted,
-                        topic_to_cam=self.topic_to_cam,
+                        topic_to_cam=read_topic_to_cam,
                         part_command_topics=self.part_command_topics,
                         cmd_vel_topic=self.cmd_vel_topic,
                         odom_topic=self.odom_topic,
