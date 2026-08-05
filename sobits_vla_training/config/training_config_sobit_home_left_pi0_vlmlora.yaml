@@ -1,0 +1,129 @@
+/**:
+  ros__parameters:
+    # =========================================================================
+    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0 (VLM-LoRA)
+    #
+    # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi0_vlmlora
+    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Policy  : PI0 (PaliGemma 2B + Gemma 300M action expert, flow matching)
+    # Base    : lerobot/pi0_base (per HF pi0 docs)
+    # Recipe  : VLM-LoRA — extends the default expert-only LoRA (see
+    #           training_config_sobit_home_left_pi0.yaml) to also adapt the
+    #           PaliGemma language_model attention layers, mirroring the
+    #           pi05 VLM-LoRA recipe so both policies can be compared under
+    #           the SAME LoRA scope (see docs/PI0_PI05_VS_SMOLVLA_PERFORMANCE_ANALYSIS.md).
+    #           Defaults come from config/policies/pi0.yaml; only deltas here.
+    # =========================================================================
+
+    policy: pi0
+
+    robot:
+      descriptor_id: sobit_home
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true
+
+    dataset:
+      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
+      num_workers: 4
+      rename_map: []
+
+    checkpoint:
+      output_dir: "sobit_home_pickup_block_pi0_vlmlora"
+      resume: false
+      overwrite: true
+      pretrained_path: "lerobot/pi0_base"
+      save_freq: 5000
+      save_checkpoint: true
+
+    training:
+      steps: 30000
+      # RTX 5090 32 GB: batch 16 requires gradient_checkpointing (see overrides).
+      # lerobot has NO gradient accumulation — effective batch = batch_size.
+      batch_size: 16
+      seed: 1000
+      use_policy_training_preset: true
+      log_freq: 100
+      # No effect without a gym env — kept for parity with the other pi0 configs.
+      eval_freq: 5000
+
+    num_gpus: 1
+
+    wandb:
+      enable: true
+      project: "sobits_vla_training"
+      entity: ""
+      run_name: "sobit_home-pickup_block-left-abs-pi0-vlmlora"
+      notes: "PI0 VLM-LoRA fine-tune on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only, language_model adapters unfrozen)"
+      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
+
+    hub:
+      push_to_hub: true
+      # Distinct repo from the expert-only pi0 LoRA run (different recipe).
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi0_vlmlora"
+      private: false
+
+    # =========================================================================
+    # LoRA / PEFT — VLM-LoRA recipe (mirrors the pi05 VLM-LoRA config)
+    # =========================================================================
+    # Extends the standard pi0 LoRA targets to also add adapters to the
+    # PaliGemma language_model attention layers, the same regex pi05's
+    # VLM-LoRA config uses — pi0 and pi05 share the identical
+    # PaliGemmaWithExpertModel module tree, so it applies unchanged.
+    peft:
+      method_type: "LORA"
+
+      # Rank — r=16 matches the expert-only pi0/pi05 LoRA runs.
+      r: 16
+
+      # lora_alpha=32 gives a scaling factor of alpha/r = 2.0 (standard).
+      lora_alpha: 32
+
+      # Light dropout to prevent overfitting on the small demo dataset.
+      lora_dropout: 0.05
+
+      # VLM-LoRA extended targets:
+      #   1. gemma_expert self_attn (q,v)_proj  — standard pi0 default
+      #   2. language_model self_attn (q,v)_proj — adds PaliGemma LM adapters
+      #   3. action_in_proj / action_out_proj / time_mlp_in / time_mlp_out
+      target_modules: "(.*\\.gemma_expert\\..*\\.self_attn\\.(q|v)_proj|.*\\.language_model\\..*\\.self_attn\\.(q|v)_proj|model\\.(action_in_proj|action_out_proj|time_mlp_in|time_mlp_out))"
+
+      full_training_modules: []
+
+    policy_overrides:
+      chunk_size: 50
+      n_action_steps: 50
+      dtype: "bfloat16"
+
+      # VLM-LoRA: language_model adapters are active so this signals intent
+      # to adapt the VLM — freeze_vision_encoder=false. The vision tower
+      # (SigLIP) itself still has no adapters and runs frozen; this flag is
+      # moot for SigLIP under LoRA but documents that VLM layers ARE trained.
+      freeze_vision_encoder: false
+
+      train_expert_only: false
+
+      # Required at batch 16 on 32 GB; composes with compile (use_reentrant=False).
+      gradient_checkpointing: true
+
+      # DISABLED: Triton sm_120 (Blackwell / RTX 5090) crashes during VLM
+      # backward graph compilation when LoRA adapters touch language_model
+      # layers (same crash the pi05 VLM-LoRA config works around).
+      compile_model: false
+
+      use_relative_actions: false
+
+      # LoRA LR: ~4x the full-FT preset (2.5e-5), same reasoning as the
+      # expert-only pi0/pi05 runs — see that config's comment for the
+      # 4x-vs-10x rationale (HF PEFT docs recommend up to 10x).
+      optimizer_lr: 1.0e-4
+      optimizer_weight_decay: 0.01
+      scheduler_warmup_steps: 500
+      scheduler_decay_steps: 30000
+      scheduler_decay_lr: 1.0e-5
