@@ -3,7 +3,7 @@
     # =========================================================================
     # sobits_vla_training — SOBIT HOME "pick and place ball over bowl" (REAL, left arm) — SmolVLA
     #
-    # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_smolvla
+    # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_smolvla_fft
     # Dataset : team-sobits/sobit_home-pnp_ball_bowl-left-abs-real (10 fps, absolute actions, 102 real episodes)
     # Policy  : SmolVLA (450M — lightweight; SmolVLM2 backbone + action expert)
     # Base    : lerobot/smolvla_base
@@ -60,13 +60,13 @@
       enable: true
       project: "sobits_vla_training"
       entity: ""
-      run_name: "sobit_home-pnp_ball_bowl-left-abs-real-smolvla-vlmft"
+      run_name: "sobit_home-pnp_ball_bowl-left-abs-real-smolvla-fft"
       notes: "SmolVLA full fine-tune (VLM unfrozen) on sobit_home-pnp_ball_bowl-left-abs-real (10 fps, absolute actions, left arm, 102 real-robot episodes)"
       # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true
-      repo_id: "team-sobits/sobit_home_pnp_ball_bowl_left_abs_smolvla_vlmft"
+      repo_id: "team-sobits/sobit_home_pnp_ball_bowl_left_abs_smolvla_fft"
       private: false
 
     peft:
