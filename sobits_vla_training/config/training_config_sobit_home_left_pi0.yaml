@@ -62,7 +62,7 @@
     hub:
       push_to_hub: true
       # New policy type → its own repo (never mix policies/semantics in one repo).
-      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi0_vlmft"
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi0_lora"
       private: false
 
     peft:
