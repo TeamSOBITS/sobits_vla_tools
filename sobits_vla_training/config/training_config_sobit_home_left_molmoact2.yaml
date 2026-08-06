@@ -1,17 +1,15 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — MolmoAct2
+    # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — MolmoAct2
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_molmoact2
     # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
-    # Policy  : MolmoAct2 (AI2 VLA, flow-matching action expert + FAST
+    # Policy  : MolmoAct2 (AI2 VLA — flow-matching action expert + FAST
     #           discrete tokens; released checkpoints pad actions to 32 dims)
-    # Base    : allenai/MolmoAct2 — loaded via policy_overrides.checkpoint_path
-    #           (original HF checkpoint), NOT checkpoint.pretrained_path.
-    # Recipe  : per HF molmoact2 docs — for small datasets keep the action
-    #           expert fully trainable and LoRA the VLM (enable_lora_vlm).
-    #           LoRA-VLM fine-tuning fits a 24 GB GPU with bs 1-4.
+    # Base    : allenai/MolmoAct2, loaded via policy_overrides.checkpoint_path
+    # Recipe  : per HF molmoact2 docs — on small datasets keep the action expert
+    #           fully trainable and LoRA the VLM; fits 24 GB at bs 1-4.
     # =========================================================================
 
     policy: molmoact2
@@ -30,26 +28,24 @@
 
     dataset:
       repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
-      num_workers: 4
+      num_workers: 12
       rename_map: []
 
     checkpoint:
-      output_dir: "sobit_home_pickup_block_molmoact2"
+      output_dir: ""
       resume: false
       overwrite: true
-      # Empty on purpose: MolmoAct2 base weights come from the policy's own
-      # checkpoint_path field (see policy_overrides). Set this only to resume
-      # from a checkpoint previously SAVED BY LEROBOT.
+      # Empty on purpose: base weights come from policy_overrides.checkpoint_path.
+      # Set this only to resume from a checkpoint SAVED BY LEROBOT.
       pretrained_path: ""
       save_freq: 5000
       save_checkpoint: true
 
     training:
-      # HF LIBERO recipe trains 10k steps at global batch 256; with our
-      # single-GPU batch this trades steps for batch — start at 20k.
+      # HF LIBERO recipe is 10k steps at global batch 256; single-GPU trades
+      # batch for steps — start at 20k.
       steps: 20000
-      # LoRA-VLM + both action modes: ~20-27 GB depending on batch; start
-      # small and raise while VRAM allows.
+      # LoRA-VLM + both action modes: ~20-27 GB. Raise while VRAM allows.
       batch_size: 4
       seed: 1000
       # MolmoAct2 preset: per-module LRs (VLM 1e-5, ViT/connector 5e-6,
@@ -66,7 +62,6 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-molmoact2-vlmlora"
       notes: "MolmoAct2 LoRA-VLM fine-tune from allenai/MolmoAct2 on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
-      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true
@@ -74,8 +69,7 @@
       private: false
 
     peft:
-      # No lerobot PEFT: MolmoAct2 ships its own LoRA (enable_lora_vlm etc.
-      # in policy_overrides below).
+      # No lerobot PEFT: MolmoAct2 ships its own LoRA (enable_lora_vlm below).
       method_type: ""
 
     policy_overrides:

@@ -1,7 +1,7 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0
+    # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi0
     # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
@@ -27,11 +27,11 @@
 
     dataset:
       repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
-      num_workers: 4
+      num_workers: 12
       rename_map: []
 
     checkpoint:
-      output_dir: "sobit_home_pickup_block_pi0"
+      output_dir: ""
       resume: false
       overwrite: true
       pretrained_path: "lerobot/pi0_base"
@@ -57,7 +57,6 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-pi0"
       notes: "PI0 fine-tune on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
-      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true
@@ -70,8 +69,8 @@
       r: 16
       lora_alpha: 32
       lora_dropout: 0.05
-      # Empty = PI0's built-in default targets:
-      #   gemma_expert self_attn (q,v)_proj + state/action projection layers.
+      # Empty = PI0's built-in defaults: gemma_expert self_attn (q,v)_proj
+      # plus the state/action projection layers.
       target_modules: ""
       full_training_modules: []
 

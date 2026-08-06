@@ -1,14 +1,13 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — ACT
+    # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — ACT
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_act
     # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
     # Policy  : ACT (~80M, ResNet18 + transformer, VAE) — trained FROM SCRATCH
-    # Recipe  : per HF act docs — defaults work well; batch 8+ and ~100k steps.
-    #           ACT ignores the language instruction (single-task only) and
-    #           normalizes with MEAN_STD, not quantiles.
+    # Recipe  : per HF act docs — defaults work well; batch 8+, ~100k steps.
+    #           ACT ignores the language instruction and uses MEAN_STD stats.
     # =========================================================================
 
     policy: act
@@ -27,11 +26,11 @@
 
     dataset:
       repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
-      num_workers: 4
+      num_workers: 12
       rename_map: []
 
     checkpoint:
-      output_dir: "sobit_home_pickup_block_act"
+      output_dir: ""
       resume: false
       overwrite: true
       # ACT trains from scratch — no pretrained policy checkpoint.
@@ -40,10 +39,10 @@
       save_checkpoint: true
 
     training:
-      # HF docs: ~100k steps ≈ a few hours on a single GPU (ACT steps are fast).
+      # HF docs: ~100k steps ≈ a few hours on one GPU (ACT steps are fast).
       steps: 100000
-      # Docs say start at 8; the 5090 affords 16 even with the native-resolution
-      # 1920x1200 hand camera (ACT does not resize images internally).
+      # Docs say start at 8; the 5090 affords 16 even at the native 1920x1200
+      # hand camera (ACT does not resize images internally).
       batch_size: 16
       seed: 1000
       # ACT preset: AdamW lr=1e-5 (constant, no scheduler), weight_decay=1e-4.
@@ -59,7 +58,6 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-act"
       notes: "ACT from-scratch on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
-      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true

@@ -1,24 +1,21 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" — VLA-JEPA VLM-LoRA
+    # SOBIT HOME "pickup_the_block" — VLA-JEPA VLM-LoRA
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_vla_jepa_lora
     # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
-    # Policy  : VLA-JEPA — LoRA on the Qwen3-VL backbone + FULL training of
-    #           the DiT action head and the V-JEPA2 world-model predictor.
+    # Policy  : VLA-JEPA — LoRA on the Qwen3-VL backbone + FULL training of the
+    #           DiT action head and the V-JEPA2 world-model predictor.
     # Base    : lerobot/VLA-JEPA-Pretrain
-    # Recipe  : second iteration after the head-only run
-    #           (team-sobits/..._vla_jepa) stalled at ~0.73 m with zero base
-    #           motion — classic median-action regression with a frozen
-    #           backbone. LoRA lets gradients reach the VLM (adapts it to the
-    #           robot's visual domain, same lesson as smolvla's unfrozen
-    #           vision encoder) while keeping optimizer state small enough
-    #           for a 32 GB GPU; freeze_qwen stays false so the world-model
-    #           loss remains ACTIVE.
-    # NOTE    : final push is a PEFT ADAPTER repo (lerobot sets use_peft).
-    #           Deploy-side adapter loading for vla_jepa is not wired yet —
-    #           merge the adapter before eval or extend policy_loader first.
+    # Recipe  : second iteration after the head-only run stalled at ~0.73 m with
+    #           zero base motion (median-action regression under a frozen
+    #           backbone). LoRA lets gradients reach the VLM while keeping
+    #           optimizer state within 32 GB; freeze_qwen stays false so the
+    #           world-model loss remains ACTIVE.
+    # NOTE    : the final push is a PEFT ADAPTER repo. Deploy-side adapter
+    #           loading for vla_jepa is not wired yet — merge the adapter before
+    #           eval, or extend policy_loader first.
     # =========================================================================
 
     policy: vla_jepa
@@ -37,11 +34,11 @@
 
     dataset:
       repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
-      num_workers: 4
+      num_workers: 12
       rename_map: []
 
     checkpoint:
-      output_dir: "sobit_home_pickup_block_vla_jepa_lora"
+      output_dir: ""
       resume: false
       overwrite: true
       pretrained_path: "lerobot/VLA-JEPA-Pretrain"
@@ -50,12 +47,9 @@
 
     training:
       steps: 60000
-      # Backprop now traverses the 2B backbone and the world model loads
-      # 8-frame windows per sample — batch is activation-bound. Measured on
-      # the RTX 5090 (32.6 GB): batch 4 -> ~21 GB (~11 GB of it
-      # activations), so batch 8 is right at the ceiling — if it OOMs in
-      # the first steps, fall back to 4 and raise training.steps to 60000
-      # together with policy_overrides.scheduler_decay_steps: 60000.
+      # Backprop now traverses the 2B backbone and the world model loads 8-frame
+      # windows per sample, so batch is activation-bound: measured ~21 GB at
+      # batch 4 on the 32.6 GB 5090. If batch 8 OOMs early, fall back to 4.
       batch_size: 4
       seed: 1000
       use_policy_training_preset: true
@@ -70,7 +64,6 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-vla_jepa-vlmlora"
       notes: "VLA-JEPA VLM-LoRA + active world model from lerobot/VLA-JEPA-Pretrain on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions; reinit 19-dim action/state projections; full-training DiT head + video predictor)"
-      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true
@@ -82,20 +75,18 @@
       r: 16
       lora_alpha: 32
       lora_dropout: 0.05
-      # LoRA on the Qwen3-VL language-model attention projections
-      # (model.qwen.model...language_model.layers.N.self_attn.{q,v}_proj).
-      # VLAJEPAPolicy defines no default targets, so this regex is REQUIRED.
+      # LoRA on the Qwen3-VL language-model attention projections. VLAJEPAPolicy
+      # defines no default targets, so this regex is REQUIRED.
       target_modules: "(.*\\.language_model\\..*\\.self_attn\\.(q|v)_proj)"
-      # Fully train the flow-matching DiT head (incl. the reinit'd 19-dim
-      # projections — LoRA on randomly-initialised layers is pointless) and
-      # the world-model predictor. The V-JEPA2 encoder stays frozen.
+      # Fully train the DiT head (LoRA on the reinit'd 19-dim projections would
+      # be pointless) and the world-model predictor; V-JEPA2 encoder stays frozen.
       full_training_modules:
         - "action_model"
         - "video_predictor"
 
     policy_overrides:
-      # Cosine decay must span the full run — the policy preset pins it at
-      # 30k otherwise and the second half would idle at the floor LR.
+      # Cosine decay must span the full run — the preset pins it at 30k and the
+      # second half would idle at the floor LR.
       scheduler_decay_steps: 60000
       chunk_size: 7
       n_action_steps: 7

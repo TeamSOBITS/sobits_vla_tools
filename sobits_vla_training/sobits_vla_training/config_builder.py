@@ -81,7 +81,12 @@ def find_package_src_dir() -> Path:
 
 
 def _default_model_root() -> Path:
-    """Resolve the default checkpoint output root: <package_src>/lerobotmodel/."""
+    """Resolve the checkpoint output root: <package_src>/lerobotmodel/.
+
+    Every non-absolute checkpoint.output_dir is resolved against this root, so
+    it must resolve even before the directory exists (lerobot creates it) —
+    hence the find_package_src_dir() fallback below.
+    """
     candidate = Path(__file__).resolve().parent
     for _ in range(8):
         if (candidate / 'package.xml').exists() and (candidate / 'lerobotmodel').is_dir():
@@ -94,8 +99,38 @@ def _default_model_root() -> Path:
                         return pkg_dir / 'lerobotmodel'
         candidate = candidate.parent
 
-    from ament_index_python.packages import get_package_share_directory
-    return Path(get_package_share_directory('sobits_vla_training')) / 'lerobotmodel'
+    return find_package_src_dir() / 'lerobotmodel'
+
+
+def resolve_output_dir(out_dir_raw: str, hub_repo_id: str) -> Path:
+    """Resolve checkpoint.output_dir to the directory training writes into.
+
+    Anything that is not absolute lands under <package_src>/lerobotmodel/::
+
+        ""           -> lerobotmodel/<hub_repo_id>   (organization/model_name)
+        "model_name" -> lerobotmodel/model_name
+        "a/b"        -> lerobotmodel/a/b
+        "/abs/path"  -> /abs/path                    (verbatim)
+
+    Raises:
+        RuntimeError: If both arguments are empty — with no identifier at all
+            every run would collide on the shared lerobotmodel/ root.
+    """
+    model_root = _default_model_root()
+
+    if not out_dir_raw:
+        if not hub_repo_id:
+            raise RuntimeError(
+                'checkpoint.output_dir and hub.repo_id are both empty — '
+                'refusing to default to a shared output root; set one '
+                'explicitly.'
+            )
+        return model_root / hub_repo_id
+
+    raw_path = Path(out_dir_raw).expanduser()
+    if raw_path.is_absolute():
+        return raw_path
+    return (model_root / raw_path).resolve()
 
 
 def _resolve_pretrained_path(raw: str) -> Path | str:

@@ -1,18 +1,17 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — VLA-JEPA
+    # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — VLA-JEPA
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_vla_jepa
     # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
     # Policy  : VLA-JEPA (Qwen3-VL-2B + DiT-B flow-matching head + V-JEPA2
-    #           latent world model; world model used at training time only)
+    #           latent world model, used at training time only)
     # Base    : lerobot/VLA-JEPA-Pretrain (DROID 1.0.1, 7-dim EE actions)
-    # Recipe  : per HF vla_jepa docs — fine-tune from Pretrain, ~30k steps.
-    #           The base was trained on 7-dim actions / 8-dim state, so the
-    #           action-head projection layers MUST be re-initialised for our
-    #           19-dim joint actions (reinit_modules below); the Qwen backbone
-    #           and DiT trunk keep their pretrained weights.
+    # Recipe  : per HF vla_jepa docs — fine-tune from Pretrain, ~30k steps. The
+    #           base used 7-dim actions / 8-dim state, so the action-head
+    #           projections MUST be re-initialised (reinit_modules below); the
+    #           Qwen backbone and DiT trunk keep their pretrained weights.
     # =========================================================================
 
     policy: vla_jepa
@@ -31,11 +30,11 @@
 
     dataset:
       repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
-      num_workers: 4
+      num_workers: 12
       rename_map: []
 
     checkpoint:
-      output_dir: "sobit_home_pickup_block_vla_jepa"
+      output_dir: ""
       resume: false
       overwrite: true
       pretrained_path: "lerobot/VLA-JEPA-Pretrain"
@@ -45,9 +44,8 @@
     training:
       # 30k steps per the HF LIBERO recipe (matches our pi05/smolvla runs).
       steps: 30000
-      # With the Qwen backbone frozen only the ~200M action head trains, so
-      # optimizer state is small — batch is bounded by activations, not
-      # Adam moments. Raise further if nvidia-smi shows headroom.
+      # Only the ~200M action head trains, so optimizer state is small and
+      # batch is bounded by activations. Raise if nvidia-smi shows headroom.
       batch_size: 16
       seed: 1000
       # VLA-JEPA preset: AdamW lr=1e-4, weight_decay=1e-10, grad_clip=10.
@@ -63,7 +61,6 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-vla_jepa-headft"
       notes: "VLA-JEPA fine-tune from lerobot/VLA-JEPA-Pretrain on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only; reinit action/state projections for 19-dim joints)"
-      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true
@@ -75,21 +72,18 @@
       method_type: ""
 
     policy_overrides:
-      # Paper/DROID recipe chunking: 7 steps (0.7 s at 10 fps). The deploy
-      # node re-infers per chunk, so short chunks mean frequent inference.
+      # Paper/DROID chunking: 7 steps (0.7 s at 10 fps). The deploy node
+      # re-infers per chunk, so short chunks mean frequent inference.
       chunk_size: 7
       n_action_steps: 7
-      # Action-head-only fine-tune (HF docs variant). Full FT of the 2.77B
-      # model needs ~33 GB for weights+grads+Adam states alone and OOMs a
-      # 32 GB GPU at any batch size; frozen backbone trains only the ~200M
-      # DiT head incl. our reinit'd 19-dim projections. Side effect: the
-      # world-model loss auto-disables (no grads reach the backbone).
-      # Set false only on >=48 GB or multi-GPU setups.
+      # Action-head-only fine-tune (HF docs variant): full FT of the 2.77B
+      # model needs ~33 GB for weights+grads+Adam alone and OOMs a 32 GB card.
+      # Side effect: the world-model loss auto-disables (no grads reach the
+      # backbone). Set false only on >=48 GB or multi-GPU.
       freeze_qwen: true
-      # REQUIRED for cross-embodiment fine-tuning from VLA-JEPA-Pretrain:
-      # our 19-dim actions / 19-dim state mismatch the pretrained 7/8-dim
-      # projections — these layers are re-initialised from scratch, any
-      # other shape mismatch still raises.
+      # REQUIRED for cross-embodiment fine-tuning: our 19-dim action/state
+      # mismatch the pretrained 7/8-dim projections, so these layers are
+      # re-initialised. Any other shape mismatch still raises.
       reinit_modules:
         - "model.action_model.action_encoder"
         - "model.action_model.action_decoder"

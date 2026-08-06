@@ -1,25 +1,18 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — GR00T N1.7
+    # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — GR00T N1.7
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_groot
     # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
-    # Policy  : GR00T N1.7-3B (Cosmos-Reason2-2B backbone + flow-matching action head)
-    # Base    : nvidia/GR00T-N1.7-3B (loaded via base_model_path, not
-    #           checkpoint.pretrained_path)
-    # Recipe  : GR00T-native post-training — tune projector + diffusion action
-    #           head on the frozen VLM (tune_* flags, NOT lerobot PEFT).
+    # Policy  : GR00T N1.7-3B (Cosmos-Reason2-2B backbone + flow-matching head)
+    # Base    : nvidia/GR00T-N1.7-3B, loaded via base_model_path (NOT
+    #           checkpoint.pretrained_path); flash-attn optional (SDPA fallback)
+    # Recipe  : GR00T-native post-training — projector + diffusion head on the
+    #           frozen VLM via the tune_* flags, not lerobot PEFT.
     #
-    # IMPORTANT: lerobot 0.6.0 dropped GR00T N1.5 support entirely — any
-    # existing N1.5 fine-tune of this task CANNOT be loaded and a full
-    # retrain against N1.7 is required before this config can be used again.
-    # The hub.repo_id / dataset.repo_id below are unchanged; only the base
-    # model + GrootConfig fields moved to N1.7 (see config/policies/groot.yaml).
-    #
-    # REQUIREMENTS:
-    #  - N1.7 uses the Qwen3-VL/Cosmos-Reason2 backbone; flash-attn is
-    #    optional (use_flash_attention: false falls back to SDPA).
+    # IMPORTANT: lerobot 0.6.0 dropped GR00T N1.5 entirely — existing N1.5
+    # fine-tunes cannot be loaded and must be retrained against N1.7.
     # =========================================================================
 
     policy: groot
@@ -38,11 +31,11 @@
 
     dataset:
       repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
-      num_workers: 4
+      num_workers: 12
       rename_map: []
 
     checkpoint:
-      output_dir: "sobit_home_pickup_block_groot"
+      output_dir: ""
       resume: false
       overwrite: true
       # Empty: GR00T weights come from policy base_model_path (nvidia repo).
@@ -51,14 +44,12 @@
       save_checkpoint: true
 
     training:
-      # N1.7's GrootConfig.get_scheduler_preset() derives warmup steps from
-      # training.steps via warmup_ratio (5%) rather than hardcoding a 10k
-      # schedule (N1.5 behavior) — steps can be tuned freely for N1.7.
+      # N1.7 derives warmup from training.steps via warmup_ratio (5%) instead
+      # of N1.5's hardcoded 10k schedule, so steps can be tuned freely.
       steps: 10000
       batch_size: 16
       seed: 1000
-      # GR00T preset: AdamW lr=1e-4, betas (0.9, 0.999), cosine decay with
-      # 5% warmup derived from training.steps.
+      # GR00T preset: AdamW lr=1e-4, betas (0.9, 0.999), cosine decay.
       use_policy_training_preset: true
       log_freq: 100
       eval_freq: 5000
@@ -71,7 +62,6 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-groot"
       notes: "GR00T N1.7 post-train (projector+diffusion head) on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)"
-      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true
@@ -79,16 +69,13 @@
       private: false
 
     peft:
-      # GR00T uses its OWN freezing (tune_* flags below) — lerobot PEFT must
-      # stay disabled. (GR00T's own built-in LoRA fields, e.g. lora_rank,
-      # were never wired up in the N1.7 implementation and are deprecated.)
+      # GR00T uses its OWN freezing (tune_* flags below), so lerobot PEFT stays
+      # off. Its built-in LoRA fields were never wired up in N1.7.
       method_type: ""
 
     policy_overrides:
-      # N1.7 defaults (see config/policies/groot.yaml) — GrootConfig
-      # auto-remaps legacy N1.5 values (chunk_size/n_action_steps 50,
-      # max_state_dim 64, max_action_dim 32) with a warning, so we set the
-      # N1.7-native values directly here instead.
+      # N1.7-native values set directly — GrootConfig would otherwise auto-remap
+      # the legacy N1.5 defaults with a warning.
       chunk_size: 40
       n_action_steps: 40
       max_state_dim: 132

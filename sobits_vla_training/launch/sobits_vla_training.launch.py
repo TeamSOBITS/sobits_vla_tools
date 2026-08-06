@@ -183,7 +183,10 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 'output_dir',
                 default_value='',
-                description='Override checkpoint.output_dir.',
+                description=(
+                    'Override checkpoint.output_dir. Relative paths land under '
+                    '<package>/lerobotmodel/; absolute paths are used verbatim.'
+                ),
             ),
             DeclareLaunchArgument(
                 'pretrained_path',

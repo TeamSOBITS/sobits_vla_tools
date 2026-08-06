@@ -1,17 +1,16 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pick and place ball over bowl" (REAL, left arm) — SmolVLA
+    # SOBIT HOME "pick and place ball over bowl" (REAL, left arm) — SmolVLA
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_smolvla_fft
     # Dataset : team-sobits/sobit_home-pnp_ball_bowl-left-abs-real (10 fps, absolute actions, 102 real episodes)
-    # Policy  : SmolVLA (450M — lightweight; SmolVLM2 backbone + action expert)
+    # Policy  : SmolVLA (450M — SmolVLM2 backbone + action expert)
     # Base    : lerobot/smolvla_base
-    # Recipe  : per HF smolvla docs — FULL fine-tune (no LoRA: the model is
-    #           small enough), ~20k steps, large batch, policy preset
-    #           (lr 1e-4, grad_clip 10). Docs note >= 50 episodes with several
-    #           repetitions per task variation; our 202 episodes qualify.
-    # NOTE    : smolvla has no gradient_checkpointing field; batch is sized
+    # Recipe  : per HF smolvla docs — FULL fine-tune (small enough not to need
+    #           LoRA), ~20k steps, large batch, policy preset (lr 1e-4,
+    #           grad_clip 10). Docs want >= 50 episodes; our 202 qualify.
+    # NOTE    : smolvla has no gradient_checkpointing field, so batch is sized
     #           for 32 GB without it (~0.5 GB activations/sample).
     # =========================================================================
 
@@ -31,11 +30,11 @@
 
     dataset:
       repo_id: "team-sobits/sobit_home-pnp_ball_bowl-left-abs-real"
-      num_workers: 4
+      num_workers: 12
       rename_map: []
 
     checkpoint:
-      output_dir: "sobit_home_pnp_ball_bowl_smolvla"
+      output_dir: ""
       resume: false
       overwrite: true
       pretrained_path: "lerobot/smolvla_base"
@@ -45,8 +44,8 @@
     training:
       # 30k steps to match the pi05 VLM-LoRA run for fair comparison.
       steps: 30000
-      # Unfreezing the VLM increases activation memory; drop from 32 to 16
-      # to stay safely within 32 GB (~12 GB backbone + 16 x 0.5 GB ≈ 20 GB).
+      # Unfreezing the VLM raises activation memory: 32 -> 16 keeps us inside
+      # 32 GB (~12 GB backbone + 16 x 0.5 GB ≈ 20 GB).
       batch_size: 16
       seed: 1000
       # SmolVLA preset: AdamW lr=1e-4, weight_decay=1e-10, grad_clip=10.
@@ -62,7 +61,6 @@
       entity: ""
       run_name: "sobit_home-pnp_ball_bowl-left-abs-real-smolvla-fft"
       notes: "SmolVLA full fine-tune (VLM unfrozen) on sobit_home-pnp_ball_bowl-left-abs-real (10 fps, absolute actions, left arm, 102 real-robot episodes)"
-      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
 
     hub:
       push_to_hub: true
@@ -76,9 +74,9 @@
     policy_overrides:
       chunk_size: 50
       n_action_steps: 50
-      # Unfreeze VLM vision encoder — LeKiwi finding: helps when base-motion
-      # demos are sparse and the VLM needs to adapt to the robot's visual domain.
+      # Unfreeze the vision encoder — LeKiwi finding: helps when base-motion
+      # demos are sparse and the VLM must adapt to the robot's visual domain.
       freeze_vision_encoder: false
-      # Train VLM + expert together (not expert-only).
+      # Train VLM + expert together, not expert-only.
       train_expert_only: false
       train_state_proj: true

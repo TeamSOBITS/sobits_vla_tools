@@ -1,10 +1,9 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # Policy selection
+    # Policy selection — one of: smolvla | pi0 | pi05 | pi0_fast
+    # The matching config/policies/<policy>.yaml is loaded automatically.
     # =========================================================================
-    # One of: smolvla | pi0 | pi05 | pi0_fast
-    # The corresponding config/policies/<policy>.yaml is loaded automatically.
     policy: smolvla
 
     # =========================================================================
@@ -13,53 +12,47 @@
     dataset:
       # HuggingFace Hub repo_id or absolute local path to a LeRobotDataset.
       repo_id: ""
-      # Number of parallel DataLoader workers (0 = main thread only).
-      num_workers: 4
-      # Optional feature rename map: {"old_key": "new_key"}.
-      # Useful when dataset keys differ from policy expectations.
+      # Parallel DataLoader workers (0 = main thread only).
+      num_workers: 12
+      # Feature rename map {"old_key": "new_key"}, for when dataset keys
+      # differ from what the policy expects.
       rename_map: []
-      # Fraction of episodes per task held out for eval (0.0 = off, current behavior).
+      # Fraction of episodes per task held out for eval (0.0 = off).
       eval_split: 0.0
 
     # =========================================================================
     # Checkpoint / resume
     # =========================================================================
     checkpoint:
-      # Directory where checkpoints and final model are saved.
+      # Checkpoint dir: relative -> lerobotmodel/<path>, absolute -> verbatim.
+      # Empty -> lerobotmodel/<hub.repo_id>, i.e. organization/model_name.
       output_dir: ""
-      # Resume from the last checkpoint inside output_dir (true) or start fresh (false).
+      # Continue from the last checkpoint inside output_dir.
       resume: false
-      # Set to true to delete output_dir before training (ignored when resume is true).
+      # Delete output_dir before training (ignored when resume is true).
       overwrite: false
-      # Path or HuggingFace repo_id to initialise weights from before training.
+      # Init weights from "" | "/abs/local/path" | "hf-user/repo-name".
       # Overrides policy_config.pretrained_path when non-empty.
-      # Accepts: "" | "/abs/local/path" | "hf-user/repo-name"
       pretrained_path: ""
-      # Save a checkpoint every N steps.
       save_freq: 20000
-      # Whether to save checkpoints at all.
       save_checkpoint: true
 
     # =========================================================================
     # Training loop
     # =========================================================================
     training:
-      # Total number of gradient update steps.
       steps: 100000
-      # Batch size per GPU.
+      # Per GPU — lerobot has no gradient accumulation.
       batch_size: 32
-      # Random seed for reproducibility.
       seed: 1000
-      # Use policy config's built-in optimizer / scheduler presets (recommended: true).
-      # Automatically set false when optimizer_type below is non-empty.
+      # Use the policy's built-in optimizer/scheduler presets (recommended).
+      # Forced false when optimizer_type below is non-empty.
       use_policy_training_preset: true
-      # Log metrics every N steps.
       log_freq: 200
-      # Run validation every N steps (0 = disable).
+      # Validation interval; 0 disables.
       eval_freq: 20000
-      # Set "sgd" to bypass the policy preset with SGDConfig (see optimizer_sgd below).
+      # Set "sgd" to bypass the policy preset with the SGDConfig below.
       optimizer_type: ""
-      # SGDConfig fields, used only when optimizer_type is "sgd".
       optimizer_sgd:
         lr: 0.001
         momentum: 0.0
@@ -67,53 +60,46 @@
         nesterov: false
         weight_decay: 0.0
         grad_clip_norm: 10.0
-      # Warmup steps for the constant-with-warmup scheduler paired with optimizer_type.
+      # Warmup for the constant-with-warmup scheduler paired with optimizer_type.
       scheduler_warmup_steps_override: 1000
 
     # =========================================================================
-    # Multi-GPU
+    # Multi-GPU — 1 = single GPU, 0 = CPU (debug only).
+    # Values > 1 require torch.distributed / accelerate.
     # =========================================================================
-    # Number of GPUs to use. 1 = single GPU, 0 = CPU (debug only).
-    # Values > 1 require torch.distributed / accelerate to be available.
     num_gpus: 1
 
     # =========================================================================
-    # Weights & Biases logging
+    # Weights & Biases — lerobot auto-tags runs from the config
+    # (policy/dataset/seed), so there is no manual tags key.
     # =========================================================================
     wandb:
-      # Enable W&B run logging.
       enable: true
-      # W&B project name.
       project: "sobits_vla_training"
-      # W&B entity (team or user). Leave empty to use default from wandb login.
+      # Team or user; empty uses the default from `wandb login`.
       entity: ""
-      # W&B run display name. Auto-generated from policy + timestamp when empty.
+      # Display name; auto-generated from policy + timestamp when empty.
       run_name: ""
-      # lerobot auto-tags runs from the config (policy/dataset/seed) -- no manual tags key.
-      # Notes attached to the run.
       notes: ""
 
     # =========================================================================
     # HuggingFace Hub push
     # =========================================================================
     hub:
-      # Push the FINAL-step model to HF Hub after training (no best-checkpoint selection).
+      # Pushes the FINAL-step model — no best-checkpoint selection.
       push_to_hub: true
-      # Target repo on HF Hub (e.g. "team-sobits/sobit_home_smolvla").
+      # e.g. "team-sobits/sobit_home_smolvla".
       repo_id: ""
-      # Make the Hub repo private.
       private: false
-      # Also push every saved checkpoint (not just the final model); requires repo_id.
+      # Also push every saved checkpoint; requires repo_id.
       save_checkpoints: false
 
 
     # =========================================================================
-    # Policy-specific overrides
+    # Policy-specific overrides — take precedence over the loaded policy YAML,
+    # e.g. set chunk_size for smolvla without editing smolvla.yaml:
+    #   policy_overrides:
+    #     chunk_size: 100
+    #     freeze_vision_encoder: false
     # =========================================================================
-    # Any field listed here takes precedence over the loaded policy YAML.
-    # Example: set chunk_size to 100 for smolvla without editing smolvla.yaml.
-    #
-    # policy_overrides:
-    #   chunk_size: 100
-    #   freeze_vision_encoder: false
     policy_overrides: []

@@ -97,7 +97,8 @@ class TrainNode(Node):
             'dataset.eval_split', 0.0, _p('Fraction of episodes per task held out for eval'))
 
         self.declare_parameter(
-            'checkpoint.output_dir', '', _p('Output directory for checkpoints'))
+            'checkpoint.output_dir', '',
+            _p('Checkpoint dir; relative -> lerobotmodel/, absolute -> verbatim'))
         self.declare_parameter(
             'checkpoint.resume', False, _p('Resume from last checkpoint in output_dir'))
         self.declare_parameter(
@@ -319,34 +320,17 @@ class TrainNode(Node):
         run_preflight_checks(params, ros_logger=self.get_logger())
 
         from sobits_vla_training.config_builder import (
-            _default_model_root,
             build_accelerator,
             build_train_config,
-            find_package_src_dir,
+            resolve_output_dir,
         )
 
-        out_dir_raw = params.get('checkpoint.output_dir', '')
-        hub_repo_id = params.get('hub.repo_id', '') or ''
-        package_src_dir = find_package_src_dir()
-
-        if not out_dir_raw:
-            # No identifier at all — this would collide on the shared root.
-            if not hub_repo_id:
-                raise RuntimeError(
-                    'checkpoint.output_dir and hub.repo_id are both empty — '
-                    'refusing to default to a shared output root; set one '
-                    'explicitly.'
-                )
-            out = _default_model_root() / hub_repo_id
-        else:
-            raw_path = Path(out_dir_raw).expanduser()
-            if raw_path.is_absolute():
-                out = raw_path
-            else:
-                if raw_path.parts and raw_path.parts[0] == 'outputs':
-                    out = (package_src_dir / raw_path).resolve()
-                else:
-                    out = (package_src_dir / 'outputs' / raw_path).resolve()
+        # Relative -> <package_src>/lerobotmodel/, absolute -> verbatim.
+        # See resolve_output_dir() for the full table.
+        out = resolve_output_dir(
+            params.get('checkpoint.output_dir', ''),
+            params.get('hub.repo_id', '') or '',
+        )
 
         if (
             params.get('checkpoint.overwrite', False)
