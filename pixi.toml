@@ -1,28 +1,13 @@
-# pixi manifest for sobits_vla_tools
+# pixi manifest for sobits_vla_tools — Python dependencies ONLY.
 # =============================================================================
-# SCOPE: Python dependencies ONLY.
+# ROS (ros-jazzy-*, rclpy, message packages, ament_*) comes from apt + rosdep,
+# never pixi — see install.sh. pixi gives each package its own env (plus a
+# cpu/gpu torch variant) so node groups can hold conflicting numpy/torch/lerobot
+# versions and still talk over DDS: reproducible via pixi.lock, no global pip.
+# [activation] sources /opt/ros/$ROS_DISTRO so rclpy imports inside every env.
 #
-# Everything ROS-related (ros-jazzy-*, message packages, rclpy, cv_bridge,
-# tf2_ros, launch, ament_*) is installed with apt (`ros-jazzy-desktop`) and
-# resolved through rosdep from each package.xml + CMakeLists.txt. pixi never
-# manages ROS. See install.sh.
-#
-# WHY pixi: different node groups may need different/conflicting Python
-# package versions (numpy, torch, lerobot ...) while all running at once and
-# sharing data over DDS. ROS nodes are separate processes, so each can own its
-# own Python env. pixi gives one env per package (max isolation) plus a
-# CPU/GPU torch variant, all reproducible via pixi.lock. No global pip, no
-# `--break-system-packages`, no mutation of the system interpreter.
-#
-# BRIDGE TO SYSTEM ROS: the [activation] block sources /opt/ros/$ROS_DISTRO
-# and adds its site-packages to PYTHONPATH so rclpy & message bindings are
-# importable inside every pixi env. python is pinned to 3.12 to match Jazzy's
-# rclpy ABI — do not change without matching the ROS distro's CPython.
-#
-# USAGE (per package, pick -cpu or -gpu to match the machine):
-#   pixi run -e training-gpu  ros2 run sobits_vla_training  train_node
-#   pixi run -e deploy-cpu    ros2 run sobits_vla_deploy    sobits_vla_deploy
-#   pixi run -e viz           ros2 run sobits_vla_visualization ...
+#   pixi run -e training-gpu ros2 run sobits_vla_training train_node
+#   pixi run -e deploy-cpu   ros2 run sobits_vla_deploy   sobits_vla_deploy
 # =============================================================================
 
 [workspace]
@@ -36,29 +21,22 @@ platforms = ["linux-64"]
 [dependencies]
 python = "3.12.*"          # MUST match ros-jazzy rclpy (CPython 3.12)
 pip = "*"
-# lerobot 0.6.0 caps several build/util packages that conda would otherwise
-# pull at a newer version than pip accepts. Pin the conda-provided builds into
-# lerobot's ranges so the conda solve satisfies the pip solve (avoids the
-# "pinned by conda solve" pypi conflicts):
-#   setuptools>=71,<81 · packaging>=24.2,<26 · cmake>=3.29,<4.2
+# Held inside lerobot 0.6.0's caps so the conda solve satisfies the pip solve —
+# conda pulls newer otherwise and pip fails with "pinned by conda solve".
 setuptools = ">=71.0.0,<81.0.0"
 packaging = ">=24.2,<26.0"
 cmake = ">=3.29.0.1,<4.2.0"
 libstdcxx-ng = ">=13"      # avoid GLIBCXX skew vs system ROS libs
+pyyaml = "*"               # rclpy imports yaml -> base, else viz/collection fail
 
 [activation]
-# Bridge apt-installed ROS into the pixi env. ROS_DISTRO must be exported
-# (source /opt/ros/setup.sh or set it) before `pixi run`.
+# Bridges apt ROS into the env. Export ROS_DISTRO before `pixi run`.
 scripts = ["scripts/pixi_ros_bridge.sh"]
 
 # =============================================================================
-# ACCELERATOR FEATURES  — torch variant, shared by all ML packages.
-# One machine picks cpu OR gpu via the environment name suffix.
-#
-# torch/torchvision come from PyPI (NOT conda), pinned to lerobot 0.6.0's range
-# (torch>=2.7,<2.12), selecting the CPU vs CUDA (cu128) wheel index per feature.
-# This matches lerobot's own [tool.uv.sources] (cu128 on linux) and avoids the
-# conda-torch vs pip-torch double-install / ABI clash.
+# ACCELERATOR — torch/torchvision from PyPI (not conda), pinned to lerobot
+# 0.6.0's range, cpu vs cu128 wheel index per feature. Matches lerobot's own
+# [tool.uv.sources] and avoids the conda-torch vs pip-torch ABI clash.
 # =============================================================================
 [feature.cpu.pypi-dependencies]
 torch = { version = ">=2.7,<2.12.0", index = "https://download.pytorch.org/whl/cpu" }
@@ -72,62 +50,42 @@ torch = { version = ">=2.7,<2.12.0", index = "https://download.pytorch.org/whl/c
 torchvision = { version = ">=0.22.0,<0.27.0", index = "https://download.pytorch.org/whl/cu128" }
 
 # =============================================================================
-# HEAVY ML STACK  — lerobot + friends, shared by common/deploy/training/
-# conversion. Kept torch-free here (torch comes from the cpu/gpu feature).
-#
-# lerobot pins fast-moving deps tightly (transformers>=5.4,<5.6, hf-hub>=1.0,
-# accelerate>=1.14, safetensors, ...). Those are left to pip (lerobot pulls the
-# exact versions via its extras) — NOT pinned in conda, whose channel lags and
-# would fight the pip solver. conda owns only the numeric-ABI anchor: numpy
-# (shared by pandas/scipy/opencv) and pyyaml.
-#
-# Extras selected map to the policies actually imported:
-#   pi0 / pi05 / pi0_fast  -> extra "pi"        (transformers-dep + scipy-dep)
-#   vla_jepa               -> extra "vla_jepa"  (transformers/diffusers/qwen-vl)
-#   smolvla                -> extra "smolvla"
-#   training loop          -> extra "training"  (dataset + wandb + accelerate)
-#   LoRA                   -> extra "peft-dep"
+# HEAVY ML STACK — lerobot + friends for common/deploy/training/conversion,
+# torch-free (torch comes from cpu|gpu). lerobot's fast-moving pins (transformers,
+# hf-hub, accelerate ...) are left to pip, whose extras pull exact versions;
+# conda owns only numpy and the native libs those wheels expect. Extras map to
+# the policies imported: pi -> pi0/pi05/pi0_fast, vla_jepa, smolvla,
+# training -> dataset+wandb+accelerate, peft-dep -> LoRA.
 # =============================================================================
 [feature.mlstack.dependencies]
 numpy = ">=2.0.0,<2.3.0"   # ABI anchor for pandas/scipy/opencv; matches lerobot
-pyyaml = "*"
-# NOTE: do NOT add ros-jazzy-cv-bridge here. apt's cv_bridge ships a
-# cv_bridge_boost C extension built against NumPy 1.x that SEGFAULTS under
-# NumPy 2 on any bgr8/rgb8 conversion -- but the robostack fix is worse than
-# the disease: ros-jazzy-cv-bridge hard-depends on ros-jazzy-rclcpp +
-# ros-jazzy-sensor-msgs, pulling a SECOND full ROS stack (108 pkgs: rcl, rmw,
-# fastrtps, cyclonedds, rosidl typesupport) into the env, so apt rclpy ends up
-# bound to robostack message typesupport. See _on_image() in
-# sobits_vla_deploy.py: the decode goes through cv2 directly instead.
-# The lerobot seam test suite (sobits_vla_common) runs inside these envs —
-# colcon's ament_add_pytest_test is pointed at the env interpreter.
-pytest = ">=7"
+# torchcodec (pip, via lerobot's "dataset" extra) ships libtorchcodec_core{4..8}.so
+# but no FFmpeg — without this every video decode dies in the DataLoader worker.
+ffmpeg = ">=7.1,<9"        # <9 keeps sonames matching a shipped core*.so
+# Do NOT add ros-jazzy-cv-bridge: its NumPy-1.x C extension segfaults under
+# NumPy 2, and the robostack fix drags in a SECOND full ROS stack (108 pkgs) that
+# rebinds apt rclpy. _on_image() in sobits_vla_deploy.py decodes via cv2 instead.
+pytest = ">=7"             # lerobot seam tests (sobits_vla_common) run in these envs
 
 [feature.mlstack.pypi-dependencies]
 lerobot = { version = "~=0.6.0", extras = ["training", "transformers-dep", "pi", "smolvla", "peft-dep", "vla_jepa"] }
 
 # =============================================================================
-# PER-PACKAGE FEATURES  — only the extra deps each package imports beyond
-# the base + mlstack. (torch/lerobot/numpy come from mlstack + cpu|gpu.)
+# PER-PACKAGE FEATURES — only what each package needs beyond base + mlstack.
 # =============================================================================
 
-# sobits_vla_common — numpy, torch, lerobot, transformers, safetensors, yaml.
-# All covered by mlstack + accelerator. No extra deps.
+# sobits_vla_common — fully covered by mlstack + accelerator.
 [feature.common.dependencies]
 
-# sobits_vla_deploy — imports scipy + PIL. Both already come through lerobot
-# (scipy via the "pi" extra's scipy-dep; Pillow is a lerobot core dep), so no
-# conda pins here — adding conda scipy/pillow would fight the pip versions.
+# sobits_vla_deploy — scipy + PIL already arrive through lerobot; conda pins
+# here would fight the pip versions.
 [feature.deploy.dependencies]
 
-# sobits_vla_training — nothing beyond mlstack + accelerator (accelerate/peft/
-# hf_hub pulled by the training/peft-dep extras).
+# sobits_vla_training — accelerate/peft/hf_hub come from the lerobot extras.
 [feature.training.dependencies]
 
-# sobits_vla_rosbag_conversion — pandas/scipy/pyarrow/pillow already arrive via
-# lerobot (dataset extra -> pandas + pyarrow; pi -> scipy; core -> Pillow).
-# Only the extras lerobot does NOT pull are declared here: matplotlib and the
-# pandas accelerators numexpr/bottleneck. rosbags is pip-only.
+# sobits_vla_rosbag_conversion — pandas/scipy/pyarrow/pillow arrive via lerobot;
+# only what it does NOT pull is declared here (rosbags is pip-only).
 [feature.conversion.dependencies]
 matplotlib = "*"
 numexpr = ">=2.10.2"
@@ -135,24 +93,19 @@ bottleneck = ">=1.4.2"
 [feature.conversion.pypi-dependencies]
 rosbags = "*"
 
-# sobits_vla_visualization — LIGHT: numpy/pandas/matplotlib only.
-# No torch, no lerobot -> its own slim env, no accelerator feature.
+# sobits_vla_visualization — LIGHT: no torch, no lerobot -> its own slim env.
 [feature.viz.dependencies]
 numpy = ">=2.0.0,<2.3.0"
 pandas = ">=2.2.2,<2.4"
 matplotlib = "*"
 
 # =============================================================================
-# ENVIRONMENTS  — one per package. ML packages get a -cpu and -gpu variant.
-# `solve-group` lets same-accelerator envs share a consistent solve where
-# possible while remaining separate installs.
+# ENVIRONMENTS — one per package; ML packages get a -cpu and a -gpu variant.
+# `solve-group` keeps same-accelerator envs on one solve, still separate installs.
 # =============================================================================
 [environments]
-# visualization: single slim env (no torch)
-viz = { features = ["viz"] }
-
-# rosbag_collection: pure C++/launch, no python deps -> base only
-collection = { features = [] }
+viz = { features = ["viz"] }        # visualization: slim, no torch
+collection = { features = [] }      # rosbag_collection: C++/launch, no python deps
 
 # ML packages × {cpu, gpu}
 common-cpu     = { features = ["common", "mlstack", "cpu"], solve-group = "cpu" }
