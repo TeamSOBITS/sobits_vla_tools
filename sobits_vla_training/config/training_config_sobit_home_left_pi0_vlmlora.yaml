@@ -17,7 +17,7 @@
     policy: pi0
 
     robot:
-      descriptor_id: sobit_home
+      descriptor_id: sobit_home_frozen
       active_groups:
         - head
         - body

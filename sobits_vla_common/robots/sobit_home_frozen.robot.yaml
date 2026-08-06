@@ -46,8 +46,8 @@ groups:
         feature: arm_left_upper_flex_joint
       - ros_name: arm_left_elbow_joint
         feature: arm_left_elbow_joint
-      - ros_name: arm_left_lower_flex_joint
-        feature: arm_left_lower_flex_joint
+      # - ros_name: arm_left_lower_flex_joint
+      #   feature: arm_left_lower_flex_joint
       - ros_name: arm_left_wrist_tilt_joint
         feature: arm_left_wrist_tilt_joint
       - ros_name: arm_left_wrist_roll_joint
@@ -67,8 +67,8 @@ groups:
   #       feature: arm_right_upper_flex_joint
   #     - ros_name: arm_right_elbow_joint
   #       feature: arm_right_elbow_joint
-  #     - ros_name: arm_right_lower_flex_joint
-  #       feature: arm_right_lower_flex_joint
+  #     # - ros_name: arm_right_lower_flex_joint
+  #     #   feature: arm_right_lower_flex_joint
   #     - ros_name: arm_right_wrist_tilt_joint
   #       feature: arm_right_wrist_tilt_joint
   #     - ros_name: arm_right_wrist_roll_joint
