@@ -318,6 +318,7 @@ class LeRobotDeployNode(Node):
             tilt_threshold_deg=self._log_tilt_deg,
             episode_timeout_s=self._episode_timeout_s,
             lift_success_m=self._lift_success_m,
+            success_settle_s=self._success_settle_s,
             fall_z_drop_m=self._fall_z_drop_m,
             enabled=self._logging_enabled,
             model_repo_id=self._model_repo_id,
@@ -466,6 +467,9 @@ class LeRobotDeployNode(Node):
         # Automatic episode termination thresholds.
         self.declare_parameter('logging.episode_timeout_s', 60.0)
         self.declare_parameter('logging.lift_success_m', 0.05)
+        # Grace period after PLAY during which a lift crossing is ignored, so
+        # the world reset settling cannot be scored as a pick.
+        self.declare_parameter('logging.success_settle_s', 2.0)
         self.declare_parameter('logging.fall_z_drop_m', 0.15)
 
         # Simulation reset parameters
@@ -505,6 +509,9 @@ class LeRobotDeployNode(Node):
             self.get_parameter('logging.episode_timeout_s').value
         )
         self._lift_success_m = float(self.get_parameter('logging.lift_success_m').value)
+        self._success_settle_s = float(
+            self.get_parameter('logging.success_settle_s').value
+        )
         self._fall_z_drop_m = float(self.get_parameter('logging.fall_z_drop_m').value)
         # Sim vs real is derived from use_sim_time (set true by the sim
         # launches): in sim, world resets also teleport robot+block via
@@ -700,6 +707,12 @@ class LeRobotDeployNode(Node):
                 self._episode_logger._lift_success_m = self._lift_success_m
                 self.get_logger().info(
                     'logging.lift_success_m → {}'.format(self._lift_success_m)
+                )
+            elif p.name == 'logging.success_settle_s':
+                self._success_settle_s = float(p.value)
+                self._episode_logger._success_settle_s = self._success_settle_s
+                self.get_logger().info(
+                    'logging.success_settle_s → {}'.format(self._success_settle_s)
                 )
             elif p.name == 'logging.fall_z_drop_m':
                 self._fall_z_drop_m = float(p.value)

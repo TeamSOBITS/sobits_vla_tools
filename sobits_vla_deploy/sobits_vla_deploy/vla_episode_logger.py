@@ -244,6 +244,9 @@ class EpisodeLogger:
       tilt_threshold_deg — |roll| or |pitch| above this → fallen=True (default 30°)
       episode_timeout_s — auto-terminate after this many sim seconds (default 60)
       lift_success_m    — block lift above this → success_lift (default 0.05)
+      success_settle_s  — ignore lift crossings for this long after PLAY, so
+                          world-reset settling cannot score a success
+                          (default 2.0)
       fall_z_drop_m     — robot world-z drop above this → fallen (default 0.15)
       enabled          — master switch; if False all methods are no-ops
     """
@@ -268,6 +271,7 @@ class EpisodeLogger:
         episode_timeout_s: float = 60.0,
         lift_success_m: float = 0.05,
         fall_z_drop_m: float = 0.15,
+        success_settle_s: float = 2.0,
         enabled: bool = True,
         model_repo_id: str = '',
         sim_enabled: bool = True,
@@ -284,6 +288,9 @@ class EpisodeLogger:
         self._episode_timeout_s = episode_timeout_s
         self._lift_success_m = lift_success_m
         self._fall_z_drop_m = fall_z_drop_m
+        # Grace period after PLAY during which a lift-threshold crossing is
+        # ignored (world-reset settling, not a real pick).
+        self._success_settle_s = success_settle_s
         self.enabled = enabled
 
         self._lock = threading.Lock()
@@ -326,18 +333,45 @@ class EpisodeLogger:
     def begin_episode(self) -> None:
         if not self.enabled:
             return
-        # Sample baselines from the latest cached Gazebo poses (the world has
-        # just been reset, so the block/robot are at their start poses). Fall
-        # back to the configured reset values when the cache is empty.
+        # Fresh blocking read, not the 200 ms-lagged poller cache: a stale
+        # pre-teleport pose makes the reset itself read as a +0.4 m lift.
+        block_pose = _gz_get_pose_fast(self._world_name, self._block_name) \
+            if self._sim_enabled else None
+        robot_pose = _gz_get_pose_fast(self._world_name, self._robot_name) \
+            if self._sim_enabled else None
+
+        # Deviating further than this from the reset height means the read
+        # caught the block mid-teleport -- use the configured value instead.
+        max_baseline_dev_m = self._lift_success_m
+
+        if block_pose is not None and abs(
+            float(block_pose['z']) - self._block_reset[2]
+        ) <= max_baseline_dev_m:
+            self._baseline_block_z = float(block_pose['z'])
+        else:
+            if block_pose is not None:
+                print(
+                    '[WARN] begin_episode: block z={:.4f} deviates >{:.3f} m '
+                    'from the reset height {:.4f} (stale/incomplete teleport?) '
+                    '-- using the configured baseline.'.format(
+                        float(block_pose['z']),
+                        max_baseline_dev_m,
+                        self._block_reset[2],
+                    )
+                )
+            self._baseline_block_z = self._block_reset[2]
+
+        if robot_pose is not None:
+            self._baseline_robot_z = float(robot_pose['z'])
+        else:
+            self._baseline_robot_z = self._spawn[2]
+
+        # Seed the cache so the first tick uses post-reset poses.
         with self._pose_lock:
-            if self._cached_block_pose:
-                self._baseline_block_z = float(self._cached_block_pose['z'])
-            else:
-                self._baseline_block_z = self._block_reset[2]
-            if self._cached_robot_pose:
-                self._baseline_robot_z = float(self._cached_robot_pose['z'])
-            else:
-                self._baseline_robot_z = self._spawn[2]
+            if block_pose is not None:
+                self._cached_block_pose = block_pose
+            if robot_pose is not None:
+                self._cached_robot_pose = robot_pose
         self._prev_joints = None
         self._prev_joint_delta = None
         self._reset_accumulators()
@@ -580,7 +614,10 @@ class EpisodeLogger:
             if lift > self._max_block_lift:
                 self._max_block_lift = lift
             self._final_block_lift = lift
-            if lift > self._lift_success_m:
+            # A crossing this early is reset settling, not a pick: real picks
+            # took 30-45 s, the observed false positive fired at 0.84 s.
+            settled = elapsed_sim_s >= self._success_settle_s
+            if lift > self._lift_success_m and settled:
                 if self._time_to_success is None:
                     self._time_to_success = elapsed_sim_s
                 return 'success_lift'
