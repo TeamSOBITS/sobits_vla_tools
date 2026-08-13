@@ -1,0 +1,80 @@
+/**:
+  ros__parameters:
+    model:
+      # PI0 (PaliGemma 2B + 300M action expert) VLM-LoRA adapter trained on
+      # left-abs-gazebo (training_config_sobit_home_left_pi0_vlmlora.yaml).
+      # Adapter-only repo: the loader merges it onto lerobot/pi0_base.
+      # Trained with use_relative_actions: false and the repo's
+      # absolute_actions_processor has enabled: false — keep false here.
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi0_vlmlora"
+      policy_class: "lerobot.policies.pi0.modeling_pi0.PI0Policy"
+      device: "cuda"
+      use_amp: false
+      use_relative_actions: false
+      default_task_label: "Pick up the block"
+
+    runtime:
+      # Must match dataset fps (10) — actions are positions sampled at 10 Hz.
+      control_hz: 10.0
+      actions_per_chunk: 50
+      # Re-infer when the queue drops to 50% (25 steps left): leaves margin
+      # for ~1.5 s pi0 inference latency without the queue running dry.
+      chunk_size_threshold: 0.5
+      # Non-RTC fallback path only; 'newest' avoids blending chunks predicted
+      # from observations ~1 s apart.
+      aggregate_fn_name: newest
+      async_enabled: true
+      single_step_mode: false
+      # NOTE: per-group joint rate limiting (max_joint_delta) comes from the
+      # robot descriptor (sobits_vla_common/robots/sobit_home_frozen.robot.yaml).
+
+    rtc:
+      # pi0 exposes predict_action_chunk + rtc_config (registry supports_rtc).
+      # The trained config.json has rtc_config: null; the deploy loader injects
+      # an RTCConfig at load time.
+      enabled: true
+      # >= ceil(inference_latency * control_hz), <= chunk_size/2.
+      # 16 covers ~1.5 s at 10 Hz (same budget as the pi05 sibling config).
+      execution_horizon: 16
+      max_guidance_weight: 10.0
+      prefix_attention_schedule: EXP
+      # Floor; the deploy node's LatencyTracker raises it from measurements.
+      inference_delay: 5
+      debug: false
+
+    logging:
+      # vla_experiment.launch.py force-enables these and overrides log_dir.
+      enabled: false
+      log_dir: ""
+      tilt_threshold_deg: 30.0
+      episode_timeout_s: 60.0   # stop after 60 sim seconds
+      lift_success_m: 0.05      # block lifted > 5 cm -> success
+      # Ignore lift crossings for the first 2 s: reset settling is not a pick.
+      success_settle_s: 2.0
+      fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
+
+    reset:
+      pose_name: "initial_pose"
+      duration_s: 1.5
+      action_name: "/sobit_home/move_to_pose"
+
+    sim:
+      robot_model_name: sobit_home
+
+    robot:
+      # sobit_home_frozen: the left-arm subset descriptor. Its joint set matches
+      # the model's 19-dim action_feature_names exactly (head 2 + body 1 +
+      # arm_left 6 + hand_left 7 + base 3) -- the plain sobit_home descriptor
+      # carries an extra arm_left_lower_flex_joint and would be 20-dim.
+      # Body and base are no longer clamped in that file, so both execute the
+      # policy's predictions.
+      descriptor_id: sobit_home_frozen
+      active_groups:
+        - head
+        - body
+        - arm_left
+        - hand_left
+      active_cameras:
+        - head_camera
+        - hand_left_camera
+      active_mobile_base: true
