@@ -1,10 +1,6 @@
 schema_version: 1
-# Variant of sobit_home that keeps body + mobile_base in the feature vector
-# (so state/action stay 20-dim for the pnp_ball_bowl_left models) but freezes
-# them: body is clamped to +-0.5 mm of measured, base velocities are clamped
-# below the executor deadband and always publish as exactly zero.
-# The ball/bowl datasets contain no body or base motion, so the policy only
-# ever predicts the constant it was trained on -- this is belt-and-braces.
+# Variant of sobit_home restricted to the left arm/hand, giving a 19-dim
+# state/action vector. Body and base are unclamped and execute normally.
 robot_id: sobit_home_frozen
 
 joint_states_topic: /sobit_home/joint_states
@@ -24,9 +20,7 @@ groups:
   - name: body
     command_topic: /sobit_home/body_position_controller/joint_trajectory
     command_action: /sobit_home/body_position_controller/follow_joint_trajectory
-    # FROZEN: near-zero (not 0.0 -- 0.0 disables clamping entirely) so every
-    # command is pinned to within 0.5 mm of the measured lift position.
-    max_joint_delta: 0.0005
+    max_joint_delta: 0.02
     active: true
     joints:
       - ros_name: body_lift_joint
@@ -125,13 +119,10 @@ mobile_base:
   has_vel_y: true
   has_vel_z: false
   has_vel_theta: true
-  # FROZEN: nonzero so the clamp actually engages (0.0 means "no clamp"), and
-  # small enough that the result falls under the executor deadband
-  # (0.015 linear / 0.005 angular) -> cmd_vel publishes exactly 0.0.
-  max_vel_x: 0.001
-  max_vel_y: 0.001
+  max_vel_x: 0.0
+  max_vel_y: 0.0
   max_vel_z: 0.0
-  max_vel_theta: 0.001
+  max_vel_theta: 0.0
   features: [x.vel, y.vel, theta.vel]
 
 sensors:
