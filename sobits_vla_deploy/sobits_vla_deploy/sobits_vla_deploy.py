@@ -180,6 +180,7 @@ class LeRobotDeployNode(Node):
             model_use_relative_actions=self._model_use_relative_actions,
             joint_features=self._joint_features,
             mobile_base_features=self._mobile_base_features,
+            relative_exclude_features=self._relative_exclude_features,
             logger=self.get_logger(),
         )
         self._inference_engine.update_task_label(self._task_label)
@@ -624,6 +625,11 @@ class LeRobotDeployNode(Node):
             self._max_vel_x = 0.0
             self._max_vel_y = 0.0
             self._max_vel_theta = 0.0
+
+        self._relative_exclude_features = desc.relative_exclude_features(
+            active_groups=active_groups_list,
+            active_mobile_base=active_mobile_base,
+        )
 
         self._camera_names = []
         self._camera_topics = {}

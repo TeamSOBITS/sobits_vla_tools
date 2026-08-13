@@ -69,6 +69,7 @@ class InferenceEngine:
         model_use_relative_actions: bool,
         joint_features: List[str],
         mobile_base_features: List[str],
+        relative_exclude_features: Optional[List[str]] = None,
         logger=None,
     ):
         self.policy = policy
@@ -88,6 +89,7 @@ class InferenceEngine:
         self.model_use_relative_actions = model_use_relative_actions
         self.joint_features = joint_features
         self.mobile_base_features = mobile_base_features
+        self.relative_exclude_features = set(relative_exclude_features or [])
         self.logger = logger
 
         self.task_label = ''
@@ -446,26 +448,7 @@ class InferenceEngine:
             steps = steps[: self.actions_per_chunk]
 
         if manually_add_delta and steps:
-            has_absolute_step = False
-            try:
-                from sobits_vla_common.lerobot_adapter import AbsoluteActionsProcessorStep
-
-                if self.postprocessor is not None:
-                    has_absolute_step = any(
-                        isinstance(s, AbsoluteActionsProcessorStep)
-                        for s in self.postprocessor.steps
-                    )
-            except Exception:
-                pass
-
-            if not has_absolute_step:
-                for step in steps:
-                    for key in list(step.keys()):
-                        if (
-                            key in state_vector
-                            and key not in self.mobile_base_features
-                        ):
-                            step[key] = state_vector[key] + step[key]
+            self._apply_manual_delta(steps, state_vector)
 
         try:
             state_in = [float(v) for v in obs_frame.get('observation.state', [])]
@@ -489,6 +472,40 @@ class InferenceEngine:
             pass
 
         return steps, rtc_raw_model_chunk, inference_delay
+
+    def _apply_manual_delta(
+        self, steps: List[Dict[str, float]], state_vector: Dict[str, float]
+    ) -> None:
+        """
+        Add current state to model output in place, for policies that predict
+        deltas but ship no AbsoluteActionsProcessorStep to do it themselves.
+
+        Skips mobile-base and relative_exclude features (e.g. a gripper),
+        which must stay absolute regardless of the policy's delta mode.
+        """
+        has_absolute_step = False
+        try:
+            from sobits_vla_common.lerobot_adapter import AbsoluteActionsProcessorStep
+
+            if self.postprocessor is not None:
+                has_absolute_step = any(
+                    isinstance(s, AbsoluteActionsProcessorStep)
+                    for s in self.postprocessor.steps
+                )
+        except Exception:
+            pass
+
+        if has_absolute_step:
+            return
+
+        for step in steps:
+            for key in list(step.keys()):
+                if (
+                    key in state_vector
+                    and key not in self.mobile_base_features
+                    and key not in self.relative_exclude_features
+                ):
+                    step[key] = state_vector[key] + step[key]
 
     def _to_action_steps(self, raw_actions: Any) -> List[Dict[str, float]]:
         action_keys = self.joint_features + self.mobile_base_features
