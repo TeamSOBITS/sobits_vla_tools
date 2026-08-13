@@ -51,26 +51,29 @@
       # Episode evaluation logging. The vla_experiment.launch.py overrides
       # enabled/log_dir per model run; these are the defaults for plain deploy.
       enabled: false
-      log_dir: "/tmp/vla_logs"
+      log_dir: ""
       tilt_threshold_deg: 30.0
       # Automatic episode termination thresholds.
       episode_timeout_s: 60.0   # stop after 60 sim seconds
       lift_success_m: 0.05      # block lifted > 5 cm -> success
+      # Ignore lift crossings for the first 2 s: reset settling is not a pick.
+      success_settle_s: 2.0
       fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
 
     reset:
+      pose_name: "initial_pose"
+      duration_s: 1.5
       action_name: "/sobit_home/move_to_pose"
 
     sim:
       robot_model_name: sobit_home
 
     robot:
-      # Morphology (joint groups, command topics, joints, max_joint_delta,
-      # mobile_base, cameras) is loaded from the shared robot descriptor:
-      #   sobits_vla_common/robots/sobit_home.robot.yaml
-      # active_groups / active_cameras / active_mobile_base select the subset
-      # used for this task (left-arm pickup) without re-listing joints/topics.
-      descriptor_id: sobit_home
+      # sobit_home_frozen is the only 19-dim descriptor (head 2 + body 1 +
+      # arm_left 6 + hand_left 7 + base 3), matching this model's 19-entry
+      # action_feature_names. Plain sobit_home carries an extra
+      # arm_left_lower_flex_joint and would be 20-dim.
+      descriptor_id: sobit_home_frozen
       active_groups:
         - head
         - body

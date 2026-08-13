@@ -2,17 +2,17 @@
   ros__parameters:
     model:
       # SmolVLA (450M) FULL fine-tune with UNFROZEN VLM + vision (the LeKiwi
-      # ablation recipe) on left-abs-gazebo. Full-model repo (no adapter);
-      # runs float32 at deploy (registry cast_bf16=false) — only ~1.8 GB VRAM.
+      # ablation recipe) on pickup_the_block left-abs-gazebo. Full-model repo
+      # (no adapter); float32 at deploy (registry cast_bf16=false), ~1.8 GB VRAM.
       # NOTE: smolvla has no action_feature_names — the node maps actions
       # positionally, which is correct because the robot.groups order below
       # matches the dataset feature order exactly. Do not reorder groups.
-      repo_id: "team-sobits/sobit_home_pnp_bottle_bin_merged_left_abs_smolvla_vlmft"
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_smolvla_vlmft"
       policy_class: "lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy"
       device: "cuda"
       use_amp: false
       use_relative_actions: false
-      default_task_label: "Throw the plastic bottle into the trash bin"
+      default_task_label: "Pick up the block"
       dataset_repo_id: ""
 
     runtime:
@@ -48,11 +48,13 @@
       # Episode evaluation logging. The vla_experiment.launch.py overrides
       # enabled/log_dir per model run; these are the defaults for plain deploy.
       enabled: false
-      log_dir: "/tmp/vla_logs"
+      log_dir: ""
       tilt_threshold_deg: 30.0
       # Automatic episode termination thresholds.
-      episode_timeout_s: 120.0   # stop after 60 sim seconds
+      episode_timeout_s: 60.0   # stop after 60 sim seconds
       lift_success_m: 0.05      # block lifted > 5 cm -> success
+      # Ignore lift crossings for the first 2 s: reset settling is not a pick.
+      success_settle_s: 2.0
       fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
 
     reset:
@@ -62,9 +64,10 @@
       # Gazebo first and gz-based auto-termination is active; on the real
       # robot only the pose motion runs (episode timeout still applies when
       # logging is enabled).
-      pose_name: "vla_pose_on_table"
-      # Slower transition on the real robot (sim used 1.5 s).
-      duration_s: 10.0
+      # initial_pose: vla_pose_on_table is teleop-only, absent from the sim
+      # pose_list.yaml, so move_to_pose would fail on every reset here.
+      pose_name: "initial_pose"
+      duration_s: 1.5
       action_name: "/sobit_home/move_to_pose"
 
     sim:
