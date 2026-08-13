@@ -117,7 +117,10 @@ class TestActionChunkBufferAggregate:
 # ---------------------------------------------------------------------------
 
 
-def _make_engine(joint_features=None, mobile_base_features=None) -> InferenceEngine:
+def _make_engine(
+    joint_features=None, mobile_base_features=None, relative_exclude_features=None,
+    postprocessor=None,
+) -> InferenceEngine:
     """Minimal InferenceEngine with only what _to_action_steps reads set."""
     return InferenceEngine(
         policy=None,
@@ -131,12 +134,13 @@ def _make_engine(joint_features=None, mobile_base_features=None) -> InferenceEng
         rtc_enabled=False,
         rtc_inference_delay=4,
         preprocessor=None,
-        postprocessor=None,
+        postprocessor=postprocessor,
         expected_state_dim=None,
         model_action_feature_names=None,
         model_use_relative_actions=False,
         joint_features=joint_features if joint_features is not None else ['j0', 'j1', 'j2'],
         mobile_base_features=mobile_base_features if mobile_base_features is not None else ['x.vel'],
+        relative_exclude_features=relative_exclude_features,
     )
 
 
@@ -192,3 +196,58 @@ class TestToActionSteps:
         engine = _make_engine()
         steps = engine._to_action_steps('not_a_valid_type')
         assert steps == []
+
+
+# ---------------------------------------------------------------------------
+# _apply_manual_delta tests
+# ---------------------------------------------------------------------------
+
+
+class TestApplyManualDelta:
+
+    def test_adds_state_to_delta(self):
+        engine = _make_engine(joint_features=['j0'], mobile_base_features=[])
+        steps = [{'j0': 0.1}]
+        engine._apply_manual_delta(steps, state_vector={'j0': 1.0})
+        assert abs(steps[0]['j0'] - 1.1) < 1e-9
+
+    def test_skips_mobile_base_features(self):
+        engine = _make_engine(joint_features=['j0'], mobile_base_features=['x.vel'])
+        steps = [{'j0': 0.1, 'x.vel': 0.5}]
+        engine._apply_manual_delta(steps, state_vector={'j0': 1.0, 'x.vel': 2.0})
+        assert abs(steps[0]['j0'] - 1.1) < 1e-9
+        assert steps[0]['x.vel'] == 0.5
+
+    def test_skips_relative_exclude_features(self):
+        # e.g. hand_left fingers: never delta-converted regardless of the
+        # policy's use_relative_actions mode.
+        engine = _make_engine(
+            joint_features=['j0', 'hand_left_finger_l_mcp_joint'],
+            mobile_base_features=[],
+            relative_exclude_features=['hand_left_finger_l_mcp_joint'],
+        )
+        steps = [{'j0': 0.1, 'hand_left_finger_l_mcp_joint': 0.3}]
+        engine._apply_manual_delta(
+            steps,
+            state_vector={'j0': 1.0, 'hand_left_finger_l_mcp_joint': 1.5},
+        )
+        assert abs(steps[0]['j0'] - 1.1) < 1e-9
+        assert steps[0]['hand_left_finger_l_mcp_joint'] == 0.3
+
+    def test_noop_when_postprocessor_has_absolute_step(self):
+        try:
+            from sobits_vla_common.lerobot_adapter import AbsoluteActionsProcessorStep
+        except ImportError:
+            import pytest
+            pytest.skip('sobits_vla_common.lerobot_adapter not importable in this env')
+
+        class _FakePostprocessor:
+            steps = [AbsoluteActionsProcessorStep.__new__(AbsoluteActionsProcessorStep)]
+
+        engine = _make_engine(
+            joint_features=['j0'], mobile_base_features=[],
+            postprocessor=_FakePostprocessor(),
+        )
+        steps = [{'j0': 0.1}]
+        engine._apply_manual_delta(steps, state_vector={'j0': 1.0})
+        assert steps[0]['j0'] == 0.1
