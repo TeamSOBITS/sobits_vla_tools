@@ -36,7 +36,7 @@
 
     logging:
       enabled: false
-      log_dir: "/tmp/vla_logs"
+      log_dir: ""
       tilt_threshold_deg: 30.0
       episode_timeout_s: 60.0
       lift_success_m: 0.05

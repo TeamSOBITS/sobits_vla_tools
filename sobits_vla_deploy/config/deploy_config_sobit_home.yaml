@@ -29,7 +29,7 @@
       # Episode evaluation logging. The vla_experiment.launch.py overrides
       # enabled/log_dir per model run; these are the defaults for plain deploy.
       enabled: false
-      log_dir: "/tmp/vla_logs"
+      log_dir: ""
       tilt_threshold_deg: 30.0
       # Automatic episode termination thresholds.
       episode_timeout_s: 60.0   # stop after 60 sim seconds
