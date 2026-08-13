@@ -42,7 +42,9 @@ Each line is one timestep dict with:
   track_abs_mean — float, mean |tracking_error| this step
   base_vel       — {x, y, theta}
   base_speed     — float, sqrt(x^2 + y^2)
-  ee_pose        — {x, y, z, roll, pitch, yaw} in base_footprint (None if TF miss)
+  ee_pose        — {x, y, z, roll, pitch, yaw} in the WORLD frame, directly
+                   comparable with block_pose/robot_pose (None if TF miss)
+  ee_pose_base   — the same pose in base_footprint, for controller debugging
   ee_error       — {dx, dy, dz, dist} relative to block position (None if gz query fails)
   robot_pose     — {x, y, z, roll, pitch, yaw} in world frame from Gazebo
   robot_z_drop   — float, baseline_robot_z - robot_pose.z
@@ -78,6 +80,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import threading
 from time import monotonic
@@ -167,24 +170,103 @@ def _gz_set_pose(
         return False
 
 
+def _wrap_pi(angle: float) -> float:
+    """Wrap an angle to (-pi, pi]."""
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def _gz_get_pose_dynamic(
+    world_name: str,
+    model_name: str,
+    timeout: float = 2.0,
+) -> Optional[Dict[str, float]]:
+    """
+    Read a model's LIVE world pose from the dynamic_pose/info topic.
+
+    `gz model -m <name> -p` reports the model's static/spawn pose, which never
+    changes once the simulation is running -- a block picked up and lifted
+    still reports its table position. dynamic_pose/info carries the per-entity
+    poses the physics engine actually updates, so it is the only source that
+    reflects motion.
+
+    Returns {x, y, z, roll, pitch, yaw} (RPY converted from the quaternion),
+    or None if the entity is absent from the message (static entities are not
+    published here -- the caller falls back to the static query).
+    """
+    topic = '/world/{}/dynamic_pose/info'.format(world_name)
+    cmd = ['gz', 'topic', '-e', '-t', topic, '-n', '1']
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout + 1.0
+        )
+        if result.returncode != 0:
+            return None
+        # Pose_V text format: repeated `pose { name: "x" position {...}
+        # orientation {...} }` blocks. Walk to the block whose name matches.
+        blocks, cur, depth, inside = [], [], 0, False
+        for ln in result.stdout.splitlines():
+            if not inside and ln.strip().startswith('pose {'):
+                inside, cur, depth = True, [], 0
+            if inside:
+                cur.append(ln)
+                depth += ln.count('{') - ln.count('}')
+                if depth == 0:
+                    blocks.append('\n'.join(cur))
+                    inside = False
+        for blk in blocks:
+            name = re.search(r'name:\s*"([^"]*)"', blk)
+            if not name or name.group(1) != model_name:
+                continue
+            pos = re.search(
+                r'position\s*{([^}]*)}', blk, re.S)
+            ori = re.search(
+                r'orientation\s*{([^}]*)}', blk, re.S)
+            if not pos:
+                continue
+
+            def _f(body, key):
+                m = re.search(r'%s:\s*(-?[\d.eE+-]+)' % key, body)
+                return float(m.group(1)) if m else 0.0
+
+            px, py, pz = (_f(pos.group(1), k) for k in ('x', 'y', 'z'))
+            if ori:
+                qx, qy, qz = (_f(ori.group(1), k) for k in ('x', 'y', 'z'))
+                qw = _f(ori.group(1), 'w')
+            else:
+                qx = qy = qz = 0.0
+                qw = 1.0
+            # Quaternion -> RPY (ZYX convention), matching gz's own output.
+            sinr = 2.0 * (qw * qx + qy * qz)
+            cosr = 1.0 - 2.0 * (qx * qx + qy * qy)
+            roll = math.atan2(sinr, cosr)
+            sinp = 2.0 * (qw * qy - qz * qx)
+            pitch = (math.copysign(math.pi / 2, sinp)
+                     if abs(sinp) >= 1 else math.asin(sinp))
+            siny = 2.0 * (qw * qz + qx * qy)
+            cosy = 1.0 - 2.0 * (qy * qy + qz * qz)
+            yaw = math.atan2(siny, cosy)
+            return {'x': px, 'y': py, 'z': pz,
+                    'roll': roll, 'pitch': pitch, 'yaw': yaw}
+        return None
+    except Exception:
+        return None
+
+
 def _gz_get_pose(
     world_name: str,
     model_name: str,
     timeout: float = 2.0,
 ) -> Optional[Dict[str, float]]:
     """
-    Query a model's world pose via the `gz model` CLI.
+    Query a model's world pose, preferring the live (dynamic) pose.
 
-    Returns dict {x, y, z, roll, pitch, yaw} or None on failure.
-
-    NOTE: the previous implementation called `gz service -s
-    /world/.../pose/info`, but pose/info is a TOPIC, not a service, and the
-    parser took the first x/y/z in a Pose_V of ALL models without filtering
-    by name — it could never return this model's pose. `gz model -m <name>
-    -p` is name-filtered and prints XYZ + RPY directly. (world_name is kept
-    for signature compatibility; gz model uses the running world.)
+    Tries dynamic_pose/info first -- the only source that reflects motion --
+    and falls back to `gz model -m <name> -p` for entities the physics engine
+    never moves (which are absent from the dynamic topic).
     """
-    del world_name  # gz model resolves the active world itself
+    live = _gz_get_pose_dynamic(world_name, model_name, timeout=timeout)
+    if live is not None:
+        return live
     cmd = ['gz', 'model', '-m', model_name, '-p']
     try:
         result = subprocess.run(
@@ -509,16 +591,25 @@ class EpisodeLogger:
             if tilt > self._max_robot_tilt:
                 self._max_robot_tilt = tilt
 
-        # EE error relative to block (world-frame approximation via robot pose + EE pose)
+        # EE in world frame, and its error relative to the block.
+        ee_world = None
         ee_error = None
-        if ee_pose is not None and robot_pose is not None and block_pose is not None:
-            # Transform EE from base_footprint to world:
-            # world_pos = robot_xy + R(yaw) * ee_xy + z offset
+        if ee_pose is not None and robot_pose is not None:
+            # base_footprint -> world: robot_xy + R(yaw) * ee_xy, z offset.
             yaw = robot_pose['yaw']
             cos_y, sin_y = math.cos(yaw), math.sin(yaw)
             ee_x_w = robot_pose['x'] + cos_y * ee_pose[0] - sin_y * ee_pose[1]
             ee_y_w = robot_pose['y'] + sin_y * ee_pose[0] + cos_y * ee_pose[1]
             ee_z_w = robot_pose['z'] + ee_pose[2]
+            ee_world = {
+                'x': round(ee_x_w, 4),
+                'y': round(ee_y_w, 4),
+                'z': round(ee_z_w, 4),
+                'roll': round(ee_pose[3], 4),
+                'pitch': round(ee_pose[4], 4),
+                'yaw': round(_wrap_pi(ee_pose[5] + yaw), 4),
+            }
+        if ee_world is not None and block_pose is not None:
             dx = block_pose['x'] - ee_x_w
             dy = block_pose['y'] - ee_y_w
             dz = block_pose['z'] - ee_z_w
@@ -564,7 +655,10 @@ class EpisodeLogger:
             ),
             'base_vel': {k: round(v, 5) for k, v in base_vel.items()},
             'base_speed': round(base_speed, 5),
-            'ee_pose': (
+            # World frame -- directly comparable with block_pose/robot_pose.
+            'ee_pose': ee_world,
+            # Raw base_footprint frame, kept for controller-side debugging.
+            'ee_pose_base': (
                 {k: round(v, 4) for k, v in zip(
                     ['x', 'y', 'z', 'roll', 'pitch', 'yaw'], ee_pose
                 )} if ee_pose is not None else None
