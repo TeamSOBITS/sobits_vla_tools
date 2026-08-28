@@ -40,6 +40,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from sobits_vla_common.output_root import output_root
 from sobits_vla_common.policy_registry import make_policy_config
 
 logger = logging.getLogger(__name__)
@@ -84,23 +85,13 @@ def _default_model_root() -> Path:
     """
     Resolve the checkpoint output root: <package_src>/lerobotmodel/.
 
-    Every non-absolute checkpoint.output_dir is resolved against this root, so
-    it must resolve even before the directory exists (lerobot creates it) —
-    hence the find_package_src_dir() fallback below.
+    Falls back to find_package_src_dir() (not the ament-index share dir
+    directly) since output_dir must resolve before lerobot creates it.
     """
-    candidate = Path(__file__).resolve().parent
-    for _ in range(8):
-        if (candidate / 'package.xml').exists() and (candidate / 'lerobotmodel').is_dir():
-            return candidate / 'lerobotmodel'
-        src_root = candidate / 'src'
-        if src_root.is_dir():
-            for pattern in ('*/sobits_vla_training', '*/*/sobits_vla_training'):
-                for pkg_dir in src_root.glob(pattern):
-                    if (pkg_dir / 'lerobotmodel').is_dir():
-                        return pkg_dir / 'lerobotmodel'
-        candidate = candidate.parent
-
-    return find_package_src_dir() / 'lerobotmodel'
+    return output_root(
+        'sobits_vla_training', 'lerobotmodel', anchor_file=__file__,
+        recursive=False, final_fallback=lambda: find_package_src_dir() / 'lerobotmodel',
+    )
 
 
 def resolve_output_dir(out_dir_raw: str, hub_repo_id: str) -> Path:

@@ -41,6 +41,7 @@ import rclpy
 from rclpy.node import Node
 from sobits_vla_common import runtime_deps
 from sobits_vla_common.lerobot_compat import apply_conversion_patches
+from sobits_vla_common.output_root import output_root
 from sobits_vla_common.param_schema import declare_from_schema, P, read_schema
 from sobits_vla_rosbag_conversion.dataset_writer import DatasetWriter
 from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
@@ -64,30 +65,11 @@ apply_conversion_patches()
 
 
 def _default_output_root() -> Path:
-    """
-    Resolve the default dataset output root: <package_src>/lerobotdataset/.
-
-    Works from the colcon install space (regular-copy installs) by walking up
-    to the workspace root and locating the package under src/, and from
-    source/symlink-install runs by finding the package root directly. Falls
-    back to the installed share directory if the source tree can't be found.
-    """
-    candidate = Path(os.path.realpath(__file__)).parent
-    for _ in range(8):
-        # Source tree (or --symlink-install): package root has package.xml + lerobotdataset/.
-        if (candidate / 'package.xml').exists() and (candidate / 'lerobotdataset').is_dir():
-            return candidate / 'lerobotdataset'
-        # Install space: walk up to workspace root, find package under src/.
-        src_root = candidate / 'src'
-        if src_root.is_dir():
-            for pattern in ('*/sobits_vla_rosbag_conversion', '*/*/sobits_vla_rosbag_conversion'):
-                for pkg_dir in src_root.glob(pattern):
-                    if (pkg_dir / 'lerobotdataset').is_dir():
-                        return pkg_dir / 'lerobotdataset'
-        candidate = candidate.parent
-
-    from ament_index_python.packages import get_package_share_directory
-    return Path(get_package_share_directory('sobits_vla_rosbag_conversion')) / 'lerobotdataset'
+    """Resolve the default dataset output root: <package_src>/lerobotdataset/."""
+    return output_root(
+        'sobits_vla_rosbag_conversion', 'lerobotdataset',
+        anchor_file=os.path.realpath(__file__), recursive=False,
+    )
 
 
 # Static-name declares only; none in this file use a ParameterDescriptor or
