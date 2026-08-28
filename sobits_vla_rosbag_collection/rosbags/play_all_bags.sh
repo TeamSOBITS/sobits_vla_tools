@@ -22,6 +22,8 @@ ROSBAGS_DIR="$SCRIPT_DIR"
 # ── defaults ──────────────────────────────────────────────────────────────────
 RATE=1.0
 LOOP=false
+# Default 1000 covers rate 1-5; raise it when high rates starve the reader.
+QUEUE_SIZE=1000
 EXTRA_ARGS=()
 
 # ── argument parsing ──────────────────────────────────────────────────────────
@@ -29,6 +31,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --dir)    ROSBAGS_DIR="$2"; shift 2 ;;
         --rate)   RATE="$2";  shift 2 ;;
+        --queue)  QUEUE_SIZE="$2"; shift 2 ;;
         --loop)   LOOP=true;  shift   ;;
         --topics) shift
                   TOPICS_LIST=()
@@ -41,7 +44,7 @@ while [[ $# -gt 0 ]]; do
                   fi ;;
         -h|--help)
             echo "Usage: $0 [--dir <rosbags-dir>] [--rate <rate>] [--loop]" \
-                 "[--topics <t1> <t2> ...]"
+                 "[--queue <size>] [--topics <t1> <t2> ...]"
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -96,8 +99,9 @@ for task in "${TASK_DIRS[@]}"; do
             in_task=true; continue
         fi
         if $in_task; then
-            # Stop when we hit the next top-level task key (non-indented or new task)
-            if [[ "$line" =~ ^[[:space:]]{4}[a-z] && ! "$line" =~ episode ]]; then
+            # Stop at the next task key. Keys may start with a digit when
+            # sessions are merged (e.g. "01/throw_the_..."), not just a letter.
+            if [[ "$line" =~ ^[[:space:]]{4}[a-z0-9] && ! "$line" =~ episode ]]; then
                 in_task=false; continue
             fi
             # Inline flow style: episodes_list: [episode_a, episode_b, ...]
@@ -143,6 +147,7 @@ echo "╠═══════════════════════�
 printf "║  Episodes found : %-42s ║\n" "$TOTAL"
 printf "║  Rosbags dir    : %-42s ║\n" "$(basename "$ROSBAGS_DIR")"
 printf "║  Playback rate  : %-42s ║\n" "$RATE"
+printf "║  Queue size     : %-42s ║\n" "$QUEUE_SIZE"
 printf "║  Loop mode      : %-42s ║\n" "$LOOP"
 echo "╠══════════════════════════════════════════════════════════════╣"
 echo "║  Controls: [Space] pause  [s] step  [q] next bag  [^C] quit ║"
@@ -181,6 +186,7 @@ while true; do
         # the loop continues to the next episode (ABORT flag exits if pressed again).
         ros2 bag play "$mcap" \
             --rate "$RATE" \
+            --read-ahead-queue-size "$QUEUE_SIZE" \
             "${EXTRA_ARGS[@]}" || true
 
         # Brief pause between episodes so RViz2 can settle
