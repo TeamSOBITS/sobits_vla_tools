@@ -164,3 +164,25 @@ def controller_and_teleop_actions(
         )))
 
     return actions
+
+
+def str_to_bool(value: str) -> bool:
+    """Parse a launch-argument boolean string."""
+    return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def resolve_deploy_config(deploy_config: str, fallback: str = 'deploy_config') -> str:
+    """
+    Resolve a deploy_config filename stem to the package config/ path.
+
+    Accepts the stem with or without .yaml; empty falls back to `fallback`.
+    """
+    from ament_index_python.packages import get_package_share_directory
+    cfg = deploy_config.strip() if deploy_config else ''
+    if not cfg:
+        cfg = fallback
+    if not cfg.endswith('.yaml'):
+        cfg += '.yaml'
+    return os.path.join(
+        get_package_share_directory('sobits_vla_deploy'), 'config', cfg
+    )

@@ -62,7 +62,8 @@ from sobits_vla_common.launch.utils import (
     pixi_prefix, resolve_pixi_env,
 )
 from sobits_vla_deploy.launch_helpers import (
-    controller_and_teleop_actions, world_reset_actions, world_reset_config_path,
+    controller_and_teleop_actions, resolve_deploy_config, str_to_bool,
+    world_reset_actions, world_reset_config_path,
 )
 import yaml
 
@@ -74,10 +75,6 @@ os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
 _DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
-def _str_to_bool(value: str) -> bool:
-    return value.strip().lower() in {'1', 'true', 'yes', 'on'}
-
-
 def _setup(context, *args, **kwargs):
     from ament_index_python.packages import get_package_share_directory
 
@@ -86,7 +83,7 @@ def _setup(context, *args, **kwargs):
     log_dir = LaunchConfiguration('log_dir').perform(context).strip()
     robot_name = LaunchConfiguration('robot_name').perform(context).strip()
     num_episodes = int(LaunchConfiguration('num_episodes').perform(context))
-    use_sim_time = _str_to_bool(LaunchConfiguration('use_sim_time').perform(context))
+    use_sim_time = str_to_bool(LaunchConfiguration('use_sim_time').perform(context))
     # Empty = the deploy config owns the value; only an explicit launch arg
     # overrides, so these numbers live in exactly one place (the YAML).
     episode_timeout_raw = LaunchConfiguration('episode_timeout_s').perform(context).strip()
@@ -94,13 +91,8 @@ def _setup(context, *args, **kwargs):
     fall_z_drop_raw = LaunchConfiguration('fall_z_drop_m').perform(context).strip()
     done_wait_margin_s = float(LaunchConfiguration('done_wait_margin_s').perform(context))
 
-    pkg_config_dir = os.path.join(
-        get_package_share_directory('sobits_vla_deploy'), 'config'
-    )
-    cfg = deploy_config if deploy_config else 'deploy_config'
-    if not cfg.endswith('.yaml'):
-        cfg += '.yaml'
-    config_file = os.path.join(pkg_config_dir, cfg)
+    config_file = resolve_deploy_config(deploy_config)
+    cfg = os.path.basename(config_file)
 
     # Derive a model label from the config stem when not supplied.
     if not model_label:
@@ -211,7 +203,7 @@ def _setup(context, *args, **kwargs):
 
     actions = [deploy_node, runner_node, shutdown_on_runner_exit]
 
-    enable_world_reset = _str_to_bool(
+    enable_world_reset = str_to_bool(
         LaunchConfiguration('enable_world_reset').perform(context)
     )
     actions += world_reset_actions(

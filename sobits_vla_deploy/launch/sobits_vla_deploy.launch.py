@@ -38,7 +38,8 @@ from sobits_vla_common.launch.utils import (
     default_pixi_manifest, pixi_launch_arguments, pixi_prefix, resolve_pixi_env,
 )
 from sobits_vla_deploy.launch_helpers import (
-    controller_and_teleop_actions, world_reset_actions, world_reset_config_path,
+    controller_and_teleop_actions, resolve_deploy_config, str_to_bool,
+    world_reset_actions, world_reset_config_path,
 )
 
 # Required for PI05 bfloat16 model loading on CUDA without OOM.
@@ -50,10 +51,6 @@ os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
 _DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
-def _str_to_bool(value: str) -> bool:
-    return value.strip().lower() in {'1', 'true', 'yes', 'on'}
-
-
 def _create_deploy_node(context, *args, **kwargs):
     from ament_index_python.packages import get_package_share_directory
 
@@ -63,13 +60,7 @@ def _create_deploy_node(context, *args, **kwargs):
     # deploy_config is a filename stem inside the package's config/ dir.
     # If provided it takes precedence over config_file.
     if deploy_config:
-        pkg_config_dir = os.path.join(
-            get_package_share_directory('sobits_vla_deploy'), 'config'
-        )
-        # Accept with or without .yaml extension
-        if not deploy_config.endswith('.yaml'):
-            deploy_config += '.yaml'
-        config_file = os.path.join(pkg_config_dir, deploy_config)
+        config_file = resolve_deploy_config(deploy_config)
 
     # Shared gamepad config (sobits_vla_common) supplies gamepad.command_service,
     # the VlaCommand service name this node advertises for gamepad-driven play/stop.
@@ -81,7 +72,7 @@ def _create_deploy_node(context, *args, **kwargs):
 
     robot_name = LaunchConfiguration('robot_name').perform(context)
     node_name = LaunchConfiguration('node_name').perform(context)
-    use_sim_time = _str_to_bool(LaunchConfiguration('use_sim_time').perform(context))
+    use_sim_time = str_to_bool(LaunchConfiguration('use_sim_time').perform(context))
 
     prefix = pixi_prefix(
         resolve_pixi_env(context),
@@ -105,7 +96,7 @@ def _create_deploy_node(context, *args, **kwargs):
     if model_device:
         overrides['model.device'] = model_device
     if model_use_amp_raw:
-        overrides['model.use_amp'] = _str_to_bool(model_use_amp_raw)
+        overrides['model.use_amp'] = str_to_bool(model_use_amp_raw)
 
     actions = [
         Node(
@@ -123,7 +114,7 @@ def _create_deploy_node(context, *args, **kwargs):
         )
     ]
 
-    enable_world_reset = _str_to_bool(
+    enable_world_reset = str_to_bool(
         LaunchConfiguration('enable_world_reset').perform(context)
     )
     actions += world_reset_actions(
