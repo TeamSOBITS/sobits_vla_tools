@@ -189,6 +189,23 @@ class LeRobotDeployNode(Node):
         self._configure_parameters()
         self._load_robot_profile()
 
+        self._init_policy()
+        self._init_collaborators()
+        self._init_io()
+        self._init_logging()
+
+        self.get_logger().info(
+            'Loaded profile {!r} with {} joint features, {} cameras. '
+            'Async={}, RTC={}.'.format(
+                self._active_profile,
+                len(self._joint_features),
+                len(self._camera_names),
+                self._async_enabled,
+                self._rtc_enabled,
+            )
+        )
+
+    def _init_policy(self) -> None:
         # Build policy config and load policy
         loader = PolicyLoader(
             model_repo_id=self._model_repo_id,
@@ -206,15 +223,15 @@ class LeRobotDeployNode(Node):
             logger=self.get_logger(),
         )
 
-        loaded = loader.load_policy(self._joint_features, self._mobile_base_features)
+        bundle = loader.load_policy(self._joint_features, self._mobile_base_features)
 
-        self._policy = loaded['policy']
-        self._rtc_enabled = loaded['rtc_enabled']
-        self._model_action_feature_names = loaded['model_action_feature_names']
-        self._model_use_relative_actions = loaded['model_use_relative_actions']
-        self._expected_state_dim = loaded['expected_state_dim']
-        self._preprocessor = loaded['preprocessor']
-        self._postprocessor = loaded['postprocessor']
+        self._policy = bundle.policy
+        self._rtc_enabled = bundle.rtc_enabled
+        self._model_action_feature_names = bundle.model_action_feature_names
+        self._model_use_relative_actions = bundle.model_use_relative_actions
+        self._expected_state_dim = bundle.expected_state_dim
+        self._preprocessor = bundle.preprocessor
+        self._postprocessor = bundle.postprocessor
 
         # model.use_relative_actions was dead (checkpoint always won silently);
         # enforce that an explicit config value agrees with the checkpoint.
@@ -232,6 +249,7 @@ class LeRobotDeployNode(Node):
                 )
             )
 
+    def _init_collaborators(self) -> None:
         # Initialize ObsBuilder
         self._obs_builder = ObsBuilder(
             joint_features=self._joint_features,
@@ -275,6 +293,8 @@ class LeRobotDeployNode(Node):
         )
         self._inference_engine.update_task_label(self._task_label)
 
+    def _init_subscriptions(self) -> QoSProfile:
+        # Split out of _init_io (R2 80-line cap); same construction order.
         qos = QoSProfile(depth=1)
 
         self._play_sub = self.create_subscription(
@@ -326,6 +346,11 @@ class LeRobotDeployNode(Node):
                 callback_group=self._cb_group,
             )
             self._camera_subs.append(sub)
+
+        return qos
+
+    def _init_io(self) -> None:
+        qos = self._init_subscriptions()
 
         self._group_publishers = {
             group.name: self.create_publisher(
@@ -397,6 +422,7 @@ class LeRobotDeployNode(Node):
             ee_poses=[(ee.name, ee.source_frame, ee.target_frame) for ee in self._ee_poses],
         )
 
+    def _init_logging(self) -> None:
         self._episode_logger = EpisodeLogger(
             log_dir=self._log_dir,
             world_name=self._log_world_name,
@@ -453,17 +479,6 @@ class LeRobotDeployNode(Node):
         self._episode_t0 = None
         self._episode_done_pub = self.create_publisher(
             String, '/vla/episode_done', QoSProfile(depth=10)
-        )
-
-        self.get_logger().info(
-            'Loaded profile {!r} with {} joint features, {} cameras. '
-            'Async={}, RTC={}.'.format(
-                self._active_profile,
-                len(self._joint_features),
-                len(self._camera_names),
-                self._async_enabled,
-                self._rtc_enabled,
-            )
         )
 
     def destroy_node(self) -> None:
@@ -1166,35 +1181,38 @@ class LeRobotDeployNode(Node):
             now_msg=now,
         )
 
-        # Episode logging: commanded + measured joints, base vel, EE pose
         if self._logging_enabled:
-            log_joints: Dict[str, float] = {}
-            log_joints_measured: Dict[str, float] = {}
-            measured_state = self._obs_builder.state_vector
-            for group in self._joint_groups:
-                for feat in group.features:
-                    log_joints[feat] = float(self._cmd_vector.get(feat, 0.0))
-                    log_joints_measured[feat] = float(measured_state.get(feat, 0.0))
-            log_base = {
-                'x': float(step.get('x.vel', 0.0)) if step else 0.0,
-                'y': float(step.get('y.vel', 0.0)) if step else 0.0,
-                'theta': float(step.get('theta.vel', 0.0)) if step else 0.0,
-            }
-            # Logger takes one EE pose; use the descriptor's first entry.
-            ee = None
-            if self._ee_poses:
-                first = self._ee_poses[0]
-                ee = self._obs_builder._get_ee_pose(
-                    self._tf_buffer, first.target_frame, first.source_frame
-                )
-            self._episode_logger.log_step(
-                joints=log_joints,
-                base_vel=log_base,
-                ee_pose=ee.tolist() if ee is not None else None,
-                joints_measured=log_joints_measured,
-            )
+            self._log_step(step, joint_log, base_log)
 
         self.get_logger().info('CMD -> {}{}'.format(joint_log, base_log))
+
+    def _log_step(self, step, joint_log, base_log) -> None:
+        # Episode logging: commanded + measured joints, base vel, EE pose
+        log_joints: Dict[str, float] = {}
+        log_joints_measured: Dict[str, float] = {}
+        measured_state = self._obs_builder.state_vector
+        for group in self._joint_groups:
+            for feat in group.features:
+                log_joints[feat] = float(self._cmd_vector.get(feat, 0.0))
+                log_joints_measured[feat] = float(measured_state.get(feat, 0.0))
+        log_base = {
+            'x': float(step.get('x.vel', 0.0)) if step else 0.0,
+            'y': float(step.get('y.vel', 0.0)) if step else 0.0,
+            'theta': float(step.get('theta.vel', 0.0)) if step else 0.0,
+        }
+        # Logger takes one EE pose; use the descriptor's first entry.
+        ee = None
+        if self._ee_poses:
+            first = self._ee_poses[0]
+            ee = self._obs_builder.get_ee_pose(
+                self._tf_buffer, first.target_frame, first.source_frame
+            )
+        self._episode_logger.log_step(
+            joints=log_joints,
+            base_vel=log_base,
+            ee_pose=ee.tolist() if ee is not None else None,
+            joints_measured=log_joints_measured,
+        )
 
 
 def main(args: Optional[List[str]] = None) -> None:

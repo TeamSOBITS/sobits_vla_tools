@@ -25,6 +25,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from dataclasses import dataclass
 import gc
 from importlib import import_module
 import json
@@ -87,6 +88,19 @@ def _state_dim_from_preprocessor(preprocessor) -> Optional[int]:
                 if stat is not None:
                     return int(stat.shape[-1])
     return None
+
+
+@dataclass(frozen=True)
+class PolicyBundle:
+    """Result of PolicyLoader.load_policy(); fields replace the old 7-key dict."""
+
+    policy: Any
+    rtc_enabled: bool
+    model_action_feature_names: Optional[List[str]]
+    model_use_relative_actions: bool
+    expected_state_dim: Optional[int]
+    preprocessor: Any
+    postprocessor: Any
 
 
 class PolicyLoader:
@@ -358,7 +372,7 @@ class PolicyLoader:
 
     def load_policy(
         self, joint_features: List[str], mobile_base_features: List[str]
-    ) -> Dict[str, Any]:
+    ) -> PolicyBundle:
         module_path, class_name = self.policy_class_path.rsplit('.', 1)
         policy_module = import_module(module_path)
         policy_cls = getattr(policy_module, class_name)
@@ -701,12 +715,12 @@ class PolicyLoader:
             )
         )
 
-        return {
-            'policy': policy,
-            'rtc_enabled': self.rtc_enabled,
-            'model_action_feature_names': model_action_feature_names,
-            'model_use_relative_actions': model_relative,
-            'expected_state_dim': expected_state_dim,
-            'preprocessor': preprocessor,
-            'postprocessor': postprocessor,
-        }
+        return PolicyBundle(
+            policy=policy,
+            rtc_enabled=self.rtc_enabled,
+            model_action_feature_names=model_action_feature_names,
+            model_use_relative_actions=model_relative,
+            expected_state_dim=expected_state_dim,
+            preprocessor=preprocessor,
+            postprocessor=postprocessor,
+        )

@@ -85,7 +85,7 @@ class ObsBuilder:
         with self.lock:
             self.prev_ee_pose = {}
 
-    def _get_ee_pose(
+    def get_ee_pose(
         self, tf_buffer, base_frame, target_frame
     ) -> Optional[np.ndarray]:
         """Return EE pose as [x, y, z, roll, pitch, yaw] in base_frame."""
@@ -114,6 +114,9 @@ class ObsBuilder:
             )
         except Exception:
             return None
+
+    # Deprecated alias, remove after one release; use get_ee_pose directly.
+    _get_ee_pose = get_ee_pose
 
     def snapshot_observation(
         self,
@@ -148,7 +151,7 @@ class ObsBuilder:
         frame = build_dataset_frame(self.obs_features, obs, 'observation')
 
         for name, source_frame, target_frame in ee_poses:
-            ee_pose = self._get_ee_pose(tf_buffer, target_frame, source_frame)
+            ee_pose = self.get_ee_pose(tf_buffer, target_frame, source_frame)
             prev = self.prev_ee_pose.get(name)
             if ee_pose is not None:
                 frame[f'observation.ee_pose.{name}'] = ee_pose
