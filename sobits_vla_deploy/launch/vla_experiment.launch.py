@@ -87,11 +87,11 @@ def _setup(context, *args, **kwargs):
     robot_name = LaunchConfiguration('robot_name').perform(context).strip()
     num_episodes = int(LaunchConfiguration('num_episodes').perform(context))
     use_sim_time = _str_to_bool(LaunchConfiguration('use_sim_time').perform(context))
-    episode_timeout_s = float(
-        LaunchConfiguration('episode_timeout_s').perform(context)
-    )
-    lift_success_m = float(LaunchConfiguration('lift_success_m').perform(context))
-    fall_z_drop_m = float(LaunchConfiguration('fall_z_drop_m').perform(context))
+    # Empty = the deploy config owns the value; only an explicit launch arg
+    # overrides, so these numbers live in exactly one place (the YAML).
+    episode_timeout_raw = LaunchConfiguration('episode_timeout_s').perform(context).strip()
+    lift_success_raw = LaunchConfiguration('lift_success_m').perform(context).strip()
+    fall_z_drop_raw = LaunchConfiguration('fall_z_drop_m').perform(context).strip()
     done_wait_margin_s = float(LaunchConfiguration('done_wait_margin_s').perform(context))
 
     pkg_config_dir = os.path.join(
@@ -141,13 +141,26 @@ def _setup(context, *args, **kwargs):
         'use_sim_time': use_sim_time,
         'logging.enabled': True,
         'logging.log_dir': episode_log_dir,
-        'task.common.episode_timeout_s': episode_timeout_s,
-        'task.common.fall_z_drop_m': fall_z_drop_m,
+    }
+    # The runner needs the effective timeout for its wait budget even when the
+    # deploy config owns it, so resolve arg -> config -> node default here.
+    if episode_timeout_raw:
+        episode_timeout_s = float(episode_timeout_raw)
+        overrides['task.common.episode_timeout_s'] = episode_timeout_s
+    else:
+        with open(config_file, 'r') as f:
+            _cfg = yaml.safe_load(f) or {}
+        episode_timeout_s = float(
+            _cfg.get('/**', {}).get('ros__parameters', {})
+            .get('task', {}).get('common', {}).get('episode_timeout_s', 60.0)
+        )
+    if fall_z_drop_raw:
+        overrides['task.common.fall_z_drop_m'] = float(fall_z_drop_raw)
+    if lift_success_raw:
         # lift_success_m is per mode; only the active block is read, so
         # setting both keeps the override mode-agnostic.
-        'task.pick.lift_success_m': lift_success_m,
-        'task.place.lift_success_m': lift_success_m,
-    }
+        overrides['task.pick.lift_success_m'] = float(lift_success_raw)
+        overrides['task.place.lift_success_m'] = float(lift_success_raw)
     if os.path.isfile(world_reset_config):
         overrides['logging.scene_config'] = world_reset_config
     if not controller:
@@ -276,18 +289,27 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             'episode_timeout_s',
-            default_value='60.0',
-            description='Auto-terminate an episode after this many sim seconds.',
+            default_value='',
+            description=(
+                'Auto-terminate after this many sim seconds. '
+                'Empty (default) uses the deploy config value.'
+            ),
         ),
         DeclareLaunchArgument(
             'lift_success_m',
-            default_value='0.05',
-            description='Block lift (m) above which the episode is a success.',
+            default_value='',
+            description=(
+                'Object lift (m) that counts as success. '
+                'Empty (default) uses the deploy config value.'
+            ),
         ),
         DeclareLaunchArgument(
             'fall_z_drop_m',
-            default_value='0.15',
-            description='Robot world-z drop (m) above which it counts as fallen.',
+            default_value='',
+            description=(
+                'Robot world-z drop (m) that counts as fallen. '
+                'Empty (default) uses the deploy config value.'
+            ),
         ),
         DeclareLaunchArgument(
             'enable_world_reset',

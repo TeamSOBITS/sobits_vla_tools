@@ -34,6 +34,7 @@ from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
+from sobits_vla_common.launch.utils import config_declares
 
 
 def generate_launch_description_impl(context, *args, **kwargs):
@@ -80,15 +81,22 @@ def generate_launch_description_impl(context, *args, **kwargs):
 
     print(f'[INFO] Rosbags will be saved in: {record_directory}')
 
-    parameters = [
-        rosbag_config,
-        gamepad_config,
+    overrides = {
         # The service name selects the collection button_mapping block; the
         # shared gamepad config defaults to the deploy stage.
-        {'gamepad.command_service': '/vla/collect_command',
-         'rosbag_config.record_directory': record_directory,
-         'use_sim_time': use_sim_time},
-    ]
+        'gamepad.command_service': '/vla/collect_command',
+        'use_sim_time': use_sim_time,
+    }
+    # Computed default only when the config doesn't own the value; a CLI arg
+    # always wins. Keeps the YAML the single source of truth.
+    record_dir_from_cli = bool(
+        LaunchConfiguration('record_directory').perform(context)
+    )
+    if record_dir_from_cli or not config_declares(
+            rosbag_config, 'rosbag_config.record_directory'):
+        overrides['rosbag_config.record_directory'] = record_directory
+
+    parameters = [rosbag_config, gamepad_config, overrides]
 
     container = ComposableNodeContainer(
         name='vla_rosbag_collection_container',

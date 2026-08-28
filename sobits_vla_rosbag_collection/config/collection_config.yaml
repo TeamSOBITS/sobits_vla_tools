@@ -80,8 +80,9 @@
 
     # ROS bag recording configuration
     rosbag_config:
-      # Path to the directory where the recorded bag files will be saved
-      record_directory: "/path/to/recorded_bags"
+      # Where recorded bags land. Empty = the launch file resolves the
+      # package's rosbags/ output root; a set value here always wins.
+      record_directory: ""
       # List of topics to record (cameras, joint_states, tf, sensors, etc.)
       topics_to_record:
         - "/camera/image_raw"
