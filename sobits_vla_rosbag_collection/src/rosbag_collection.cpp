@@ -52,15 +52,16 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 {
   RCLCPP_INFO(this->get_logger(), "Initializing RosbagCollection Node...");
 
-  // Initialize Service Server for Tasks
+  // Initialize Service Server for Tasks. ~/ resolves under this node's own
+  // name, same result as get_name()+"/..." but robust to a future rename.
   task_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
-    this->get_name() + std::string("/vla_task_update"),
+    "~/vla_task_update",
     std::bind(&RosbagCollection::taskUpdateCallback, this, std::placeholders::_1,
       std::placeholders::_2));
 
   // Initialize Service Server for Subtasks (long-horizon)
   subtask_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
-    this->get_name() + std::string("/vla_subtask_update"),
+    "~/vla_subtask_update",
     std::bind(&RosbagCollection::subtaskUpdateCallback, this, std::placeholders::_1,
       std::placeholders::_2));
 

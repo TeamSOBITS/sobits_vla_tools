@@ -462,7 +462,7 @@ play/stopは共有`GamepadClient`ノード（`sobits_vla_common`）が駆動し�
 
 ```yaml
 gamepad:
-  command_service: "vla/deploy_command"  # 相対名。ノードの名前空間下で解決されます
+  command_service: "sobits_vla_deploy/command"  # ノード相対名。デプロイノードは~/commandを公開します
   controller: quest
   quest:
     button_mapping: { play: 4, stop: 4 }
@@ -470,9 +470,10 @@ gamepad:
     button_mapping: { play: 7, stop: 7 }
 ```
 
-バス名は相対（`vla/...`）なので，名前空間付きlaunchでは`/<robot_name>/vla/...`に解決されます。
-名前空間なしの`ros2 run`では従来通り`/vla/...`のままです。`vla/play`（Bool）と`vla/task`
-（String）トピックはプログラム制御用に引き続き利用可能です（名前空間付きの場合は`/sobit_home/vla/play`など）。
+各ノードは自身のバス端点を`~/play`・`~/task`・`~/command`のように非公開名で公開し，
+これは無名前空間では`/<node_name>/...`，名前空間付きでは`/<robot_name>/<node_name>/...`に解決されます。
+他のノードは`sobits_vla_deploy/command`のようなノード相対名で参照し，同じ名前空間下で解決されます。
+名前空間なしの`ros2 run`ではすべて`/`直下、例えば`/sobits_vla_deploy/play`に解決されます。
 
 <p align="right">(<a href="#readme-top">上に戻る</a>)</p>
 

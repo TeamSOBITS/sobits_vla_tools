@@ -180,16 +180,16 @@ def _setup(context, *args, **kwargs):
         package='sobits_vla_deploy',
         executable='vla_experiment_runner',
         name='vla_experiment_runner',
-        # Grouping only: all runner I/O is the relative vla/* bus, resolved
-        # under this namespace.
+        # Grouping only: the runner targets the deploy node's private ~/
+        # services by owner-node relative name, resolved under this namespace.
         namespace=robot_name,
         output='screen',
         prefix=prefix or None,
         parameters=[{
             'use_sim_time': use_sim_time,
             'num_episodes': num_episodes,
-            'command_service': 'vla/deploy_command',
-            'episode_done_topic': 'vla/episode_done',
+            'command_service': 'sobits_vla_deploy/command',
+            'episode_done_topic': 'sobits_vla_deploy/episode_done',
             'episode_timeout_s': episode_timeout_s,
             'done_wait_margin_s': done_wait_margin_s,
         }],

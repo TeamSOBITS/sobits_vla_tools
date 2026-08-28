@@ -461,7 +461,7 @@ Play/stop is driven by the shared `GamepadClient` node (`sobits_vla_common`), wh
 
 ```yaml
 gamepad:
-  command_service: "vla/deploy_command"  # relative; resolves under the node's namespace
+  command_service: "sobits_vla_deploy/command"  # owner-node relative; the deploy node advertises ~/command
   controller: quest
   quest:
     button_mapping: { play: 4, stop: 4 }
@@ -469,9 +469,11 @@ gamepad:
     button_mapping: { play: 7, stop: 7 }
 ```
 
-Bus names are relative (`vla/...`), so a namespaced launch resolves them to `/<robot_name>/vla/...`;
-a bare `ros2 run` with no namespace keeps the old `/vla/...` form. `vla/play` (Bool) and `vla/task`
-(String) topics remain available for programmatic control (e.g. `/sobit_home/vla/play` when namespaced).
+Each node advertises its own bus endpoints privately (`~/play`, `~/task`, `~/command`, ...),
+which resolve to `/<node_name>/...` bare or `/<robot_name>/<node_name>/...` namespaced.
+Other nodes address them by owner-node relative name, e.g. `sobits_vla_deploy/command`,
+which resolves alongside under the same namespace. A bare `ros2 run` with no namespace
+resolves everything under `/`, e.g. `/sobits_vla_deploy/play`.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

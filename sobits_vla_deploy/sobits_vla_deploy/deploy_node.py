@@ -97,7 +97,7 @@ _SCHEMA = {
     'gamepad': {
         # Gamepad input arrives via the shared GamepadClient node, which
         # calls the VlaCommand service below; no direct /joy subscription.
-        'command_service': P('vla/deploy_command'),
+        'command_service': P('~/command'),
         # Deadman trigger (real robot): actions commanded only while held.
         'controller': P('quest'),
         '<item>': Template('gamepad.controller', {
@@ -299,14 +299,14 @@ class LeRobotDeployNode(Node):
 
         self._play_sub = self.create_subscription(
             Bool,
-            'vla/play',
+            '~/play',
             self._on_play,
             qos,
             callback_group=self._cb_group,
         )
         self._task_sub = self.create_subscription(
             String,
-            'vla/task',
+            '~/task',
             self._on_task,
             qos,
             callback_group=self._cb_group,
@@ -373,7 +373,7 @@ class LeRobotDeployNode(Node):
 
         self._update_task_srv = self.create_service(
             VlaUpdateTask,
-            'vla/update_task',
+            '~/update_task',
             self._on_update_task,
             callback_group=self._cb_group,
         )
@@ -478,7 +478,7 @@ class LeRobotDeployNode(Node):
         # runner listens on to know when an episode has auto-terminated.
         self._episode_t0 = None
         self._episode_done_pub = self.create_publisher(
-            String, 'vla/episode_done', QoSProfile(depth=10)
+            String, '~/episode_done', QoSProfile(depth=10)
         )
 
     def destroy_node(self) -> None:
@@ -833,7 +833,7 @@ class LeRobotDeployNode(Node):
         """
         Reset all per-episode model state after a stop/world-reset.
 
-        When ``outcome`` is given, /vla/episode_done is published by the
+        When ``outcome`` is given, ~/episode_done is published by the
         reset thread AFTER the world/pose reset completes — so a listener
         (the experiment runner) knows the system is ready for the next
         PLAY without any time-based settle.
@@ -1007,10 +1007,10 @@ class LeRobotDeployNode(Node):
     def _on_play(self, msg: Bool) -> None:
         if msg.data:
             if self._start_play():
-                self.get_logger().info('VLA execution started via /vla/play topic.')
+                self.get_logger().info('VLA execution started via ~/play topic.')
         else:
             if self._stop_play('manual_stop'):
-                self.get_logger().info('VLA execution stopped via /vla/play topic.')
+                self.get_logger().info('VLA execution stopped via ~/play topic.')
 
     def _auto_stop_episode(self, outcome: str) -> None:
         """Terminate the current episode automatically and notify the runner."""
@@ -1037,7 +1037,7 @@ class LeRobotDeployNode(Node):
                 self._policy.reset()
             self._task_label = label
             self._inference_engine.update_task_label(label)
-            self.get_logger().info('Task label updated to {!r} via /vla/task topic.'.format(label))
+            self.get_logger().info('Task label updated to {!r} via ~/task topic.'.format(label))
 
     def _on_joint_state(self, msg: JointState) -> None:
         by_name = dict(zip(msg.name, msg.position))

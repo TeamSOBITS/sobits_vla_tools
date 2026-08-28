@@ -29,8 +29,8 @@
 Automatic episode runner for unattended VLA evaluation.
 
 Drives the sobits_vla_deploy node through N episodes:
-  1. Call the /vla/command service with PLAY.
-  2. Wait for /vla/episode_done (published by the deploy node when an episode
+  1. Call the sobits_vla_deploy/command service with PLAY.
+  2. Wait for sobits_vla_deploy/episode_done (published by the deploy node when an episode
      auto-terminates on success / fall / timeout, or on a manual stop).
   3. The deploy node resets the world on stop and publishes episode_done
      once the reset teleports have completed — the next PLAY follows
@@ -60,8 +60,8 @@ class ExperimentRunner(Node):
         super().__init__('vla_experiment_runner')
 
         self.declare_parameter('num_episodes', 20)
-        self.declare_parameter('command_service', 'vla/deploy_command')
-        self.declare_parameter('episode_done_topic', 'vla/episode_done')
+        self.declare_parameter('command_service', 'sobits_vla_deploy/command')
+        self.declare_parameter('episode_done_topic', 'sobits_vla_deploy/episode_done')
         # Pause between settle and the next PLAY.
         self.declare_parameter('inter_episode_pause_s', 1.0)
         # Safety: how long to wait for an episode_done before forcing a STOP.

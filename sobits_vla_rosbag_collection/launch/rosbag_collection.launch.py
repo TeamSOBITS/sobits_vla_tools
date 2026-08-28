@@ -82,9 +82,9 @@ def generate_launch_description_impl(context, *args, **kwargs):
     print(f'[INFO] Rosbags will be saved in: {record_directory}')
 
     overrides = {
-        # The service name selects the collection button_mapping block; the
-        # shared gamepad config defaults to the deploy stage.
-        'gamepad.command_service': 'vla/collect_command',
+        # The RosbagCollection node's own advertised service (private ~/command);
+        # the gamepad client below targets it by owner-node relative name instead.
+        'gamepad.command_service': '~/command',
         'use_sim_time': use_sim_time,
     }
     # Computed default only when the config doesn't own the value; a CLI arg
@@ -118,7 +118,7 @@ def generate_launch_description_impl(context, *args, **kwargs):
                 namespace=robot_name,
                 parameters=[
                     gamepad_config,
-                    {'gamepad.command_service': 'vla/collect_command',
+                    {'gamepad.command_service': 'vla_rosbag_collection/command',
                      'use_sim_time': use_sim_time},
                 ],
             ),

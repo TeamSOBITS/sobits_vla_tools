@@ -5,14 +5,15 @@
     # translates button presses into sobits_interfaces/srv/VlaCommand requests
     # sent to the command_service below.
     gamepad:
-      # Service the GamepadClient calls; each stage advertises its own, and
-      # the name also selects which button_mapping block below is read.
-      # Collection launches override this with vla/collect_command.
+      # Service the GamepadClient calls; each stage advertises its own
+      # private ~/command, addressed here by owner-node name, and the name
+      # also selects which button_mapping block below is read.
+      # Collection launches override this with vla_rosbag_collection/command.
       #   collection: record/pause/save/delete, plus reset while stopped
       #               (ignored mid-recording so no teleport lands in the bag).
       #   deploy:     play toggles PLAY/STOP; reset always sends STOP (abort
       #               the episode + reset model state + reset the scene).
-      command_service: "vla/deploy_command"
+      command_service: "sobits_vla_deploy/command"
       # Substring that marks a command_service as the deploy stage.
       deploy_service_match: "deploy"
       # Active controller profile (selects which button_mapping block is used).

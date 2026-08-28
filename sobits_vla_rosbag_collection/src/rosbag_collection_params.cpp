@@ -192,7 +192,7 @@ void RosbagCollection::declareAndReadParameters()
 
   // (4) Gamepad parameters
   this->declare_parameter<std::string>("gamepad.controller", "dualshock4");
-  this->declare_parameter<std::string>("gamepad.command_service", "vla/collect_command");
+  this->declare_parameter<std::string>("gamepad.command_service", "~/command");
   gamepad_name_ = this->get_parameter("gamepad.controller").as_string();
   command_service_name_ = this->get_parameter("gamepad.command_service").as_string();
 
