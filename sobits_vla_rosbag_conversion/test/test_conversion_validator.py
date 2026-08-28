@@ -34,7 +34,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sobits_vla_rosbag_conversion.conversion_validator import (  # noqa: E402
+from sobits_vla_rosbag_conversion.pipeline.validator import (  # noqa: E402
     morphologies_match, resolve_cameras, sensors_match,
 )
 

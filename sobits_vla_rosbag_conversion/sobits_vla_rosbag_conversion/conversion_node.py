@@ -42,14 +42,14 @@ from rclpy.node import Node
 from sobits_vla_common import runtime_deps
 from sobits_vla_common.lerobot_compat import apply_conversion_patches
 from sobits_vla_common.param_schema import declare_from_schema, P, read_schema
-from sobits_vla_rosbag_conversion.conversion_stats import episode_stat_dict
-from sobits_vla_rosbag_conversion.conversion_validator import (
+from sobits_vla_rosbag_conversion.dataset_writer import DatasetWriter
+from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
+from sobits_vla_rosbag_conversion.pipeline.discovery import candidate_bag_dirs, discover_episodes
+from sobits_vla_rosbag_conversion.pipeline.episode_pipeline import EpisodePipeline
+from sobits_vla_rosbag_conversion.pipeline.stats import episode_stat_dict
+from sobits_vla_rosbag_conversion.pipeline.validator import (
     morphologies_match, resolve_cameras, sensors_match,
 )
-from sobits_vla_rosbag_conversion.dataset_writer import DatasetWriter
-from sobits_vla_rosbag_conversion.episode_discovery import candidate_bag_dirs, discover_episodes
-from sobits_vla_rosbag_conversion.episode_pipeline import EpisodePipeline
-from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
 import yaml
 
 

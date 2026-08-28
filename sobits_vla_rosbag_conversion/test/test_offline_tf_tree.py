@@ -42,7 +42,7 @@ from scipy.spatial.transform import Rotation
 
 # Package is not installed in the pixi envs -- make the test runnable from any cwd.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sobits_vla_rosbag_conversion.tf_buffer import OfflineTFTree  # noqa: E402
+from sobits_vla_rosbag_conversion.offline_tf_tree import OfflineTFTree  # noqa: E402
 
 
 class _Vector3:

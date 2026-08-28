@@ -34,10 +34,10 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sobits_vla_rosbag_conversion.conversion_stats import (  # noqa: E402
+from sobits_vla_rosbag_conversion.pipeline.episode_pipeline import EpisodeResult  # noqa: E402
+from sobits_vla_rosbag_conversion.pipeline.stats import (  # noqa: E402
     build_stats_report, episode_stat_dict,
 )
-from sobits_vla_rosbag_conversion.episode_pipeline import EpisodeResult  # noqa: E402
 
 
 def _result(**overrides):

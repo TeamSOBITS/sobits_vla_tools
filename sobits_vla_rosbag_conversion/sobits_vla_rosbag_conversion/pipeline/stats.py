@@ -35,7 +35,7 @@ inline dict exactly -- yaml.dump(sort_keys=False) makes order observable.
 
 from typing import Any, Dict, List
 
-from sobits_vla_rosbag_conversion.episode_pipeline import EpisodeResult
+from sobits_vla_rosbag_conversion.pipeline.episode_pipeline import EpisodeResult
 
 
 def episode_stat_dict(result: EpisodeResult) -> Dict[str, Any]:

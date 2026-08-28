@@ -34,7 +34,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sobits_vla_rosbag_conversion.episode_discovery import (  # noqa: E402
+from sobits_vla_rosbag_conversion.pipeline.discovery import (  # noqa: E402
     candidate_bag_dirs, discover_episodes, resolve_group_dir,
 )
 

@@ -26,11 +26,11 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import numpy as np
+from sobits_vla_rosbag_conversion.offline_tf_tree import OfflineTFTree
 from sobits_vla_rosbag_conversion.sync import images as sync_images
 from sobits_vla_rosbag_conversion.sync import joints as sync_joints
 from sobits_vla_rosbag_conversion.sync import poses as sync_poses
 from sobits_vla_rosbag_conversion.sync.core import get_closest_t, should_downsample
-from sobits_vla_rosbag_conversion.tf_buffer import OfflineTFTree
 import torch
 
 

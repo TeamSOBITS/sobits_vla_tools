@@ -25,38 +25,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""EE-pose synthesis via TF lookups, per-axis unwrap (fb188e1), and delta."""
 
-import numpy as np
-from sobits_vla_rosbag_conversion.offline_tf_tree import mat_to_pose6d
-
-# Not sobits_vla_common.gz_utils.wrap_pi: that wraps an absolute angle to
-# (-pi, pi]; this unwraps a delta against the previous sample (fb188e1).
-
-
-def resolve_ee_pose(tf_tree, ee_src, ee_tgt, stamp_ns):
-    """Look up one EE transform; returns a 4x4 matrix or None on failure."""
-    return tf_tree.resolve(ee_tgt, ee_src, stamp_ns)
-
-
-def compute_ee_pose_and_delta(ee_mat, prev):
-    """
-    Convert a TF matrix to abs pose6d + delta vs the previous sample.
-
-    Unwraps each rotation axis against prev before differencing, so a
-    genuine continuous rotation crossing +-pi doesn't alias into a huge
-    single-step jump in the delta (fb188e1) -- must not be replaced by a
-    plain wrap-to-range helper, the two are not equivalent.
-    """
-    ee_abs = mat_to_pose6d(ee_mat)
-    if prev is not None:
-        for ax in range(3, 6):
-            diff = ee_abs[ax] - prev[ax]
-            if diff > np.pi:
-                ee_abs[ax] -= 2 * np.pi
-            elif diff < -np.pi:
-                ee_abs[ax] += 2 * np.pi
-        ee_rel = ee_abs - prev
-    else:
-        ee_rel = np.zeros(6, dtype=np.float32)
-    return ee_abs, ee_rel
+# Deprecated: module renamed to offline_tf_tree (the class name, not "buffer").
+# Kept for any external importer; internal code uses offline_tf_tree directly.
+from sobits_vla_rosbag_conversion.offline_tf_tree import mat_to_pose6d, OfflineTFTree  # noqa: F401
