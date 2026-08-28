@@ -34,8 +34,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
+from sobits_vla_deploy.deploy_node import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
-from sobits_vla_deploy.sobits_vla_deploy import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.vla_episode_logger import EpisodeLogger  # noqa: E402
 
 

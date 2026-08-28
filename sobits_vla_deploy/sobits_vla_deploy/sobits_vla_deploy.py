@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright (c) 2026, Team SOBITS
 #
 # Redistribution and use in source and binary forms, with or without
@@ -25,44 +26,13 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# Deprecated: module moved to deploy_node.py. Kept only for external code
+# still importing sobits_vla_deploy.sobits_vla_deploy directly.
 
-from glob import glob
-
-from setuptools import find_packages, setup
-
-package_name = 'sobits_vla_rosbag_conversion'
-
-setup(
-    name=package_name,
-    version='0.1.0',
-    packages=find_packages(exclude=['test']),
-    data_files=[
-        ('share/ament_index/resource_index/packages', [f'resource/{package_name}']),
-        (f'share/{package_name}', ['package.xml']),
-        (f'share/{package_name}/launch', glob('launch/*.py')),
-        (f'share/{package_name}/config',  glob('config/*.yaml')),
-        (f'share/{package_name}/lerobotdataset', glob('lerobotdataset/.gitignore')),
-    ],
-    # Standalone tool, not importable from the package dir: installed as a
-    # script (lib/<pkg>/ via setup.cfg), not a console_scripts entry point.
-    scripts=['scripts/visualize_ee_pose.py'],
-    install_requires=['setuptools'],
-    zip_safe=True,
-    maintainer='VALENTIN Keith',
-    maintainer_email='kvalentincardenas@gmail.com',
-    description='ROS packages for SOBITS VLA Rosbag Conversion.',
-    license='BSD-3-Clause',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
-    entry_points={
-        'console_scripts': [
-            (
-                'ros2bag_to_lerobotdataset = '
-                'sobits_vla_rosbag_conversion.conversion_node:main'
-            ),
-        ],
-    },
+from sobits_vla_deploy.deploy_node import *  # noqa: F401,F403
+from sobits_vla_deploy.deploy_node import (  # noqa: F401
+    ActionChunkBuffer,
+    JointGroupConfig,
+    LeRobotDeployNode,
+    main,
 )

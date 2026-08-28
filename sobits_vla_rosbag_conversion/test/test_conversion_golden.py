@@ -79,7 +79,7 @@ EXPECTED_FEATURES = {
 def _run_conversion(subset_dir: Path, dataset_name: str, output_dir: Path):
     """Construct+spin RosbagConversionNode in-process with explicit overrides."""
     import rclpy
-    from sobits_vla_rosbag_conversion.ros2bag_to_lerobotdataset import RosbagConversionNode
+    from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
 
     ros_args = [
         '--ros-args',

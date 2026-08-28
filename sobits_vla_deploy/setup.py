@@ -56,7 +56,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'sobits_vla_deploy = sobits_vla_deploy.sobits_vla_deploy:main',
+            'sobits_vla_deploy = sobits_vla_deploy.deploy_node:main',
             'vla_experiment_runner = sobits_vla_deploy.experiment_runner:main',
             'vla_eval = sobits_vla_deploy.eval.cli:main',
         ],

@@ -73,7 +73,7 @@ _CASES = [
         [r'^world_reset\.reset_pose\.[^.]+\..+', r'^world_reset\.[^.]+\..+'],
     ),
     (
-        'sobits_vla_deploy/sobits_vla_deploy/sobits_vla_deploy.py',
+        'sobits_vla_deploy/sobits_vla_deploy/deploy_node.py',
         'sobits_vla_deploy',
         'sobits_vla_deploy/config/deploy_config*.yaml',
         # robot.* is declared in _load_robot_profile from the descriptor.
@@ -87,7 +87,7 @@ _CASES = [
     ),
     (
         'sobits_vla_rosbag_conversion/sobits_vla_rosbag_conversion/'
-        'ros2bag_to_lerobotdataset.py',
+        'conversion_node.py',
         'rosbag_conversion_node',
         'sobits_vla_rosbag_conversion/config/conversion_config*.yaml',
         [],
