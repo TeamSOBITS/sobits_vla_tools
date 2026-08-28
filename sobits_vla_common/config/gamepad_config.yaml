@@ -5,51 +5,63 @@
     # translates button presses into sobits_interfaces/srv/VlaCommand requests
     # sent to the command_service below.
     gamepad:
-      # Service the GamepadClient calls (advertised by collection AND deploy).
-      command_service: "/vla/command"
+      # Service the GamepadClient calls; each stage advertises its own, and
+      # the name also selects which button_mapping block below is read.
+      # Collection launches override this with /vla/collect_command.
+      #   collection: record/pause/save/delete, plus reset while stopped
+      #               (ignored mid-recording so no teleport lands in the bag).
+      #   deploy:     play toggles PLAY/STOP; reset always sends STOP (abort
+      #               the episode + reset model state + reset the scene).
+      command_service: "/vla/deploy_command"
+      # Substring that marks a command_service as the deploy stage.
+      deploy_service_match: "deploy"
       # Active controller profile (selects which button_mapping block is used).
       controller: "quest"
-      # "collection" (default): record/pause/save/delete semantics.
-      # "deploy": play toggles PLAY/STOP; reset always sends STOP (abort
-      # episode + reset model + move to the reset pose).
-      mode: "collection"
       # Cooldown between accepted button presses (seconds).
       button_cooldown_duration: 0.5
 
-      # Deadman safety trigger for REAL deployment (sobits_vla_deploy):
-      # generated actions are commanded only while this control is held.
-      # trigger_index follows the GamepadClient convention — negative =
-      # axis index (pressed when value > 0.5), non-negative = button index.
-      # SAME control as teleop arm control: quest right grip, axis 7
-      # (sobits_teleop config/sobit_home/quest.yaml arm_enable_axis — keep
-      # these two in sync; teleop uses the identical axes[7] > 0.5 gate).
-      safety:
-        # Default ON: real-robot deploy must require a held deadman. Only the
-        # deploy node reads safety.* (rosbag collection ignores it), so this
-        # cannot gate teleop recording. Set false explicitly for hands-off
-        # sim runs.
-        enabled: true
-        trigger_index: -7
-        # Trigger counts as released when no Joy message arrives within this
-        # window (controller unplugged / driver died).
-        joy_timeout_s: 0.5
+      # Each controller carries its own collection/deploy blocks. The deploy
+      # block also holds the deadman safety trigger, since the control differs
+      # per controller. Only sobits_vla_deploy reads safety.*; rosbag
+      # collection ignores it, so it cannot gate teleop recording.
+      # trigger_index convention: negative = axis index (pressed when > 0.5),
+      # non-negative = button index.
       dualshock4:
         button_mapping:
-          record: 7
-          pause: 7
-          save: 6
-          delete: 6
-          play: 7
-          stop: 7
-          reset: 6
+          collection:
+            record: 7      # toggles record -> pause -> resume
+            pause: 7
+            save: 6        # save while recording/paused, delete once stopped
+            delete: 6
+            reset: 6
+          deploy:
+            play: 7        # toggles PLAY/STOP
+            reset: 6
+            safety:
+              # Default ON: real-robot deploy must require a held deadman.
+              # Set false explicitly for hands-off sim runs.
+              enabled: true
+              trigger_index: -4       # L2 axis
+              # Counts as released when no Joy arrives within this window
+              # (controller unplugged / driver died).
+              joy_timeout_s: 0.5
       quest:
         button_mapping:
-          record: 4
-          pause: 4
-          save: 5
-          delete: 5
-          play: 4
-          stop: 4
-          # deploy mode: forces a fresh episode (button 5 is free there —
-          # save/delete are collection-only).
-          reset: 5
+          collection:
+            record: 4      # toggles record -> pause -> resume
+            pause: 4
+            save: 5        # save while recording/paused, delete once stopped
+            delete: 5
+            # X button, matching the pose button in sobits_teleop
+            # config/<robot>/quest_vla.yaml so one press also re-poses.
+            reset: 0
+          deploy:
+            play: 4        # toggles PLAY/STOP
+            reset: 0
+            safety:
+              enabled: true
+              # Right grip, axis 7 — the SAME control as teleop arm enable
+              # (sobits_teleop config/sobit_home/quest.yaml arm_enable_axis).
+              # Keep these two in sync.
+              trigger_index: -7
+              joy_timeout_s: 0.5

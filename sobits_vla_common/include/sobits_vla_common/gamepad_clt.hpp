@@ -67,7 +67,6 @@ private:
   int save_button_;
   int delete_button_;
   int play_button_;
-  int stop_button_;
   int reset_button_;
   bool deploy_mode_;
 

@@ -44,27 +44,29 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
       std::bind(&GamepadClient::joyCallback, this, std::placeholders::_1));
 
   // Set values from parameters in the "gamepad" namespace.
-  this->declare_parameter<std::string>("gamepad.command_service", "/vla/command");
+  this->declare_parameter<std::string>("gamepad.command_service", "/vla/collect_command");
   this->declare_parameter<std::string>("gamepad.controller", "dualshock4");
   this->declare_parameter<double>("gamepad.button_cooldown_duration", 0.5);
-  // "collection" (default): record/pause/save/delete semantics.
-  // "deploy": play button toggles PLAY/STOP, reset button always sends STOP
-  // (the deploy node aborts + resets on STOP in any state).
-  this->declare_parameter<std::string>("gamepad.mode", "collection");
+  // Service name selects the stage (deploy: /vla/deploy_command, collection:
+  // /vla/collect_command); the matching button_mapping.<stage> block is read below.
+  this->declare_parameter<std::string>("gamepad.deploy_service_match", "deploy");
 
   command_service_name_ = this->get_parameter("gamepad.command_service").as_string();
-  deploy_mode_ = this->get_parameter("gamepad.mode").as_string() == "deploy";
+  const std::string deploy_match =
+    this->get_parameter("gamepad.deploy_service_match").as_string();
+  deploy_mode_ = !deploy_match.empty() &&
+    command_service_name_.find(deploy_match) != std::string::npos;
 
   gamepad_name_ = this->get_parameter("gamepad.controller").as_string();
   button_cooldown_duration_ = this->get_parameter("gamepad.button_cooldown_duration").as_double();
 
-  std::string base = std::string("gamepad.") + gamepad_name_ + ".button_mapping.";
+  std::string base = std::string("gamepad.") + gamepad_name_ + ".button_mapping." +
+    (deploy_mode_ ? "deploy." : "collection.");
   this->declare_parameter<int>(base + "record", -1);
   this->declare_parameter<int>(base + "pause", -1);
   this->declare_parameter<int>(base + "save", -1);
   this->declare_parameter<int>(base + "delete", -1);
   this->declare_parameter<int>(base + "play", -1);
-  this->declare_parameter<int>(base + "stop", -1);
   this->declare_parameter<int>(base + "reset", -1);
 
   record_button_ = this->get_parameter(base + "record").as_int();
@@ -74,27 +76,17 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
 
   // For deploy mode (play/stop toggle + reset)
   play_button_ = this->get_parameter(base + "play").as_int();
-  stop_button_ = this->get_parameter(base + "stop").as_int();
   reset_button_ = this->get_parameter(base + "reset").as_int();
-
-  // Collection-mode legacy aliasing: configs that only define play/stop
-  // still drive record/pause.
-  if (!deploy_mode_) {
-    if (record_button_ == -1 && play_button_ != -1) {
-      record_button_ = play_button_;  // Alias record to play
-    }
-    if (pause_button_ == -1 && stop_button_ != -1) {
-      pause_button_ = stop_button_;  // Alias pause to stop
-    }
-  }
 
   // Log params
   RCLCPP_INFO(this->get_logger(), "Command Service Name: %s", command_service_name_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Stage: %s", deploy_mode_ ? "deploy" : "collection");
   RCLCPP_INFO(this->get_logger(), "Gamepad name: %s", gamepad_name_.c_str());
   RCLCPP_INFO(this->get_logger(), "Record button: %d", record_button_);
   RCLCPP_INFO(this->get_logger(), "Pause button: %d", pause_button_);
   RCLCPP_INFO(this->get_logger(), "Save button: %d", save_button_);
   RCLCPP_INFO(this->get_logger(), "Delete button: %d", delete_button_);
+  RCLCPP_INFO(this->get_logger(), "Reset button: %d", reset_button_);
   RCLCPP_INFO(this->get_logger(), "Cooldown duration: %.2f s", button_cooldown_duration_);
 
   // Create service client for VlaCommand
@@ -156,7 +148,8 @@ void GamepadClient::timerCallback()
   // Negative index → axes, non-negative → buttons
   auto pressed = [&](int idx) -> bool {
       if (idx < 0) {
-        return last_joy_msg_->axes[std::abs(idx)] > 0.5f;
+        const size_t ax = static_cast<size_t>(std::abs(idx));
+        return ax < last_joy_msg_->axes.size() && last_joy_msg_->axes[ax] > 0.5f;
       }
       return static_cast<int>(idx) < static_cast<int>(last_joy_msg_->buttons.size()) &&
              last_joy_msg_->buttons[idx] != 0;
@@ -206,6 +199,17 @@ void GamepadClient::timerCallback()
     } else if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED) {
       callService(sobits_interfaces::srv::VlaCommand::Request::RESUME);
       button_pressed = true;
+    }
+  }
+
+  // Reset the scene between episodes. Only while stopped: a teleport during
+  // recording would land in the bag as a discontinuity.
+  if (!button_pressed && reset_button_ != -1 && pressed(reset_button_)) {
+    if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
+      callService(sobits_interfaces::srv::VlaCommand::Request::RESET);
+      button_pressed = true;
+    } else {
+      RCLCPP_WARN(this->get_logger(), "Ignoring RESET while recording or paused.");
     }
   }
 
@@ -260,10 +264,14 @@ void GamepadClient::callService(const uint8_t & command)
       auto response = future.get();
       if (response->success) {
         RCLCPP_INFO(this->get_logger(), "Service call succeeded: %s", response->message.c_str());
-        this->previous_state_ = this->current_state_;
-        this->current_state_ = response->status;
       } else {
         RCLCPP_ERROR(this->get_logger(), "Service call failed: %s", response->message.c_str());
+      }
+      // Status authoritative on both paths: a failed SAVE still stops the server when
+      // it discards a too-short episode. Ignoring it strands the client in PAUSED.
+      if (response->status != this->current_state_) {
+        this->previous_state_ = this->current_state_;
+        this->current_state_ = response->status;
       }
     });
 }
