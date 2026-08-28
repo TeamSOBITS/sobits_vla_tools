@@ -67,6 +67,8 @@ def generate_launch_description_impl(context, *args, **kwargs):
     overwrite = (
         LaunchConfiguration('overwrite').perform(context).lower() == 'true'
     )
+    # Empty = config owns the value; only an explicit arg overrides.
+    push_to_hub_raw = LaunchConfiguration('push_to_hub').perform(context).strip()
 
     # Track CLI-passed values; only CLI-set ones may enter override_params below,
     # since it's appended after config_file and would silently override config values.
@@ -130,6 +132,8 @@ def generate_launch_description_impl(context, *args, **kwargs):
     if vcodec:
         override_params['vcodec'] = vcodec
     override_params['overwrite'] = overwrite
+    if push_to_hub_raw:
+        override_params['push_to_hub'] = push_to_hub_raw.lower() == 'true'
 
     if override_params:
         parameters.append(override_params)
@@ -192,6 +196,14 @@ def generate_launch_description():
                 description=(
                     'Video codec override (e.g., auto, h264, av1). '
                     'Uses config value when empty.'
+                ),
+            ),
+            DeclareLaunchArgument(
+                'push_to_hub',
+                default_value='',
+                description=(
+                    'Override push_to_hub: true/false. Empty (default) uses '
+                    'the config value — set false for scratch conversions.'
                 ),
             ),
             DeclareLaunchArgument(
