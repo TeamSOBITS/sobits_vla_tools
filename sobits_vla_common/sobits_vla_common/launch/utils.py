@@ -201,3 +201,38 @@ def pixi_launch_arguments(default_pixi_manifest_value: str) -> list:
             description='Path to pixi.toml (override for installed layouts).',
         ),
     ]
+
+
+def config_declares(config_file: str, dotted_key: str) -> bool:
+    """
+    Return True if config_file sets dotted_key to a non-empty value.
+
+    Lets a launch file apply its computed default only when the config does
+    not already own the value -- launcher overrides must never silently beat
+    an explicit config entry. Walks nested mappings, so 'a.b.c' matches both
+    a flat 'a.b.c' key and a nested a: {b: {c: ...}} block. Unreadable or
+    malformed files return False: the node reports the real error.
+    """
+    try:
+        import yaml
+        with open(config_file) as f:
+            data = yaml.safe_load(f) or {}
+    except Exception:
+        return False
+    for section in data.values():
+        if not isinstance(section, dict):
+            continue
+        params = section.get('ros__parameters')
+        if not isinstance(params, dict):
+            continue
+        if params.get(dotted_key):
+            return True
+        node = params
+        for part in dotted_key.split('.'):
+            if not isinstance(node, dict) or part not in node:
+                node = None
+                break
+            node = node[part]
+        if node:
+            return True
+    return False

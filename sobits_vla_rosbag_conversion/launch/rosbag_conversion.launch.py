@@ -34,36 +34,13 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 from sobits_vla_common.launch.utils import (
-    default_pixi_manifest, pixi_launch_arguments, pixi_prefix, resolve_pixi_env,
+    config_declares, default_pixi_manifest, pixi_launch_arguments, pixi_prefix,
+    resolve_pixi_env,
 )
 
 # Conversion imports pandas/scipy/matplotlib/rosbags/torch -> shared pixi env;
 # only the accelerator varies, GPU by default. Override with enable_gpu:=false
 _DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
-
-
-def _config_declares(config_file, key):
-    """
-    Return True if *config_file* sets *key* to a non-empty value.
-
-    Used to tell a config file that deliberately points at an external
-    dataset tree apart from one that leaves the path empty and expects the
-    launch file to work it out.
-    """
-    try:
-        import yaml
-        with open(config_file) as f:
-            data = yaml.safe_load(f) or {}
-    except Exception:
-        # Unreadable or malformed config: fall back to the computed default
-        # rather than failing the launch here. The node reports the real error.
-        return False
-    for section in data.values():
-        if isinstance(section, dict):
-            params = section.get('ros__parameters')
-            if isinstance(params, dict) and params.get(key):
-                return True
-    return False
 
 
 def generate_launch_description_impl(context, *args, **kwargs):
@@ -133,8 +110,8 @@ def generate_launch_description_impl(context, *args, **kwargs):
 
     # override_params is appended AFTER config_file, so it wins over the config.
     # Only pass the computed rosbag_directory default if config doesn't declare one.
-    config_declares_rosbag_dir = _config_declares(config_file, 'rosbag_directory')
-    config_declares_meta_file = _config_declares(
+    config_declares_rosbag_dir = config_declares(config_file, 'rosbag_directory')
+    config_declares_meta_file = config_declares(
         config_file, 'recorded_bags_meta_file'
     )
 
