@@ -37,6 +37,8 @@ add_library(${PROJECT_NAME} SHARED
   src/recording_monitor.cpp
   src/bag_metadata_manager.cpp
   src/topic_builder.cpp
+  src/episode_lifecycle.cpp
+  src/rosbag_collection_params.cpp
   src/rosbag_collection.cpp
 )
 
@@ -79,6 +81,28 @@ install(DIRECTORY config launch
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_episode_lifecycle test/test_episode_lifecycle.cpp
+    src/episode_lifecycle.cpp)
+  target_include_directories(test_episode_lifecycle PRIVATE include)
+  ament_target_dependencies(test_episode_lifecycle rosbag2_cpp rosbag2_storage)
+
+  ament_add_gtest(test_topic_builder test/test_topic_builder.cpp
+    src/topic_builder.cpp)
+  target_include_directories(test_topic_builder PRIVATE include)
+  ament_target_dependencies(test_topic_builder
+    rclcpp sensor_msgs rcl_interfaces sobits_interfaces
+    rosbag2_storage rosbag2_transport)
+
+  ament_add_gtest(test_bag_metadata_manager test/test_bag_metadata_manager.cpp
+    src/bag_metadata_manager.cpp)
+  target_include_directories(test_bag_metadata_manager PRIVATE include)
+  ament_target_dependencies(test_bag_metadata_manager
+    rclcpp sensor_msgs rcl_interfaces sobits_interfaces
+    rosbag2_storage rosbag2_transport)
+  target_link_libraries(test_bag_metadata_manager yaml-cpp)
 endif()
 
 ament_package()
