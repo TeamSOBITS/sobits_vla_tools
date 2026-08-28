@@ -47,6 +47,9 @@ from sobits_interfaces.srv import VlaCommand, VlaResetWorld, VlaUpdateTask  # no
 from sobits_vla_common import runtime_deps  # noqa: E402
 from sobits_vla_common.image_codec import decode_image_message  # noqa: E402
 from sobits_vla_common.lerobot_compat import apply_deploy_patches  # noqa: E402
+from sobits_vla_common.param_schema import (  # noqa: E402
+    declare_from_schema, P, read_schema, Template,
+)
 from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.action_executor import ActionExecutor  # noqa: E402
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
@@ -59,6 +62,96 @@ import tf2_ros  # noqa: E402
 from trajectory_msgs.msg import JointTrajectory  # noqa: E402
 
 apply_deploy_patches()
+
+
+# Static-name params from _configure_parameters only. robot.*, logging.scene_config's
+# YAML-derived baselines, and anything using a ParameterDescriptor stay hand-written.
+_SCHEMA = {
+    'model': {
+        'repo_id': P(''),
+        'policy_class': P('lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy'),
+        'device': P('cuda'),
+        'use_amp': P(True),
+        'use_relative_actions': P(False),
+        'default_task_label': P(''),
+        'dataset_repo_id': P(''),
+    },
+    'runtime': {
+        'control_hz': P(10.0),
+        'actions_per_chunk': P(50),
+        'chunk_size_threshold': P(0.6),
+        'aggregate_fn_name': P('weighted_average'),
+        'async_enabled': P(True),
+        'single_step_mode': P(False),
+        # Chunked-mode Nx control rate via linear interp; 1 = off (default).
+        'action_interpolation_multiplier': P(1),
+    },
+    'rtc': {
+        'enabled': P(True),
+        'execution_horizon': P(10),
+        'max_guidance_weight': P(10.0),
+        'prefix_attention_schedule': P('EXP'),
+        'inference_delay': P(4),
+        'debug': P(False),
+    },
+    'gamepad': {
+        # Gamepad input arrives via the shared GamepadClient node, which
+        # calls the VlaCommand service below; no direct /joy subscription.
+        'command_service': P('/vla/deploy_command'),
+        # Deadman trigger (real robot): actions commanded only while held.
+        'controller': P('quest'),
+        '<item>': Template('gamepad.controller', {
+            'button_mapping': {'deploy': {'safety': {
+                'enabled': P(False),
+                'trigger_index': P(-4),
+                'joy_timeout_s': P(0.5),
+            }}},
+        }),
+    },
+    'logging': {
+        'enabled': P(False),
+        'log_dir': P('/tmp/vla_logs'),
+        'scene_config': P(''),
+        'scene_preset': P('default'),
+    },
+    'task': {
+        'mode': P('pick'),
+        'common': {
+            'tilt_threshold_deg': P(30.0),
+            'episode_timeout_s': P(60.0),
+            # Grace period after PLAY during which a success crossing is
+            # ignored, so the world reset settling cannot be scored as a pick.
+            'success_settle_s': P(2.0),
+            'fall_z_drop_m': P(0.15),
+            'robot_model_name': P(''),
+            'tracked_model_name': P(''),
+        },
+        # lift_success_m appears in both: 'place' needs a lift before the
+        # object can count as placed.
+        'pick': {'lift_success_m': P(0.05)},
+        'place': {
+            'lift_success_m': P(0.05),
+            'goal_model_name': P(''),
+            'place_radius_m': P(0.12),
+            'place_settle_s': P(1.0),
+            # Object must also be below this world z to count as placed
+            # (0 = no height condition).
+            'place_z_max_m': P(0.0),
+            # Abort an episode whose object is lying low and away from the
+            # goal for this long (sim seconds). 0 disables.
+            'drop_abort_s': P(0.0),
+            'drop_abort_z_max_m': P(0.0),
+        },
+    },
+    'reset': {
+        'world_service': P('/world_reset_node/reset_world'),
+        # Scene preset to request. Empty defers to the reset node's
+        # world_reset.active_preset; set this only to override it here.
+        'preset': P(''),
+        # Keep above the reset node's worst case, else resets overlap.
+        'timeout_s': P(45.0),
+    },
+}
 
 
 class JointGroupConfig:
@@ -379,182 +472,71 @@ class LeRobotDeployNode(Node):
         super().destroy_node()
 
     def _configure_parameters(self) -> None:
-        self.declare_parameter('model.repo_id', '')
-        self.declare_parameter(
-            'model.policy_class',
-            'lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy',
-        )
-        self.declare_parameter('model.device', 'cuda')
-        self.declare_parameter('model.use_amp', True)
-        self.declare_parameter('model.use_relative_actions', False)
-        self.declare_parameter('model.default_task_label', '')
-        self.declare_parameter('model.dataset_repo_id', '')
+        declare_from_schema(self, _SCHEMA)
+        params = read_schema(self, _SCHEMA)
 
-        self.declare_parameter('runtime.control_hz', 10.0)
-        self.declare_parameter('runtime.actions_per_chunk', 50)
-        self.declare_parameter('runtime.chunk_size_threshold', 0.6)
-        self.declare_parameter('runtime.aggregate_fn_name', 'weighted_average')
-        self.declare_parameter('runtime.async_enabled', True)
-        self.declare_parameter('runtime.single_step_mode', False)
-        # Chunked-mode Nx control rate via linear interp; 1 = off (default).
-        self.declare_parameter('runtime.action_interpolation_multiplier', 1)
-
-        self.declare_parameter('rtc.enabled', True)
-        self.declare_parameter('rtc.execution_horizon', 10)
-        self.declare_parameter('rtc.max_guidance_weight', 10.0)
-        self.declare_parameter('rtc.prefix_attention_schedule', 'EXP')
-        self.declare_parameter('rtc.inference_delay', 4)
-        self.declare_parameter('rtc.debug', False)
-
-        # Gamepad input arrives via the shared GamepadClient node, which
-        # calls the VlaCommand service below; no direct /joy subscription.
-        self.declare_parameter('gamepad.command_service', '/vla/deploy_command')
-
-        self._model_repo_id = str(self.get_parameter('model.repo_id').value)
+        self._model_repo_id = str(params.model.repo_id)
         if not self._model_repo_id:
             raise RuntimeError(
                 'model.repo_id is required -- refusing to default to a '
                 'robot-specific value.'
             )
-        self._policy_class_path = str(self.get_parameter('model.policy_class').value)
-        self._model_device = str(self.get_parameter('model.device').value)
-        self._model_use_amp = bool(self.get_parameter('model.use_amp').value)
-        self._model_dataset_repo_id = str(self.get_parameter('model.dataset_repo_id').value)
-        self._model_use_relative_actions_param = bool(
-            self.get_parameter('model.use_relative_actions').value
-        )
+        self._policy_class_path = str(params.model.policy_class)
+        self._model_device = str(params.model.device)
+        self._model_use_amp = bool(params.model.use_amp)
+        self._model_dataset_repo_id = str(params.model.dataset_repo_id)
+        self._model_use_relative_actions_param = bool(params.model.use_relative_actions)
         # Only enforce when the config explicitly set this key -- otherwise
         # it's just the declared default, not an operator claim to check.
         self._model_use_relative_actions_set = (
             'model.use_relative_actions' in (getattr(self, '_parameter_overrides', None) or {})
         )
 
-        self._control_hz = float(self.get_parameter('runtime.control_hz').value)
-        self._actions_per_chunk = int(self.get_parameter('runtime.actions_per_chunk').value)
-        self._chunk_size_threshold = float(
-            self.get_parameter('runtime.chunk_size_threshold').value
-        )
-        self._aggregate_fn_name = str(self.get_parameter('runtime.aggregate_fn_name').value)
-        self._async_enabled = bool(self.get_parameter('runtime.async_enabled').value)
-        self._single_step_mode = bool(
-            self.get_parameter('runtime.single_step_mode').value
-        )
+        self._control_hz = float(params.runtime.control_hz)
+        self._actions_per_chunk = int(params.runtime.actions_per_chunk)
+        self._chunk_size_threshold = float(params.runtime.chunk_size_threshold)
+        self._aggregate_fn_name = str(params.runtime.aggregate_fn_name)
+        self._async_enabled = bool(params.runtime.async_enabled)
+        self._single_step_mode = bool(params.runtime.single_step_mode)
         self._action_interpolation_multiplier = int(
-            self.get_parameter('runtime.action_interpolation_multiplier').value
+            params.runtime.action_interpolation_multiplier
         )
 
-        self._rtc_enabled = bool(self.get_parameter('rtc.enabled').value)
-        self._rtc_execution_horizon = int(self.get_parameter('rtc.execution_horizon').value)
-        self._rtc_max_guidance_weight = float(
-            self.get_parameter('rtc.max_guidance_weight').value
-        )
-        self._rtc_prefix_attention_schedule = str(
-            self.get_parameter('rtc.prefix_attention_schedule').value
-        )
-        self._rtc_inference_delay = int(self.get_parameter('rtc.inference_delay').value)
-        self._rtc_debug = bool(self.get_parameter('rtc.debug').value)
+        self._rtc_enabled = bool(params.rtc.enabled)
+        self._rtc_execution_horizon = int(params.rtc.execution_horizon)
+        self._rtc_max_guidance_weight = float(params.rtc.max_guidance_weight)
+        self._rtc_prefix_attention_schedule = str(params.rtc.prefix_attention_schedule)
+        self._rtc_inference_delay = int(params.rtc.inference_delay)
+        self._rtc_debug = bool(params.rtc.debug)
 
-        self._command_service = str(
-            self.get_parameter('gamepad.command_service').value
-        )
+        self._command_service = str(params.gamepad.command_service)
 
-        # Where episodes are recorded.
-        self.declare_parameter('logging.enabled', False)
-        self.declare_parameter('logging.log_dir', '/tmp/vla_logs')
-
-        # task.mode picks which block defines success; task.common holds what
-        # every mode needs. Only the selected mode's block is read.
-        self.declare_parameter('task.mode', 'pick')
-        self.declare_parameter('task.common.tilt_threshold_deg', 30.0)
-        self.declare_parameter('task.common.episode_timeout_s', 60.0)
-        # Grace period after PLAY during which a success crossing is ignored,
-        # so the world reset settling cannot be scored as a pick.
-        self.declare_parameter('task.common.success_settle_s', 2.0)
-        self.declare_parameter('task.common.fall_z_drop_m', 0.15)
-
-        # World reset: delegated to the shared world_reset_node, which owns
-        # the scene teleports and the arm reset-pose action.
-        self.declare_parameter('reset.world_service', '/world_reset_node/reset_world')
-        # Scene preset to request. Empty defers to the reset node's
-        # world_reset.active_preset; set this only to override it here.
-        self.declare_parameter('reset.preset', '')
-        # Keep above the reset node's worst case, else resets overlap.
-        self.declare_parameter('reset.timeout_s', 45.0)
-
-        # Deadman trigger (real robot): actions commanded only while held.
-        # Index follows GamepadClient convention: negative = axis >0.5, else button.
-        self.declare_parameter('gamepad.controller', 'quest')
-        safety_ns = 'gamepad.{}.button_mapping.deploy.safety'.format(
-            str(self.get_parameter('gamepad.controller').value)
-        )
-        self.declare_parameter(safety_ns + '.enabled', False)
-        self.declare_parameter(safety_ns + '.trigger_index', -4)
-        self.declare_parameter(safety_ns + '.joy_timeout_s', 0.5)
-        # world_reset scene YAML is the single source of truth for world name
-        # and rest poses; the logger reads baselines from there to avoid drift.
-        self.declare_parameter('logging.scene_config', '')
-        self.declare_parameter('logging.scene_preset', 'default')
-        self.declare_parameter('task.common.robot_model_name', '')
-        self.declare_parameter('task.common.tracked_model_name', '')
-        # Per-mode blocks. lift_success_m appears in both: 'place' needs a
-        # lift before the object can count as placed.
-        self.declare_parameter('task.pick.lift_success_m', 0.05)
-        self.declare_parameter('task.place.lift_success_m', 0.05)
-        self.declare_parameter('task.place.goal_model_name', '')
-        self.declare_parameter('task.place.place_radius_m', 0.12)
-        self.declare_parameter('task.place.place_settle_s', 1.0)
-        # Object must also be below this world z to count as placed
-        # (0 = no height condition). Distinguishes 'in the bin' from
-        # 'on the floor beside it' when the goal is a container.
-        self.declare_parameter('task.place.place_z_max_m', 0.0)
-        # Abort an episode whose object is lying low and away from the
-        # goal for this long (sim seconds). 0 disables.
-        self.declare_parameter('task.place.drop_abort_s', 0.0)
-        self.declare_parameter('task.place.drop_abort_z_max_m', 0.0)
-
-        self._logging_enabled = bool(self.get_parameter('logging.enabled').value)
-        self._log_dir = str(self.get_parameter('logging.log_dir').value)
-        self._log_tilt_deg = float(
-            self.get_parameter('task.common.tilt_threshold_deg').value
-        )
-        self._episode_timeout_s = float(
-            self.get_parameter('task.common.episode_timeout_s').value
-        )
-        self._success_settle_s = float(
-            self.get_parameter('task.common.success_settle_s').value
-        )
-        self._fall_z_drop_m = float(
-            self.get_parameter('task.common.fall_z_drop_m').value
-        )
+        self._logging_enabled = bool(params.logging.enabled)
+        self._log_dir = str(params.logging.log_dir)
+        self._log_tilt_deg = float(params.task.common.tilt_threshold_deg)
+        self._episode_timeout_s = float(params.task.common.episode_timeout_s)
+        self._success_settle_s = float(params.task.common.success_settle_s)
+        self._fall_z_drop_m = float(params.task.common.fall_z_drop_m)
         # Sim vs real from use_sim_time: in sim the reset node teleports and
         # the logger polls gz poses; on real hardware the operator re-stages it.
         self._sim_enabled = bool(self.get_parameter('use_sim_time').value)
-        self._reset_world_service = str(self.get_parameter('reset.world_service').value)
-        self._reset_preset = str(self.get_parameter('reset.preset').value or '')
-        self._reset_timeout_s = float(self.get_parameter('reset.timeout_s').value)
-        safety_ns = 'gamepad.{}.button_mapping.deploy.safety'.format(
-            str(self.get_parameter('gamepad.controller').value)
-        )
-        self._safety_enabled = bool(
-            self.get_parameter(safety_ns + '.enabled').value
-        )
-        self._safety_trigger_index = int(
-            self.get_parameter(safety_ns + '.trigger_index').value
-        )
-        self._safety_joy_timeout_s = float(
-            self.get_parameter(safety_ns + '.joy_timeout_s').value
-        )
+        self._reset_world_service = str(params.reset.world_service)
+        self._reset_preset = str(params.reset.preset or '')
+        self._reset_timeout_s = float(params.reset.timeout_s)
+        # Template-expanded: safety lives under the controller name Template
+        # resolved (gamepad.<controller>.button_mapping.deploy.safety).
+        controller_name = str(params.gamepad.controller)
+        safety = getattr(params.gamepad, controller_name).button_mapping.deploy.safety
+        self._safety_enabled = bool(safety.enabled)
+        self._safety_trigger_index = int(safety.trigger_index)
+        self._safety_joy_timeout_s = float(safety.joy_timeout_s)
         # Optional: without it, fall detection is unavailable but the EE-frame
         # metrics and lift/place scoring still work.
-        self._log_robot_model = str(
-            self.get_parameter('task.common.robot_model_name').value
-        )
-        self._log_tracked_model = str(
-            self.get_parameter('task.common.tracked_model_name').value
-        )
+        self._log_robot_model = str(params.task.common.robot_model_name)
+        self._log_tracked_model = str(params.task.common.tracked_model_name)
         # Only the selected mode's block is read, so a stale goal under
         # task.place can't leak into 'pick'. Unknown mode is a config error.
-        self._task_mode = str(self.get_parameter('task.mode').value).strip().lower()
+        self._task_mode = str(params.task.mode).strip().lower()
         if self._task_mode not in ('pick', 'place'):
             raise RuntimeError(
                 'task.mode must be "pick" or "place", got {!r}.'.format(
@@ -562,30 +544,16 @@ class LeRobotDeployNode(Node):
                 )
             )
         self._lift_success_m = float(
-            self.get_parameter(
-                'task.{}.lift_success_m'.format(self._task_mode)
-            ).value
+            getattr(params.task, self._task_mode).lift_success_m
         )
         self._log_goal_model = ''
-        self._log_place_radius_m = float(
-            self.get_parameter('task.place.place_radius_m').value
-        )
-        self._log_place_z_max_m = float(
-            self.get_parameter('task.place.place_z_max_m').value
-        )
-        self._log_drop_abort_s = float(
-            self.get_parameter('task.place.drop_abort_s').value
-        )
-        self._log_drop_abort_z_max_m = float(
-            self.get_parameter('task.place.drop_abort_z_max_m').value
-        )
-        self._log_place_settle_s = float(
-            self.get_parameter('task.place.place_settle_s').value
-        )
+        self._log_place_radius_m = float(params.task.place.place_radius_m)
+        self._log_place_z_max_m = float(params.task.place.place_z_max_m)
+        self._log_drop_abort_s = float(params.task.place.drop_abort_s)
+        self._log_drop_abort_z_max_m = float(params.task.place.drop_abort_z_max_m)
+        self._log_place_settle_s = float(params.task.place.place_settle_s)
         if self._task_mode == 'place':
-            self._log_goal_model = str(
-                self.get_parameter('task.place.goal_model_name').value
-            )
+            self._log_goal_model = str(params.task.place.goal_model_name)
             if not self._log_goal_model:
                 raise RuntimeError(
                     'task.mode is "place" but task.place.goal_model_name is '
