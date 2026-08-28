@@ -43,6 +43,7 @@ from rclpy.node import Node
 from rosbags.highlevel import AnyReader
 from sobits_vla_common import runtime_deps
 from sobits_vla_common.lerobot_compat import apply_conversion_patches
+from sobits_vla_common.param_schema import declare_from_schema, P, read_schema
 from sobits_vla_rosbag_conversion.bag_reader import BagReader
 from sobits_vla_rosbag_conversion.dataset_writer import DatasetWriter
 from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
@@ -86,6 +87,35 @@ def _default_output_root() -> Path:
     return Path(get_package_share_directory('sobits_vla_rosbag_conversion')) / 'lerobotdataset'
 
 
+# Static-name declares only; none in this file use a ParameterDescriptor or
+# a name built from another param's value, so every declare fits plainly.
+_SCHEMA = {
+    'rosbag_directory': P(''),
+    'recorded_bags_meta_file': P(''),
+    'dataset_name': P('MyDataset'),
+    'output_directory': P(''),
+    'fps': P(10),
+    'vcodec': P('auto'),
+    'sync_threshold': P(0.1),
+    'downsample_tolerance': P(0.015),
+    'push_to_hub': P(False),
+    'hub_private': P(False),
+    'overwrite': P(False),
+    'use_relative_actions': P(False),
+    'skip_static_threshold': P(0.0),
+    # Per-config trim of the shared robot descriptor.
+    'exclude': {
+        'groups': P(['']),
+        'cameras': P(['']),
+        'ee_poses': P(['']),
+    },
+    'cameras': {
+        'primary': P(''),
+    },
+    'robot_descriptor_id': P(''),
+}
+
+
 class RosbagConversionNode(Node):
     def __init__(self):
         super().__init__('rosbag_conversion_node')
@@ -100,37 +130,13 @@ class RosbagConversionNode(Node):
         # Suppress verbose SVT-AV1 encoder logs from PyAV/FFmpeg workers.
         os.environ.setdefault('SVT_LOG', '1')
 
-        self.declare_parameter('rosbag_directory', '')
-        self.declare_parameter('recorded_bags_meta_file', '')
-        self.declare_parameter('dataset_name', 'MyDataset')
-        self.declare_parameter('output_directory', '')
-        self.declare_parameter('fps', 10)
-        self.declare_parameter('vcodec', 'auto')
-        self.declare_parameter('sync_threshold', 0.1)
-        self.declare_parameter('downsample_tolerance', 0.015)
-        self.declare_parameter('push_to_hub', False)
-        self.declare_parameter('hub_private', False)
-        self.declare_parameter('overwrite', False)
-        self.declare_parameter('use_relative_actions', False)
-        self.declare_parameter('skip_static_threshold', 0.0)
-        # Per-config trim of the shared robot descriptor.
-        self.declare_parameter('exclude.groups', [''])
-        self.declare_parameter('exclude.cameras', [''])
-        self.declare_parameter('exclude.ee_poses', [''])
-        self.declare_parameter('cameras.primary', '')
+        declare_from_schema(self, _SCHEMA)
+        params = read_schema(self, _SCHEMA)
 
-        self.rosbag_directory = (
-            self.get_parameter('rosbag_directory').get_parameter_value().string_value
-        )
-        self.recorded_bags_meta_file = (
-            self.get_parameter('recorded_bags_meta_file').get_parameter_value().string_value
-        )
-        self.dataset_name = (
-            self.get_parameter('dataset_name').get_parameter_value().string_value
-        )
-        output_dir = (
-            self.get_parameter('output_directory').get_parameter_value().string_value
-        )
+        self.rosbag_directory = params.rosbag_directory
+        self.recorded_bags_meta_file = params.recorded_bags_meta_file
+        self.dataset_name = params.dataset_name
+        output_dir = params.output_directory
         # Dataset root is <base>/<dataset_name>, <base> = output_directory or
         # <package_src>/lerobotdataset/, so several datasets can share one output_directory.
         if output_dir:
@@ -142,33 +148,16 @@ class RosbagConversionNode(Node):
             self.get_logger().info(
                 f'output_directory not set — defaulting to {self.output_directory}'
             )
-        self.fps = self.get_parameter('fps').get_parameter_value().integer_value
-        self.vcodec = self.get_parameter('vcodec').get_parameter_value().string_value
-        self.sync_threshold = (
-            self.get_parameter('sync_threshold').get_parameter_value().double_value
-        )
-        self.downsample_tolerance = (
-            self.get_parameter('downsample_tolerance').get_parameter_value().double_value
-        )
-        self.push_to_hub = (
-            self.get_parameter('push_to_hub').get_parameter_value().bool_value
-        )
-        self.hub_private = (
-            self.get_parameter('hub_private').get_parameter_value().bool_value
-        )
-        self.overwrite = (
-            self.get_parameter('overwrite').get_parameter_value().bool_value
-        )
-        self.use_relative_actions = (
-            self.get_parameter('use_relative_actions').get_parameter_value().bool_value
-        )
-        self.skip_static_threshold = (
-            self.get_parameter('skip_static_threshold').get_parameter_value().double_value
-        )
-        self.declare_parameter('robot_descriptor_id', '')
-        self.robot_descriptor_id = (
-            self.get_parameter('robot_descriptor_id').get_parameter_value().string_value
-        )
+        self.fps = params.fps
+        self.vcodec = params.vcodec
+        self.sync_threshold = params.sync_threshold
+        self.downsample_tolerance = params.downsample_tolerance
+        self.push_to_hub = params.push_to_hub
+        self.hub_private = params.hub_private
+        self.overwrite = params.overwrite
+        self.use_relative_actions = params.use_relative_actions
+        self.skip_static_threshold = params.skip_static_threshold
+        self.robot_descriptor_id = params.robot_descriptor_id
 
         if not self.robot_descriptor_id:
             raise RuntimeError(
@@ -182,9 +171,9 @@ class RosbagConversionNode(Node):
         # Per-config trim of the shared descriptor (e.g. left-arm-only runs),
         # so the descriptor keeps describing the whole robot.
         desc = desc.filtered(
-            exclude_groups=self._str_list('exclude.groups'),
-            exclude_cameras=self._str_list('exclude.cameras'),
-            exclude_ee_poses=self._str_list('exclude.ee_poses'),
+            exclude_groups=params.exclude.groups,
+            exclude_cameras=params.exclude.cameras,
+            exclude_ee_poses=params.exclude.ee_poses,
         )
 
         # Excluded joints (mimics/inactive groups still listed with active: false)
@@ -210,9 +199,7 @@ class RosbagConversionNode(Node):
         if active_cams:
             self.cameras_names = [c.name for c in active_cams]
             self.cameras_compressed = [c.compressed for c in active_cams]
-            primary_param = (
-                self.get_parameter('cameras.primary').get_parameter_value().string_value
-            )
+            primary_param = params.cameras.primary
             if not primary_param:
                 self.primary_camera = active_cams[0].name
             else:
@@ -253,11 +240,6 @@ class RosbagConversionNode(Node):
 
         # One-shot timer to start conversion after the node is ready
         self.timer = self.create_timer(1.0, self.timer_callback)
-
-    def _str_list(self, name: str) -> list:
-        """Read a string-array parameter, dropping the empty-default sentinel."""
-        raw = self.get_parameter(name).get_parameter_value().string_array_value
-        return [s for s in raw if s]
 
     def timer_callback(self):
         """One-shot timer callback to trigger the conversion."""
