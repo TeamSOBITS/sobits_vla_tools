@@ -72,7 +72,7 @@ class FrameSynthesizer:
 
     def log_warn(self, msg: str):
         if self.logger:
-            self.logger.warn(msg)
+            self.logger.warning(msg)
         else:
             print(f'[WARN] {msg}')
 
@@ -393,9 +393,8 @@ class FrameSynthesizer:
             # State: measured joint positions
             state = [joint_pos[feat] for feat in self.action_features]
 
-            # Action: commanded joint positions.
-            # Zero-order hold, not interpolation: a command holds until the
-            # next one arrives (see _hold_dict).
+            # Action: commanded joint positions, zero-order hold not interpolation
+            # (a command holds until the next one arrives — see _hold_dict).
             action = []
             for i, feat in enumerate(self.action_features):
                 cmd_series_for_feat = cmd_series_by_feature[feat]
@@ -452,7 +451,7 @@ class FrameSynthesizer:
                                 ee_abs[ax] -= 2 * np.pi
                             elif diff < -np.pi:
                                 ee_abs[ax] += 2 * np.pi
-                            ee_rel = ee_abs - prev
+                        ee_rel = ee_abs - prev
                     else:
                         ee_rel = np.zeros(6, dtype=np.float32)
                     key = (
