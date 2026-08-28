@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
+from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES
 
 try:
     from sobits_vla_common.lerobot_adapter import predict_action, prepare_observation_for_inference
@@ -99,10 +100,8 @@ class InferenceEngine:
         self.inference_cond = Condition()
         self.single_step_result: Optional[Dict[str, float]] = None
         self.single_step_lock = Lock()
-        # Play-session generation: bumped on every play toggle so results
-        # from an inference that started in a previous session (e.g. STOP +
-        # episode reset raced an in-flight predict) are discarded instead of
-        # landing in the freshly cleared chunk buffer.
+        # Bumped on every play toggle so results from a prior session's
+        # in-flight predict (e.g. raced by a STOP+reset) get discarded.
         self.session_gen = 0
 
         self.latency_tracker = None
@@ -111,12 +110,7 @@ class InferenceEngine:
             seed_latency = self.rtc_inference_delay / max(self.control_hz, 1.0)
             self.latency_tracker.add(seed_latency)
 
-        self._BASE_KEY_ALIASES: Dict[str, str] = {
-            'base_x': 'x.vel',
-            'base_y': 'y.vel',
-            'base_z': 'z.vel',
-            'base_theta': 'theta.vel',
-        }
+        self._BASE_KEY_ALIASES: Dict[str, str] = dict(BASE_KEY_ALIASES)
 
     def log_info(self, msg: str):
         if self.logger:
@@ -126,7 +120,7 @@ class InferenceEngine:
 
     def log_warn(self, msg: str):
         if self.logger:
-            self.logger.warn(msg)
+            self.logger.warning(msg)
         else:
             print(f'[WARN] {msg}')
 
@@ -141,13 +135,8 @@ class InferenceEngine:
 
     def update_play_enabled(self, enabled: bool):
         with self.inference_cond:
-            # Bump the generation only on a real PLAY<->STOP transition. The
-            # async refill path calls this with enabled=True on every tick the
-            # queue is at/below threshold; bumping unconditionally invalidated
-            # the in-flight inference each time (tick 100 ms < inference
-            # ~130 ms), so every finished chunk was discarded as "stale", the
-            # queue never filled, and the arm never moved -- a livelock that
-            # only appears when a refill request overlaps an inference.
+            # Bump only on a real transition: refill calls this every tick, and
+            # unconditional bumping livelocked (100ms tick < ~130ms inference).
             if enabled != self.play_enabled:
                 self.session_gen += 1
             self.play_enabled = enabled

@@ -1,5 +1,9 @@
 schema_version: 1
-robot_id: sobit_home
+# DIAGNOSTIC ONLY -- sobit_home with every max_joint_delta set to 0.0,
+# which disables rate limiting (action_executor gates on delta > 0.0).
+# Raw policy output reaches the controllers unfiltered. Sim use only:
+# a single out-of-distribution command becomes a full-speed motion.
+robot_id: sobit_home_noclamp
 
 joint_states_topic: /sobit_home/joint_states
 
@@ -7,7 +11,7 @@ groups:
   - name: head
     command_topic: /sobit_home/head_position_controller/joint_trajectory
     command_action: /sobit_home/head_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.10
+    max_joint_delta: 0.0
     active: true
     joints:
       - ros_name: head_pan_joint
@@ -18,7 +22,7 @@ groups:
   - name: body
     command_topic: /sobit_home/body_position_controller/joint_trajectory
     command_action: /sobit_home/body_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.02
+    max_joint_delta: 0.0
     active: true
     joints:
       - ros_name: body_lift_joint
@@ -27,7 +31,7 @@ groups:
   - name: arm_left
     command_topic: /sobit_home/arm_left_position_controller/joint_trajectory
     command_action: /sobit_home/arm_left_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.15
+    max_joint_delta: 0.0
     active: true
     joints:
       - ros_name: arm_left_shoulder_tilt_joint
@@ -48,7 +52,7 @@ groups:
   - name: arm_right
     command_topic: /sobit_home/arm_right_position_controller/joint_trajectory
     command_action: /sobit_home/arm_right_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.15
+    max_joint_delta: 0.0
     active: true
     joints:
       - ros_name: arm_right_shoulder_tilt_joint
@@ -69,7 +73,7 @@ groups:
   - name: hand_left
     command_topic: /sobit_home/hand_left_position_controller/joint_trajectory
     command_action: /sobit_home/hand_left_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.30
+    max_joint_delta: 0.0
     active: true
     relative_exclude: true   # gripper: absolute, never delta-converted
     joints:
@@ -91,7 +95,7 @@ groups:
   - name: hand_right
     command_topic: /sobit_home/hand_right_position_controller/joint_trajectory
     command_action: /sobit_home/hand_right_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.30
+    max_joint_delta: 0.0
     active: true
     relative_exclude: true   # gripper: absolute, never delta-converted
     joints:
@@ -153,14 +157,14 @@ sensors:
     # registered to the color frame by the driver. compressedDepth is PNG-based
     # and lossless, unlike the lossy JPEG used for color.
     # is_depth marks this for the metric-preserving depth path in conversion.
-    # - name: head_camera_depth
-    #   compressed_topic: /sobit_home/head_camera/depth/image_raw/compressedDepth
-    #   raw_topic: /sobit_home/head_camera/depth/image_raw
-    #   info_topic: /sobit_home/head_camera/camera_info
-    #   encoding: "16UC1"
-    #   compressed: true
-    #   active: true
-    #   is_depth: true
+    - name: head_camera_depth
+      compressed_topic: /sobit_home/head_camera/depth/image_raw/compressedDepth
+      raw_topic: /sobit_home/head_camera/depth/image_raw
+      info_topic: /sobit_home/head_camera/camera_info
+      encoding: "16UC1"
+      compressed: true
+      active: true
+      is_depth: true
 
 ee_poses:
   - name: left

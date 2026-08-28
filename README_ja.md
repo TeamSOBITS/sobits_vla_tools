@@ -43,7 +43,7 @@ SOBITS VLA Toolsは，SOBITS自作ロボットをVision-Language-Action（VLA）
 - `ee_poses` — 任意のTFエンドエフェクタ姿勢
 - `excluded_joints` — 特徴ベクトルから除外するmimic/車輪/受動関節
 
-各設定は `descriptor_id`（deploy/training）または `robot_descriptor_id`（collection/conversion）で参照し、`active_groups` / `active_cameras` / `active_mobile_base` でサブセットを選択します。新ロボット＋Nポリシーの追加＝各段階を編集する代わりに**ディスクリプタ1つ＋モデルのみの設定N個**で済みます。
+各設定は `descriptor_id`（deploy/training）または `robot_descriptor_id`（collection/conversion）で参照し、`robot.exclude.groups` / `exclude.cameras` / `exclude.mobile_base` でサブセットに絞り込みます（未知の名前はエラーになります）。新ロボット＋Nポリシーの追加＝各段階を編集する代わりに**ディスクリプタ1つ＋モデルのみの設定N個**で済みます。
 
 ### 新ロボットのスキャフォルド
 
@@ -399,7 +399,7 @@ ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_
 
 各`training_config_*.yaml`の内容:
 - `policy` — ポリシー種別（対応6種のいずれか）
-- `robot` — `descriptor_id` ＋ `active_groups` / `active_cameras` / `active_mobile_base`。学習器はディスクリプタのactive関節＋移動ベース特徴から`max_state_dim` / `max_action_dim`を導出します（手動設定不要）
+- `robot` — `descriptor_id` ＋ `exclude.groups` / `exclude.cameras` / `exclude.mobile_base`。学習器はディスクリプタのactive関節＋移動ベース特徴から`max_state_dim` / `max_action_dim`を導出します（手動設定不要）
 - `dataset` / `training` / `checkpoint` / `wandb` / `hub` — 標準的なlerobotの設定項目
 - `peft` — LoRAメソッド/ターゲット（`method_type`が空＝フルファインチューニング）
 - `policy_overrides` — ポリシーのlerobot設定の任意フィールド（イントロスペクションで適用、未知キーは警告）
@@ -448,9 +448,10 @@ ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py \
 ```yaml
 robot:
   descriptor_id: sobit_home              # sobits_vla_common/robots/sobit_home.robot.yaml を読み込む
-  active_groups: [head, body, arm_left, hand_left]
-  active_cameras: [head_camera, hand_left_camera]
-  active_mobile_base: true
+  exclude:
+    groups: [arm_right, hand_right]
+    cameras: [hand_right_camera]
+    mobile_base: false
 ```
 
 コマンドトピック・関節・`max_joint_delta`・移動ベース・カメラトピックはすべてディスクリプタ由来です（インラインのジョイント/トピック一覧は不要）。`descriptor_id`が空の場合は`deploy_config.yaml`に示すレガシーなインライン`robot.*`スキーマにフォールバックします。`model` / `runtime` / `rtc`セクションはデプロイ設定に残ります。

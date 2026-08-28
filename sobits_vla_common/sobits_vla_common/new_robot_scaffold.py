@@ -102,6 +102,9 @@ def generate_descriptor_yaml(
                 '  max_vel_z: 0.0',
                 '  max_vel_theta: 0.0',
                 '  features: [x.vel, y.vel, theta.vel]',
+                '  # Commands below these are sent as zero (base creep suppression).',
+                '  linear_deadband: 0.015',
+                '  angular_deadband: 0.005',
             ])
         else:  # diff
             yaml_lines.extend([
@@ -114,6 +117,9 @@ def generate_descriptor_yaml(
                 '  max_vel_z: 0.0',
                 '  max_vel_theta: 0.0',
                 '  features: [x.vel, theta.vel]',
+                '  # Commands below these are sent as zero (base creep suppression).',
+                '  linear_deadband: 0.015',
+                '  angular_deadband: 0.005',
             ])
     else:
         yaml_lines.extend([

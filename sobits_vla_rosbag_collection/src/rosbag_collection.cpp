@@ -1,23 +1,49 @@
+// Copyright (c) 2026, Team SOBITS
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// * Redistributions of source code must retain the above copyright notice, this
+//   list of conditions and the following disclaimer.
+//
+// * Redistributions in binary form must reproduce the above copyright notice,
+//   this list of conditions and the following disclaimer in the documentation
+//   and/or other materials provided with the distribution.
+//
+// * Neither the name of the copyright holder nor the names of its
+//   contributors may be used to endorse or promote products derived from this
+//   software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 #include "sobits_vla_rosbag_collection/rosbag_collection.hpp"
-#include "sobits_vla_rosbag_collection/robot_descriptor_loader.hpp"
-#include "sobits_vla_rosbag_collection/recording_monitor.hpp"
-#include "sobits_vla_rosbag_collection/bag_metadata_manager.hpp"
-#include "sobits_vla_rosbag_collection/topic_builder.hpp"
 
-#include <iostream>     // For std::cerr
-#include <filesystem>   // For std::filesystem operations
-#include <algorithm>    // For std::replace, std::transform
-#include <fstream>      // For std::ofstream
-#include <string>       // For std::string
-#include <vector>       // For std::vector
+#include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <set>          // For topic deduplication in buildTopicList()
+#include <sstream>
+#include <string>
+#include <vector>
 
-#include "rosbag2_cpp/writer.hpp"
 #include "rosbag2_cpp/reader.hpp"
 #include "rosbag2_cpp/readers/sequential_reader.hpp"
-#include <chrono>
-#include <iomanip>
-#include <sstream>
+#include "rosbag2_cpp/writer.hpp"
+#include "sobits_vla_rosbag_collection/bag_metadata_manager.hpp"
+#include "sobits_vla_rosbag_collection/recording_monitor.hpp"
+#include "sobits_vla_rosbag_collection/robot_descriptor_loader.hpp"
+#include "sobits_vla_rosbag_collection/topic_builder.hpp"
 
 namespace sobits_vla
 {
@@ -26,7 +52,6 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 : Node("rosbag_collection", options)
 {
   RCLCPP_INFO(this->get_logger(), "Initializing RosbagCollection Node...");
-  rclcpp::QoS qos_profile(rclcpp::KeepLast(10));
 
   // Initialize Service Server for Tasks
   task_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
@@ -94,20 +119,20 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
       robot_info_.joint_names[part] = this->get_parameter("robot_info.morphology." + part +
           ".joint_names").as_string_array();
 
-      // Only fetch mobile_base/legs specific properties if it is the target part
-      if (part == "mobile_base" || part == "legs") {
-        this->declare_parameter<bool>("robot_info.morphology." + part + ".has_cmd_vel_y", false);
-        this->declare_parameter<bool>("robot_info.morphology." + part + ".has_cmd_vel_z", false);
-        this->declare_parameter<std::string>("robot_info.morphology." + part + ".cmd_vel_topic",
-            "/cmd_vel");
-        this->declare_parameter<std::string>("robot_info.morphology." + part + ".odom_topic", "");
+      // A part is a base if it declares a cmd_vel_topic, whatever it is named.
+      this->declare_parameter<bool>("robot_info.morphology." + part + ".has_cmd_vel_y", false);
+      this->declare_parameter<bool>("robot_info.morphology." + part + ".has_cmd_vel_z", false);
+      this->declare_parameter<std::string>("robot_info.morphology." + part + ".cmd_vel_topic", "");
+      this->declare_parameter<std::string>("robot_info.morphology." + part + ".odom_topic", "");
 
+      const std::string cmd_vel_topic =
+        this->get_parameter("robot_info.morphology." + part + ".cmd_vel_topic").as_string();
+      if (!cmd_vel_topic.empty()) {
+        robot_info_.part_cmd_vel_topic[part] = cmd_vel_topic;
         robot_info_.part_has_cmd_vel_y[part] = this->get_parameter("robot_info.morphology." + part +
             ".has_cmd_vel_y").as_bool();
         robot_info_.part_has_cmd_vel_z[part] = this->get_parameter("robot_info.morphology." + part +
             ".has_cmd_vel_z").as_bool();
-        robot_info_.part_cmd_vel_topic[part] = this->get_parameter("robot_info.morphology." + part +
-            ".cmd_vel_topic").as_string();
         robot_info_.part_odom_topic[part] = this->get_parameter("robot_info.morphology." + part +
             ".odom_topic").as_string();
       }
@@ -193,9 +218,20 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 
   // (4) Gamepad parameters
   this->declare_parameter<std::string>("gamepad.controller", "dualshock4");
-  this->declare_parameter<std::string>("gamepad.command_service", "/vla/command");
+  this->declare_parameter<std::string>("gamepad.command_service", "/vla/collect_command");
   gamepad_name_ = this->get_parameter("gamepad.controller").as_string();
   std::string command_service_name = this->get_parameter("gamepad.command_service").as_string();
+
+  // (4b) World reset client -- RESET forwards to the shared world_reset_node.
+  this->declare_parameter<std::string>(
+    "rosbag_config.world_reset_service", "/world_reset_node/reset_world");
+  world_reset_service_ = this->get_parameter("rosbag_config.world_reset_service").as_string();
+  // Empty defers to the reset node's world_reset.active_preset; set this only
+  // to override which scene the RESET button restores.
+  this->declare_parameter<std::string>("rosbag_config.world_reset_preset", "");
+  world_reset_preset_ = this->get_parameter("rosbag_config.world_reset_preset").as_string();
+  world_reset_client_ = this->create_client<sobits_interfaces::srv::VlaResetWorld>(
+    world_reset_service_);
 
   // Subscribe to info_topics per sensor type to obtain camera dimension
   for (const auto & sensor_type : robot_info_.sensor_types) {
@@ -214,8 +250,8 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     }
   }
 
-  // Init values
-  current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;      // PAUSED, RECORDING, STOPPED, ERROR
+  // Init values (PAUSED, RECORDING, STOPPED, ERROR)
+  current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
   previous_state_ = current_state_;
 
   current_task_name_ = "default task";
@@ -228,7 +264,6 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     [](unsigned char c) {return std::tolower(c);});
 
   current_task_path_ = rosbag_info_.recording_dir + "/" + current_task_dir_name_;
-  previous_task_path_ = current_task_path_;
 
   current_bag_name_ = "episode_" + getTimestampString();
   previous_bag_name_ = current_bag_name_;
@@ -267,7 +302,8 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   }
   if (rosbag_info_.additional_services.empty()) {
     RCLCPP_WARN(this->get_logger(), "No services to record specified in the rosbag configuration");
-  } // TODO: From Jazzy services can be recorded, but not in Humble
+  }
+  // TODO(MrKeith99): From Jazzy services can be recorded, but not in Humble
   if (rosbag_info_.additional_actions.empty()) {
     RCLCPP_INFO(this->get_logger(), "No additional actions to record specified.");
   }
@@ -400,7 +436,8 @@ void RosbagCollection::createRosbag()
   // Pre-recording topic health check
   if (!validateTopics()) {
     RCLCPP_WARN(this->get_logger(),
-      "Some critical topics are missing. Recording will proceed, but the bag may not be convertible.");
+      "Some critical topics are missing. Recording will proceed, but the bag may not be "
+      "convertible.");
   }
 
   std::lock_guard<std::mutex> lock(recorder_mutex_);
@@ -410,7 +447,6 @@ void RosbagCollection::createRosbag()
     return;
   }
 
-  previous_task_path_ = current_task_path_;
   current_task_path_ = rosbag_info_.recording_dir + "/" + current_task_dir_name_;
 
   previous_bag_name_ = current_bag_name_;
@@ -478,8 +514,8 @@ void RosbagCollection::createRosbag()
   is_recording_ = true;
   recorder_thread_ = std::thread([this]() {
         try {
-          recorder_node_->record();   // opens writer + sets up subs, returns immediately
-          recorder_executor_->spin(); // processes subscription callbacks until cancel()
+          recorder_node_->record();    // opens writer + sets up subs, returns immediately
+          recorder_executor_->spin();  // processes subscription callbacks until cancel()
         } catch (const std::exception & e) {
           RCLCPP_ERROR(this->get_logger(), "Error during bag recording: %s", e.what());
           current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
@@ -672,7 +708,6 @@ bool RosbagCollection::verifyBagIntegrity(const std::string & bag_path)
       metadata.topics_with_message_count.size(),
       total_messages,
       static_cast<double>(storage_size) / (1024.0 * 1024.0));
-
   } catch (const std::exception & e) {
     RCLCPP_ERROR(this->get_logger(), "Failed to read bag: %s — %s", bag_path.c_str(), e.what());
     return false;
@@ -820,6 +855,11 @@ void RosbagCollection::handleVlaCommand(
     response->success = true;
     response->message = "Recording deleted successfully";
     response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
+  } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::RESET) {
+    requestWorldReset();
+    response->success = true;
+    response->message = "World reset requested";
+    response->status = current_state_;
   } else {
     RCLCPP_ERROR(this->get_logger(), "Unknown command received: %d", request->command);
     response->success = false;
@@ -852,7 +892,6 @@ void RosbagCollection::taskUpdateCallback(
         current_task_dir_name_.begin(),
       [](unsigned char c) {return std::tolower(c);});
 
-    previous_task_path_ = current_task_path_;
     current_task_path_ = rosbag_info_.recording_dir + "/" + current_task_dir_name_;
     RCLCPP_INFO(this->get_logger(), "Updated task name from '%s' to '%s'",
         previous_task_name_.c_str(), current_task_dir_name_.c_str());
@@ -905,7 +944,7 @@ void RosbagCollection::subtaskUpdateCallback(
   new_subtask.key = "subtask_" + getTimestampString();
   new_subtask.label = current_subtask_name_;
   new_subtask.start_timestamp = current_time_sec;
-  new_subtask.end_timestamp = 0.0; // Will be updated on the next subtask or bag save
+  new_subtask.end_timestamp = 0.0;  // Will be updated on the next subtask or bag save
 
   current_episode_subtasks_.push_back(new_subtask);
 
@@ -913,6 +952,30 @@ void RosbagCollection::subtaskUpdateCallback(
       current_subtask_name_.c_str());
   response->success = true;
   response->message = "Subtask name updated successfully";
+}
+
+void RosbagCollection::requestWorldReset()
+{
+  if (!world_reset_client_->service_is_ready()) {
+    RCLCPP_WARN(this->get_logger(), "World reset service '%s' not available, skipping reset",
+        world_reset_service_.c_str());
+    return;
+  }
+
+  auto request = std::make_shared<sobits_interfaces::srv::VlaResetWorld::Request>();
+  request->preset = world_reset_preset_;
+  // async_send_request + callback: spin_until_future_complete here would
+  // deadlock, since this runs on the same executor that services the request.
+  world_reset_client_->async_send_request(
+    request,
+    [this](rclcpp::Client<sobits_interfaces::srv::VlaResetWorld>::SharedFuture future) {
+      auto response = future.get();
+      if (response->success) {
+        RCLCPP_INFO(this->get_logger(), "World reset succeeded: %s", response->message.c_str());
+      } else {
+        RCLCPP_ERROR(this->get_logger(), "World reset failed: %s", response->message.c_str());
+      }
+    });
 }
 
 void RosbagCollection::cameraInfoCallback(
@@ -928,7 +991,7 @@ void RosbagCollection::cameraInfoCallback(
   }
 }
 
-} // namespace sobits_vla
+}  // namespace sobits_vla
 
 #include <rclcpp_components/register_node_macro.hpp>
 RCLCPP_COMPONENTS_REGISTER_NODE(sobits_vla::RosbagCollection)

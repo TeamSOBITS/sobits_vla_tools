@@ -38,39 +38,27 @@
     # Only relevant when push_to_hub is true.
     hub_private: false
 
-    # Cameras to include in the dataset conversion.
-    # `skip`       - if true, omit all camera image features; produces a state/action-only dataset.
-    #                Dramatically faster for quick prototyping or debugging without video encoding.
-    # `primary`    - sync trigger camera; a new frame is assembled each time an image arrives from it.
-    #                Must match one of the names listed in `names` below.
-    # `names`      - camera names as declared in recorded_bags_meta.yaml sensors section.
-    #                If empty, all cameras found in metadata are included.
-    # `compressed` - one bool per entry in `names`; true = use compressed_topics, false = use raw topics.
-    #                Entries beyond the length of `names` are ignored; missing entries default to false.
     # Skip frames where no joint is moving (all velocities below threshold).
     # Useful for removing idle segments from the dataset.
     # Set threshold to 0.0 to disable.
     skip_static_threshold: 0.0
 
-    # Joints to exclude from action/state features at conversion time.
-    # Use this for mimic joints (driven by another joint, no independent command)
-    # or any joint that should not be part of the policy's action space.
-    # The morphology YAML remains unchanged; exclusion is applied here only.
-    excluded_joints: []
+    # Robot morphology, joints, EE frames, and cameras all come from this
+    # descriptor, loaded from sobits_vla_common/robots/<id>.robot.yaml.
+    robot_descriptor_id: "sobit_home"
 
-    # End-effector pose observation via TF tree.
-    # Computes 6D pose (x, y, z, roll, pitch, yaw) from the TF chain.
-    # `enabled`      - if true, include EE pose as an observation feature.
-    # `target_frame` - reference frame (usually the robot base).
-    # `source_frame` - end-effector frame (e.g. "hand_palm_link").
-    # Both frames must exist in /tf or /tf_static recorded in the bag.
-    ee_pose:
-      enabled: false
-      target_frame: "base_link"
-      source_frame: "hand_palm_link"
+    # Trim the shared descriptor to the subset this dataset uses, leaving the
+    # descriptor itself describing the whole robot. Names must exist in it;
+    # unknown names raise an error. Omit or leave empty to use everything.
+    # EE poses are emitted when any survives here, skipped when all are
+    # excluded; exclude every camera for a state/action-only dataset.
+    exclude:
+      groups: []
+      cameras: []
+      ee_poses: []
 
+    # `primary` - sync trigger camera; a new frame is assembled each time an
+    #             image arrives from it. Empty = first active camera in the
+    #             descriptor. Names and compression come from the descriptor.
     cameras:
-      skip: false
-      primary: "head_camera"
-      names: ["head_camera", "hand_camera"]
-      compressed: [false, false]
+      primary: ""

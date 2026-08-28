@@ -185,7 +185,7 @@ class TrainNode(Node):
         self.declare_parameter(_po + 'use_peft', False)  # True = load existing adapter; keep False
         self.declare_parameter(_po + 'tokenizer_max_length', 200)
         self.declare_parameter(_po + 'use_relative_actions', False)
-        self.declare_parameter(_po + 'relative_exclude_joints', ['gripper'])
+        self.declare_parameter(_po + 'relative_exclude_joints', [])
         self.declare_parameter(_po + 'optimizer_lr', 2.5e-5)
         self.declare_parameter(_po + 'optimizer_weight_decay', 0.01)
         self.declare_parameter(_po + 'optimizer_grad_clip_norm', 1.0)
@@ -204,23 +204,26 @@ class TrainNode(Node):
             'peft.lora_dropout', 0.05, _p('LoRA dropout probability'))
         self.declare_parameter(
             'peft.target_modules', '', _p('LoRA target modules (empty = policy default)'))
-        # dynamic_typing: an empty [] default infers BYTE_ARRAY and clashes
-        # with YAML STRING_ARRAY overrides (and a hard STRING_ARRAY type
-        # would clash with the `[]` most configs set). Values are normalized
-        # to list[str] in _collect_params.
+        # dynamic_typing: an empty [] default infers BYTE_ARRAY, clashing with YAML
+        # STRING_ARRAY overrides; values are normalized to list[str] in _collect_params.
         _ftm_desc = _p('Modules to fully fine-tune alongside LoRA')
         _ftm_desc.dynamic_typing = True
         self.declare_parameter('peft.full_training_modules', [], _ftm_desc)
 
-        from rclpy.parameter import Parameter
         self.declare_parameter('robot.descriptor_id', '', _p('Robot descriptor ID'))
-        # Typed STRING_ARRAY (no default []): empty list infers BYTE_ARRAY,
-        # clashing with the YAML STRING_ARRAY override.
-        self.declare_parameter('robot.active_groups', Parameter.Type.STRING_ARRAY)
-        self.declare_parameter('robot.active_cameras', Parameter.Type.STRING_ARRAY)
+        # Trim the shared descriptor to this config's subset; unknown names raise so a
+        # typo fails loudly instead of training a wrong morphology.
+        self.declare_parameter('robot.exclude.groups', [''])
+        self.declare_parameter('robot.exclude.cameras', [''])
+        self.declare_parameter('robot.exclude.ee_poses', [''])
         self.declare_parameter(
-            'robot.active_mobile_base', True, _p('Whether to include mobile base')
+            'robot.exclude.mobile_base', False, _p('Exclude the mobile base')
         )
+
+    def _str_list(self, name: str) -> list[str]:
+        """Read a string-array parameter, dropping the empty-default sentinel."""
+        raw = self.get_parameter(name).get_parameter_value().string_array_value
+        return [s for s in raw if s]
 
     def _collect_params(self) -> dict[str, Any]:
         """Read all declared parameters into a flat dict keyed by dotted name."""
@@ -245,8 +248,9 @@ class TrainNode(Node):
             'hub.push_to_hub', 'hub.repo_id', 'hub.private', 'hub.save_checkpoints',
             'peft.method_type', 'peft.r', 'peft.lora_alpha', 'peft.lora_dropout',
             'peft.target_modules', 'peft.full_training_modules',
-            'robot.descriptor_id', 'robot.active_groups',
-            'robot.active_cameras', 'robot.active_mobile_base',
+            'robot.descriptor_id', 'robot.exclude.groups',
+            'robot.exclude.cameras', 'robot.exclude.ee_poses',
+            'robot.exclude.mobile_base',
         ]
 
         params: dict[str, Any] = {}
@@ -262,6 +266,12 @@ class TrainNode(Node):
         params['peft.full_training_modules'] = (
             [str(m) for m in ftm] if ftm else []
         )
+
+        # Strip the [''] empty-default sentinel so config_builder/preflight
+        # never see it as a literal exclude name.
+        params['robot.exclude.groups'] = self._str_list('robot.exclude.groups')
+        params['robot.exclude.cameras'] = self._str_list('robot.exclude.cameras')
+        params['robot.exclude.ee_poses'] = self._str_list('robot.exclude.ee_poses')
 
         # Collect policy_overrides
         po: dict[str, Any] = {}
@@ -355,13 +365,8 @@ class TrainNode(Node):
         accelerator = build_accelerator(num_gpus=num_gpus, use_amp=use_amp)
 
         if train_cfg.peft is not None and peft_extra:
-            # lerobot 0.6.0 upstreamed `lora_alpha` onto PeftConfig (PR #3573),
-            # so it's now in `_known` and flows through the plain `_base.update()`
-            # below via native attribute assignment — no dynamic field needed for
-            # it. `lora_dropout` still has no upstream field, so it's the only
-            # one that ends up in `_new_fields` and gets injected via
-            # make_dataclass. This block requires no version gate: it always
-            # only injects whatever peft_extra keys are missing from upstream.
+            # lerobot 0.6.0 upstreamed `lora_alpha` onto PeftConfig, so only `lora_dropout`
+            # needs dynamic injection via make_dataclass (no version gate needed).
             import dataclasses as _dc
             from sobits_vla_common.lerobot_adapter import PeftConfig as _PeftConfig
             _known = {f.name for f in _dc.fields(train_cfg.peft)}
@@ -394,9 +399,8 @@ class TrainNode(Node):
         )
 
         if train_cfg.resume:
-            # lerobot's resume path reads --config_path from sys.argv
-            # (draccus CLI plumbing our in-process train() call never
-            # provides). Point it at this run's latest checkpoint.
+            # lerobot's resume path reads --config_path from sys.argv (draccus CLI
+            # plumbing our in-process train() call never provides); point it here.
             import sys as _sys
 
             ckpt_cfg = (
@@ -411,14 +415,8 @@ class TrainNode(Node):
                     'symlink (and that checkpoint.overwrite is false).'
                 )
 
-            # PEFT checkpoints contain adapter_model.safetensors, no
-            # model.safetensors. Resume does NOT reload the policy config
-            # from the checkpoint — it uses this in-process config, where
-            # use_peft is false (it only means "load an adapter" to the
-            # factory) — so the factory takes the plain-weights branch and
-            # dies on the missing file. Flip the flag on OUR config when the
-            # checkpoint is unambiguously an adapter; lerobot_train skips
-            # wrap_with_peft when the policy already is a PeftModel.
+            # PEFT checkpoints hold adapter_model.safetensors, not model.safetensors; resume
+            # never reloads use_peft, so flip it here or the factory dies on the missing file.
             if (ckpt_cfg.parent / 'adapter_model.safetensors').exists():
                 train_cfg.policy.use_peft = True
                 self.get_logger().info(
@@ -426,11 +424,8 @@ class TrainNode(Node):
                     'loading branch (policy.use_peft=true).'
                 )
 
-            # validate() only builds the optimizer/scheduler presets when NOT
-            # resuming (the CLI flow reloads them from the saved train
-            # config, which our in-process config never was) — build them
-            # here or make_optimizer_and_scheduler raises. The optimizer
-            # STATE is still restored from the checkpoint's training_state/.
+            # validate() only builds optimizer/scheduler presets when NOT resuming; build
+            # here or make_optimizer_and_scheduler raises (STATE still restores from disk).
             if train_cfg.use_policy_training_preset and train_cfg.optimizer is None:
                 train_cfg.optimizer = train_cfg.policy.get_optimizer_preset()
                 train_cfg.scheduler = train_cfg.policy.get_scheduler_preset()

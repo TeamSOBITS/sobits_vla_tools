@@ -31,49 +31,18 @@
     # Skip frames where no joint exceeds this velocity (rad/s). 0.0 = disabled.
     skip_static_threshold: 0.0
 
-    # Mimic joints and unused arm/hand joints to exclude from action/state features.
-    # Right arm and right hand are excluded: only left arm is used for pick-up task.
-    excluded_joints:
-      # Mimic joints (no independent signal)
-      - hand_left_finger_r_mcp_joint
-      - hand_right_finger_r_mcp_joint
-      # Right arm (7 DOF)
-      - arm_right_shoulder_tilt_joint
-      - arm_right_upper_roll_joint
-      - arm_right_upper_flex_joint
-      - arm_right_elbow_joint
-      - arm_right_lower_flex_joint
-      - arm_right_wrist_tilt_joint
-      - arm_right_wrist_roll_joint
-      # Right hand (8 DOF, including the mimic above)
-      - hand_right_finger_l_mcp_joint
-      - hand_right_finger_l_pip_joint
-      - hand_right_finger_l_dip_joint
-      - hand_right_finger_c_mcp_joint
-      - hand_right_finger_c_ip_joint
-      - hand_right_finger_r_pip_joint
-      - hand_right_finger_r_dip_joint
+    # Robot morphology, joints, EE frames, and cameras all come from this descriptor.
+    robot_descriptor_id: sobit_home
 
-    # End-effector pose via TF tree.
-    ee_pose:
-      enabled: false
-      names: ["left", "right"]
-      source_frames: ["hand_left_end_effector_link", "hand_right_end_effector_link"]
-      target_frames: ["base_footprint", "base_footprint"]
+    # Trim the shared descriptor for this dataset. Right arm/hand are dropped
+    # (only the left arm performs the task) while both hand cameras are kept.
+    # Mimic joints belong to no group, so the descriptor already filters them.
+    exclude:
+      groups: []
+      cameras: []
+      ee_poses: []
 
-    # Camera configuration for sobit_home.
     # primary = sync trigger camera (one frame assembled per primary image).
-    # names must match sensor names in recorded_bags_meta.yaml.
-    # compressed: use compressed_topics instead of raw topics.
+    # Names and compression come from the descriptor's active cameras.
     cameras:
-      skip: false
       primary: "head_camera"
-      names: ["head_camera", "hand_left_camera", "hand_right_camera"]
-      compressed: [true, true, true]
-
-    # Depth cameras: metric-preserving path, synced like a secondary RGB camera.
-    # Disabled by default (empty names) — first real-world validation pending.
-    # To enable: names: ["head_camera_depth"], compressed: [true].
-    depth_cameras:
-      names: [""]
-      compressed: [false]

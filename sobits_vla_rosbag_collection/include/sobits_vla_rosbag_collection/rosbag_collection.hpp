@@ -1,27 +1,57 @@
+// Copyright (c) 2026, Team SOBITS
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// * Redistributions of source code must retain the above copyright notice, this
+//   list of conditions and the following disclaimer.
+//
+// * Redistributions in binary form must reproduce the above copyright notice,
+//   this list of conditions and the following disclaimer in the documentation
+//   and/or other materials provided with the distribution.
+//
+// * Neither the name of the copyright holder nor the names of its
+//   contributors may be used to endorse or promote products derived from this
+//   software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 #ifndef SOBITS_VLA_ROSBAG_COLLECTION__ROSBAG_COLLECTION_HPP_
 #define SOBITS_VLA_ROSBAG_COLLECTION__ROSBAG_COLLECTION_HPP_
 
-#include <rcl_interfaces/msg/parameter_type.hpp>
-#include <sobits_interfaces/srv/vla_update_task.hpp>
-#include <sobits_interfaces/srv/vla_command.hpp>
-
-#include <rclcpp/rclcpp.hpp>
-#include <rclcpp/executors/single_threaded_executor.hpp>
-
-#include <filesystem>
-#include <fstream>
 #include <yaml-cpp/yaml.h>
 
-#include "rosbag2_transport/recorder.hpp"
+#include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#include <rcl_interfaces/msg/parameter_type.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp/executors/single_threaded_executor.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include <sobits_interfaces/srv/vla_command.hpp>
+#include <sobits_interfaces/srv/vla_reset_world.hpp>
+#include <sobits_interfaces/srv/vla_update_task.hpp>
+
 #include "rosbag2_storage/storage_options.hpp"
 #include "rosbag2_transport/record_options.hpp"
-
-#include <sensor_msgs/msg/camera_info.hpp>
-
-#include <thread>
-#include <mutex>
-#include <atomic>
-#include <memory>
+#include "rosbag2_transport/recorder.hpp"
 
 namespace sobits_vla
 {
@@ -52,8 +82,10 @@ public:
   std::map<std::string, std::vector<std::string>> sensor_names;
   std::map<std::string, std::vector<std::string>> sensor_models;
   std::map<std::string, std::vector<std::string>> sensor_topics;
-  std::map<std::string, std::vector<std::string>> sensor_info_topics;        // explicit camera_info topics
-  std::map<std::string, std::vector<std::string>> sensor_compressed_topics;  // explicit compressed image topics
+  // Explicit camera_info topics
+  std::map<std::string, std::vector<std::string>> sensor_info_topics;
+  // Explicit compressed image topics
+  std::map<std::string, std::vector<std::string>> sensor_compressed_topics;
 };
 
 class UserInfo
@@ -133,6 +165,13 @@ private:
     const std::shared_ptr<sobits_interfaces::srv::VlaCommand::Request> request,
     std::shared_ptr<sobits_interfaces::srv::VlaCommand::Response> response);
 
+  void requestWorldReset();
+
+  rclcpp::Client<sobits_interfaces::srv::VlaResetWorld>::SharedPtr world_reset_client_;
+  std::string world_reset_service_;
+  // Empty -> reset node's world_reset.active_preset picks the scene.
+  std::string world_reset_preset_;
+
   std::unique_ptr<RecordingMonitor> recording_monitor_;
   std::unique_ptr<BagMetadataManager> bag_metadata_manager_;
 
@@ -151,21 +190,15 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr> camera_info_subs_;
   std::map<std::string, std::pair<uint32_t, uint32_t>> camera_dimensions_;
 
-  // Recording health monitoring
+  // Recording health monitoring. The per-topic counters, FPS timer and
+  // timestamp-drift state live in RecordingMonitor, not here.
   int expected_sensor_fps_{0};
   uint64_t min_disk_space_mb_{2048};  // minimum free disk space in MB (default 2GB)
-  std::vector<rclcpp::GenericSubscription::SharedPtr> monitor_subs_;
-  std::map<std::string, std::atomic<uint64_t>> monitor_counts_;
-  std::map<std::string, uint64_t> monitor_prev_counts_;
-  rclcpp::TimerBase::SharedPtr fps_monitor_timer_;
   std::atomic<bool> max_duration_triggered_{false};  // prevents repeated auto-save
-  std::shared_ptr<std::atomic<bool>> node_alive_ = std::make_shared<std::atomic<bool>>(true);  // prevent use-after-free
-  bool fps_warmup_{true};  // skip first FPS check tick (topics warming up)
-  // Timestamp jump detection
-  double timestamp_jump_threshold_sec_{1.0};  // max drift between ROS clock and wall clock per check
-  rclcpp::Time prev_ros_time_;
-  std::chrono::steady_clock::time_point prev_wall_time_;
-  bool timestamp_monitor_initialized_{false};
+  // Prevent use-after-free
+  std::shared_ptr<std::atomic<bool>> node_alive_ = std::make_shared<std::atomic<bool>>(true);
+  // Max drift between ROS clock and wall clock per check
+  double timestamp_jump_threshold_sec_{1.0};
 
   // Parameters
   RobotInfo robot_info_;
@@ -181,7 +214,6 @@ private:
   std::string current_task_dir_name_;
   std::string previous_task_name_;
   std::string current_task_path_;
-  std::string previous_task_path_;
 
   std::string current_subtask_name_;
   std::vector<SubtaskInfo> current_episode_subtasks_;
@@ -190,9 +222,8 @@ private:
   std::string previous_bag_name_;
   std::string current_bag_path_;
   std::string previous_bag_path_;
-
 };
 
-} // namespace sobits_vla
+}  // namespace sobits_vla
 
-#endif // SOBITS_VLA_ROSBAG_COLLECTION__ROSBAG_COLLECTION_HPP_
+#endif  // SOBITS_VLA_ROSBAG_COLLECTION__ROSBAG_COLLECTION_HPP_

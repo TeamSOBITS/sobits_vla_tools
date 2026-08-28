@@ -14,15 +14,12 @@
 
     robot:
       descriptor_id: sobit_home
-      active_groups:
-        - head
-        - body
-        - arm_left
-        - hand_left
-      active_cameras:
-        - head_camera
-        - hand_left_camera
-      active_mobile_base: true
+      # exclude trims the shared descriptor to this task's subset.
+      # Unknown names raise.
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        cameras: ["hand_right_camera", "head_camera_depth"]
+        mobile_base: false
 
     # =========================================================================
     # Dataset

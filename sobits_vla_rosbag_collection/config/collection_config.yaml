@@ -32,6 +32,9 @@
           joint_names:
             - "gripper"
         mobile_base:
+          # A part counts as a base only if cmd_vel_topic is set, whatever
+          # the part is named.
+          cmd_vel_topic: "/cmd_vel"
           joint_names:
             - "base_wheel_left"
             - "base_wheel_right"

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
+from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES
 
 # LeRobot imports (via the single seam — see lerobot_adapter.py)
 try:
@@ -74,9 +75,8 @@ def _state_dim_from_preprocessor(preprocessor) -> Optional[int]:
     normalization compat patch already touches, so this is one private-API
     coupling instead of two.
     """
-    # Per-dimension stats only — the stats dict also holds scalars like
-    # 'count' (shape (1,)), and grabbing an arbitrary entry once returned
-    # expected_state_dim=1, truncating the 19-dim state to garbage.
+    # Per-dimension stats only — the dict also holds scalars like 'count' (shape (1,)),
+    # and grabbing an arbitrary entry once returned expected_state_dim=1 (19-dim truncated).
     _PER_DIM_STATS = ('mean', 'std', 'q01', 'q99', 'q10', 'q90', 'min', 'max')
     for step in getattr(preprocessor, 'steps', []):
         stats = getattr(step, '_tensor_stats', None) or {}
@@ -121,12 +121,7 @@ class PolicyLoader:
         self.logger = logger
 
         # Deploy node publishes via x.vel/y.vel/theta.vel. Map between the two conventions.
-        self._BASE_KEY_ALIASES: Dict[str, str] = {
-            'base_x': 'x.vel',
-            'base_y': 'y.vel',
-            'base_z': 'z.vel',
-            'base_theta': 'theta.vel',
-        }
+        self._BASE_KEY_ALIASES: Dict[str, str] = dict(BASE_KEY_ALIASES)
 
     def log_info(self, msg: str):
         if self.logger:
@@ -136,7 +131,7 @@ class PolicyLoader:
 
     def log_warn(self, msg: str):
         if self.logger:
-            self.logger.warn(msg)
+            self.logger.warning(msg)
         else:
             print(f'[WARN] {msg}')
 
@@ -368,13 +363,8 @@ class PolicyLoader:
         policy_module = import_module(module_path)
         policy_cls = getattr(policy_module, class_name)
 
-        # Register the policy's custom processor steps (e.g.
-        # vla_jepa_clip_actions, molmoact2 steps): they live in a sibling
-        # processor_<pkg> module that neither modeling_<pkg> nor lerobot's
-        # make_pre_post_processors pretrained-path branch imports — without
-        # this, loading a serialized pipeline fails registry lookup and the
-        # node silently falls back to NO postprocessor, executing normalized
-        # [-1, 1] actions as radians.
+        # Register the policy's custom processor steps (sibling processor_<pkg> module
+        # nothing else imports) or a serialized pipeline falls back to NO postprocessor.
         if module_path.startswith('lerobot.policies.'):
             pkg = module_path.split('.')[2]
             try:
@@ -407,12 +397,8 @@ class PolicyLoader:
                 f.name for f in _cfg_fields(policy_cls.config_class)
             }
             if not _is_pi_family:
-                # Generic policies (vla_jepa, molmoact2, ...): the adapter
-                # repo's config.json is a complete serialized policy config —
-                # rebuild it generically. It carries reinit_modules, so base
-                # weights with mismatched shapes (e.g. our 19-dim projections
-                # vs the 7-dim pretrained base) re-initialise and the fully
-                # trained modules_to_save from the adapter overwrite them.
+                # Generic policies: rebuild config from the adapter's config.json — it carries
+                # reinit_modules, so mismatched base weights re-init and adapter modules win.
                 load_cfg = self._build_cfg_from_repo_json(policy_cls) or cfg
                 self.log_info(
                     'Non-pi adapter repo: using generic repo-json config '
@@ -644,10 +630,8 @@ class PolicyLoader:
                     policy.config, self.model_repo_id, **processor_kwargs
                 )
             except Exception as exc:
-                # If the repo ships serialized pipelines, running without them
-                # executes NORMALIZED [-1, 1] actions as radians — refuse
-                # instead of degrading silently (10 wasted eval episodes, and
-                # dangerous on real hardware).
+                # If the repo ships serialized pipelines, running without them executes
+                # NORMALIZED [-1, 1] actions as radians — refuse instead of degrading silently.
                 if self._repo_has_serialized_processors():
                     raise RuntimeError(
                         'Repo {!r} ships processor pipelines but they failed '

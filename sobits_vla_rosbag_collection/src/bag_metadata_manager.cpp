@@ -1,7 +1,36 @@
+// Copyright (c) 2026, Team SOBITS
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// * Redistributions of source code must retain the above copyright notice, this
+//   list of conditions and the following disclaimer.
+//
+// * Redistributions in binary form must reproduce the above copyright notice,
+//   this list of conditions and the following disclaimer in the documentation
+//   and/or other materials provided with the distribution.
+//
+// * Neither the name of the copyright holder nor the names of its
+//   contributors may be used to endorse or promote products derived from this
+//   software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 #include "sobits_vla_rosbag_collection/bag_metadata_manager.hpp"
+
+#include <yaml-cpp/yaml.h>
+
 #include <filesystem>
 #include <fstream>
-#include <yaml-cpp/yaml.h>
 
 namespace sobits_vla
 {
@@ -196,7 +225,9 @@ void BagMetadataManager::createOrValidate(
       }
     }
 
-    if (part == "mobile_base" || part == "legs") {
+    // A base part is one that carries a cmd_vel topic -- not one whose name
+    // happens to match a known literal.
+    if (robot_info_.part_cmd_vel_topic.count(part) > 0) {
       auto it_y = robot_info_.part_has_cmd_vel_y.find(part);
       yaml_node["robot_info"]["morphology"][part]["has_cmd_vel_y"] = (it_y !=
         robot_info_.part_has_cmd_vel_y.end()) ? it_y->second : false;
@@ -325,9 +356,8 @@ void BagMetadataManager::updateRosbagYaml(
 
   yaml_node["recorded_bags"]["tasks_list"].push_back(current_task_label);
   yaml_node["recorded_bags"]["tasks"][current_task_label]["label"] = current_task_name;
-  // Store bag_dir relative to the yaml's own directory (recording_dir_) so
-  // the metadata survives moving the rosbags folder between machines —
-  // same convention as the per-episode bag_path below.
+  // Relative to recording_dir_, same convention as the per-episode bag_path
+  // below, so metadata survives moving the rosbags folder.
   std::string stored_task_path = current_task_path;
   {
     const std::string recording_prefix = recording_dir_ + "/";
@@ -440,9 +470,8 @@ void BagMetadataManager::updateEpisodeYaml(
     }
 
     YAML::Node episode_node = YAML::Node(YAML::NodeType::Map);
-    // Store the path relative to the yaml's own directory (recording_dir_)
-    // so the metadata stays valid when the rosbags folder moves between
-    // machines. Consumers join relative paths against the yaml location.
+    // Relative to recording_dir_ so metadata survives moving the rosbags
+    // folder; consumers join it against the yaml location.
     std::string stored_bag_path = current_bag_path;
     const std::string recording_prefix = recording_dir_ + "/";
     if (stored_bag_path.rfind(recording_prefix, 0) == 0) {
@@ -544,4 +573,4 @@ void BagMetadataManager::removeEpisodeFromYaml(
   }
 }
 
-} // namespace sobits_vla
+}  // namespace sobits_vla

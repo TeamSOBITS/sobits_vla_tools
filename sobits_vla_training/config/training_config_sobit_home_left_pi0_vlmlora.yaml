@@ -18,15 +18,12 @@
 
     robot:
       descriptor_id: sobit_home_frozen
-      active_groups:
-        - head
-        - body
-        - arm_left
-        - hand_left
-      active_cameras:
-        - head_camera
-        - hand_left_camera
-      active_mobile_base: true
+      # sobit_home_frozen is already left-arm-only, so nothing to trim.
+      # Naming a group/camera it lacks (e.g. arm_right) would raise.
+      exclude:
+        groups: []
+        cameras: []
+        mobile_base: false
 
     dataset:
       repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"

@@ -7,9 +7,9 @@
     robot_descriptor_id: "sobit_home"
 
     user_info:
-      name: ""
-      location: ""
-      email: ""
+      name: "Keith Valentin"
+      location: "Soka University, Japan"
+      email: "kvalentincardenas@hotmail.com"
 
     rosbag_config:
       record_directory: ""
@@ -30,3 +30,5 @@
       compression_mode: "none"
       compression_format: "zstd"
       rmw_serialization_format: "cdr"
+      # Scene reset is manual only: the gamepad RESET button forwards here.
+      world_reset_service: "/world_reset_node/reset_world"

@@ -173,15 +173,17 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
         from sobits_vla_common.robot_descriptor import load_robot_descriptor
         desc = load_robot_descriptor(desc_id)
 
-        active_groups = params.get('robot.active_groups', [])
-        if not active_groups:
-            active_groups = [g.name for g in desc.active_groups]
-        active_mobile_base = params.get('robot.active_mobile_base', True)
+        desc = desc.filtered(
+            exclude_groups=params.get('robot.exclude.groups', []),
+            exclude_cameras=params.get('robot.exclude.cameras', []),
+            exclude_ee_poses=params.get('robot.exclude.ee_poses', []),
+        )
+        active_groups = [g.name for g in desc.active_groups]
+        active_mobile_base = not params.get('robot.exclude.mobile_base', False)
 
         active_joint_features = []
-        for g in desc.groups:
-            if g.name in active_groups:
-                active_joint_features.extend([j.feature for j in g.joints])
+        for g in desc.active_groups:
+            active_joint_features.extend([j.feature for j in g.joints])
 
         n_base = 0
         if desc.mobile_base and active_mobile_base:
@@ -196,10 +198,8 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
 
         # Relative mode: keep base velocities + flagged groups absolute.
         # Descriptor-derived; explicit override wins.
-        if (
-            policy_overrides.get('use_relative_actions', False)
-            and 'relative_exclude_joints' not in policy_overrides
-        ):
+        if policy_overrides.get('use_relative_actions', False) and not policy_overrides.get(
+                'relative_exclude_joints'):
             policy_overrides['relative_exclude_joints'] = desc.relative_exclude_features(
                 active_groups=active_groups,
                 active_mobile_base=active_mobile_base,
@@ -233,9 +233,8 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
     eval_split: float = params.get('dataset.eval_split', 0.0)
     dataset_cfg = DatasetConfig(repo_id=ds_repo_id, eval_split=eval_split)
 
-    # Version provenance: fold the lerobot version into notes since
-    # WandBConfig has no dedicated metadata field. Keeps the W&B run
-    # traceable to the lerobot version it trained under.
+    # Fold lerobot version into notes (WandBConfig has no metadata field) so
+    # the W&B run stays traceable to the lerobot version it trained under.
     from sobits_vla_common.lerobot_adapter import LEROBOT_VERSION
     lerobot_version_str = '.'.join(str(p) for p in LEROBOT_VERSION)
     user_notes = params.get('wandb.notes', '') or ''
@@ -349,9 +348,8 @@ def build_peft_config(params: dict[str, Any]):
     target_raw = params.get('peft.target_modules', '') or ''
     target_modules: list[str] | str | None = None
     if target_raw:
-        # peft treats a plain string as a single regex fullmatch — only
-        # split on ',' (a literal module-name list); a comma-free string
-        # is a regex and must stay a string.
+        # peft treats a plain string as a regex fullmatch; only split on ','
+        # (literal module list) -- a comma-free string is a regex and stays a string.
         target_modules = (
             target_raw if isinstance(target_raw, list) or ',' not in target_raw
             else [s.strip() for s in target_raw.split(',') if s.strip()]

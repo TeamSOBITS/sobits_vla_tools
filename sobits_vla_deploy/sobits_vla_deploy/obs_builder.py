@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES
 
 try:
     from sobits_vla_common.lerobot_adapter import build_dataset_frame, hw_to_dataset_features
@@ -64,12 +65,7 @@ class ObsBuilder:
         self.obs_features = None
         self.prev_ee_pose: Dict[str, Optional[np.ndarray]] = {}
 
-        self._BASE_KEY_ALIASES: Dict[str, str] = {
-            'base_x': 'x.vel',
-            'base_y': 'y.vel',
-            'base_z': 'z.vel',
-            'base_theta': 'theta.vel',
-        }
+        self._BASE_KEY_ALIASES: Dict[str, str] = dict(BASE_KEY_ALIASES)
 
     def update_joint_state(self, feature: str, value: float):
         with self.lock:

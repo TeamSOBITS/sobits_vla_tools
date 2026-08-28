@@ -43,7 +43,7 @@ It defines:
 - `ee_poses` — optional TF end-effector poses
 - `excluded_joints` — mimic/wheel/passive joints to drop from feature vectors
 
-Each pipeline config references it by `descriptor_id` (deploy/training) or `robot_descriptor_id` (collection/conversion), then picks a subset via `active_groups` / `active_cameras` / `active_mobile_base`. Adding a new robot + N policies = **1 descriptor + N model-only configs** instead of editing every stage.
+Each pipeline config references it by `descriptor_id` (deploy/training) or `robot_descriptor_id` (collection/conversion), then trims a subset via `robot.exclude.groups` / `exclude.cameras` / `exclude.mobile_base` (unknown names raise). Adding a new robot + N policies = **1 descriptor + N model-only configs** instead of editing every stage.
 
 ### Scaffold a new robot
 
@@ -398,7 +398,7 @@ ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_
 
 Each `training_config_*.yaml` carries:
 - `policy` — policy type (one of the supported six)
-- `robot` — `descriptor_id` + `active_groups` / `active_cameras` / `active_mobile_base`; the trainer derives `max_state_dim` / `max_action_dim` from the descriptor's active joints + mobile-base features (so they need not be hand-set)
+- `robot` — `descriptor_id` + `exclude.groups` / `exclude.cameras` / `exclude.mobile_base`; the trainer derives `max_state_dim` / `max_action_dim` from the descriptor's active joints + mobile-base features (so they need not be hand-set)
 - `dataset` / `training` / `checkpoint` / `wandb` / `hub` — standard lerobot knobs
 - `peft` — LoRA method/targets (empty `method_type` = full fine-tune)
 - `policy_overrides` — any field of the policy's lerobot config (introspected; unknown keys warn)
@@ -447,9 +447,10 @@ The deploy node reads morphology from the **robot descriptor** and selects a sub
 ```yaml
 robot:
   descriptor_id: sobit_home              # loads sobits_vla_common/robots/sobit_home.robot.yaml
-  active_groups: [head, body, arm_left, hand_left]
-  active_cameras: [head_camera, hand_left_camera]
-  active_mobile_base: true
+  exclude:
+    groups: [arm_right, hand_right]
+    cameras: [hand_right_camera]
+    mobile_base: false
 ```
 
 Command topics, joints, `max_joint_delta`, mobile-base, and camera topics all come from the descriptor — no inline joint/topic lists. (If `descriptor_id` is empty, the node falls back to the legacy inline `robot.*` schema shown in `deploy_config.yaml`.) The `model` / `runtime` / `rtc` sections stay in the deploy config.

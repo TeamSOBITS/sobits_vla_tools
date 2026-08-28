@@ -1,11 +1,17 @@
 /**:
   ros__parameters:
     # Directory where the rosbags are stored.
-    # Empty = defaults to sobits_vla_rosbag_collection/rosbags/
-    rosbag_directory: ""
+    # Empty = defaults to sobits_vla_rosbag_collection/rosbags/, which now also
+    # holds the pnp_real_tea_trash_2 bind-mount, so point at it explicitly.
+    rosbag_directory: "/home/rg-station-04-keith/colcon_ws/src/sobits_vla_tools/sobits_vla_rosbag_collection/rosbags/pnp_real_tea_trash_2"
+
+    # The 111-episode meta. Set explicitly because rosbag_directory is searched
+    # recursively and the 11 session subdirs still hold their own metas, which
+    # would add their episodes on top.
+    recorded_bags_meta_file: "/home/rg-station-04-keith/colcon_ws/src/sobits_vla_tools/sobits_vla_rosbag_collection/rosbags/pnp_real_tea_trash_2/recorded_bags_meta.yaml"
 
     # HuggingFace repo ID for the output dataset.
-    dataset_name: "team-sobits/sobit_home-pnp_ball_bowl-left-abs-real"
+    dataset_name: "team-sobits/sobit_home_left_real-pnp_tea_trash_2-abs"
 
     # Local directory where the LeRobot dataset is written.
     # The dataset is written to <output_directory>/<dataset_name>.
@@ -34,8 +40,19 @@
     skip_static_threshold: 0.0
 
     # Robot morphology, joints, EE frames, and cameras all come from this descriptor.
-    robot_descriptor_id: sobit_home_frozen
+    robot_descriptor_id: sobit_home
 
-    # Descriptor supplies EE frames; this only gates whether ee_pose is emitted.
-    ee_pose:
-      enabled: false
+    # Trim the shared descriptor to the left arm for this dataset. The descriptor
+    # keeps describing the whole robot; unknown names here raise an error.
+    exclude:
+      groups: ["arm_right", "hand_right"]
+      cameras: ["hand_right_camera"]
+      ee_poses: ["left", "right"]
+
+    # EE poses follow exclude.ee_poses above: emitted when any frame survives,
+    # skipped when all are excluded. Exclude every name to drop them entirely.
+
+    # primary = sync trigger camera (one frame assembled per primary image;
+    # other cameras are sampled at the nearest timestamp).
+    cameras:
+      primary: "head_camera"

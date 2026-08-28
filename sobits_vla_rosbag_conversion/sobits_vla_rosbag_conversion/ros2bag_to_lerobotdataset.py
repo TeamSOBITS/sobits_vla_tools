@@ -70,12 +70,10 @@ def _default_output_root() -> Path:
     """
     candidate = Path(os.path.realpath(__file__)).parent
     for _ in range(8):
-        # Running from the source tree (or --symlink-install): the package
-        # root has both package.xml and the lerobotdataset/ folder.
+        # Source tree (or --symlink-install): package root has package.xml + lerobotdataset/.
         if (candidate / 'package.xml').exists() and (candidate / 'lerobotdataset').is_dir():
             return candidate / 'lerobotdataset'
-        # Running from the install space: walk up to the workspace root and
-        # look for the package under src/ (e.g. src/sobits_vla_tools/<pkg>).
+        # Install space: walk up to workspace root, find package under src/.
         src_root = candidate / 'src'
         if src_root.is_dir():
             for pattern in ('*/sobits_vla_rosbag_conversion', '*/*/sobits_vla_rosbag_conversion'):
@@ -115,19 +113,11 @@ class RosbagConversionNode(Node):
         self.declare_parameter('overwrite', False)
         self.declare_parameter('use_relative_actions', False)
         self.declare_parameter('skip_static_threshold', 0.0)
-        self.declare_parameter('excluded_joints', [''])
-        self.declare_parameter('ee_pose.enabled', False)
-        self.declare_parameter('ee_pose.target_frame', '')
-        self.declare_parameter('ee_pose.source_frame', '')
-        self.declare_parameter('ee_pose.names', [''])
-        self.declare_parameter('ee_pose.source_frames', [''])
-        self.declare_parameter('ee_pose.target_frames', [''])
-        self.declare_parameter('cameras.skip', False)
+        # Per-config trim of the shared robot descriptor.
+        self.declare_parameter('exclude.groups', [''])
+        self.declare_parameter('exclude.cameras', [''])
+        self.declare_parameter('exclude.ee_poses', [''])
         self.declare_parameter('cameras.primary', '')
-        self.declare_parameter('cameras.names', [''])
-        self.declare_parameter('cameras.compressed', [False])
-        self.declare_parameter('depth_cameras.names', [''])
-        self.declare_parameter('depth_cameras.compressed', [False])
 
         self.rosbag_directory = (
             self.get_parameter('rosbag_directory').get_parameter_value().string_value
@@ -141,10 +131,8 @@ class RosbagConversionNode(Node):
         output_dir = (
             self.get_parameter('output_directory').get_parameter_value().string_value
         )
-        # The dataset root is always <base>/<dataset_name>, where <base> is
-        # output_directory when set and <package_src>/lerobotdataset/
-        # otherwise — so several datasets can share one output_directory
-        # without colliding.
+        # Dataset root is <base>/<dataset_name>, <base> = output_directory or
+        # <package_src>/lerobotdataset/, so several datasets can share one output_directory.
         if output_dir:
             self.output_directory = Path(output_dir) / self.dataset_name
         else:
@@ -182,121 +170,62 @@ class RosbagConversionNode(Node):
             self.get_parameter('robot_descriptor_id').get_parameter_value().string_value
         )
 
-        # Descriptor mode: joints allowed by active groups. None = no inclusion filter (legacy mode).
-        self.active_ros_names = None
+        if not self.robot_descriptor_id:
+            raise RuntimeError(
+                'robot_descriptor_id is required: set it to a descriptor in '
+                'sobits_vla_common/robots/<id>.robot.yaml.'
+            )
 
-        if self.robot_descriptor_id:
-            from sobits_vla_common.robot_descriptor import load_robot_descriptor
-            desc = load_robot_descriptor(self.robot_descriptor_id)
+        from sobits_vla_common.robot_descriptor import load_robot_descriptor
+        desc = load_robot_descriptor(self.robot_descriptor_id)
 
-            # Excluded joints (mimics/inactive groups still listed with active: false)
-            self.excluded_joints = desc.all_excluded_ros_names
-            # Catches groups omitted entirely, which all_excluded_ros_names above misses.
-            self.active_ros_names = set(desc.active_ros_names)
+        # Per-config trim of the shared descriptor (e.g. left-arm-only runs),
+        # so the descriptor keeps describing the whole robot.
+        desc = desc.filtered(
+            exclude_groups=self._str_list('exclude.groups'),
+            exclude_cameras=self._str_list('exclude.cameras'),
+            exclude_ee_poses=self._str_list('exclude.ee_poses'),
+        )
 
-            # Config's ee_pose.enabled gates it, not just the descriptor having poses.
-            ee_pose_param_enabled = self.get_parameter('ee_pose.enabled').get_parameter_value().bool_value
-            if desc.ee_poses and ee_pose_param_enabled:
-                self.ee_pose_enabled = True
-                self.ee_configs = [
-                    (ee.name, ee.source_frame, ee.target_frame)
-                    for ee in desc.ee_poses
-                ]
-            else:
-                self.ee_pose_enabled = False
-                self.ee_configs = []
+        # Excluded joints (mimics/inactive groups still listed with active: false)
+        self.excluded_joints = desc.all_excluded_ros_names
+        # Catches groups omitted entirely, which all_excluded_ros_names above misses.
+        self.active_ros_names = set(desc.active_ros_names)
 
-            # Cameras
-            self.skip_cameras = False
-            active_cams = desc.active_cameras
-            if active_cams:
-                self.cameras_names = [c.name for c in active_cams]
-                self.cameras_compressed = [c.compressed for c in active_cams]
-                primary_param = (
-                    self.get_parameter('cameras.primary').get_parameter_value().string_value
-                )
-                if not primary_param:
-                    self.primary_camera = active_cams[0].name
-                else:
-                    self.primary_camera = primary_param
-            else:
-                self.cameras_names = []
-                self.cameras_compressed = []
-                self.skip_cameras = True
-
-            # Depth cameras (parallel tracking, never merged with RGB above)
-            active_depth_cams = desc.active_depth_cameras
-            self.depth_cameras_names = [c.name for c in active_depth_cams]
-            self.depth_cameras_compressed = [c.compressed for c in active_depth_cams]
+        # Driven purely by exclude.ee_poses: emitted when any frame survives,
+        # skipped when all are excluded.
+        if desc.ee_poses:
+            self.ee_pose_enabled = True
+            self.ee_configs = [
+                (ee.name, ee.source_frame, ee.target_frame)
+                for ee in desc.ee_poses
+            ]
         else:
-            # Fallback to legacy parameters
-            raw_excluded = (
-                self.get_parameter('excluded_joints').get_parameter_value().string_array_value
-            )
-            self.excluded_joints = [j for j in raw_excluded if j]
-            self.ee_pose_enabled = (
-                self.get_parameter('ee_pose.enabled').get_parameter_value().bool_value
-            )
-            _ee_names = [
-                n for n in self.get_parameter('ee_pose.names')
-                .get_parameter_value().string_array_value if n
-            ]
-            _ee_sources = [
-                s for s in self.get_parameter('ee_pose.source_frames')
-                .get_parameter_value().string_array_value if s
-            ]
-            _ee_targets = [
-                t for t in self.get_parameter('ee_pose.target_frames')
-                .get_parameter_value().string_array_value if t
-            ]
-            if _ee_names and _ee_sources:
-                if not _ee_targets:
-                    _ee_targets = [
-                        self.get_parameter('ee_pose.target_frame')
-                        .get_parameter_value().string_value
-                    ] * len(_ee_names)
-                while len(_ee_targets) < len(_ee_names):
-                    _ee_targets.append(_ee_targets[0])
-                self.ee_configs = list(zip(_ee_names, _ee_sources, _ee_targets))
-            else:
-                _src = (
-                    self.get_parameter('ee_pose.source_frame')
-                    .get_parameter_value().string_value
-                )
-                _tgt = (
-                    self.get_parameter('ee_pose.target_frame')
-                    .get_parameter_value().string_value
-                )
-                self.ee_configs = [('', _src, _tgt)]
-            if self.ee_pose_enabled and any(
-                not src or not tgt for _, src, tgt in self.ee_configs
-            ):
-                raise RuntimeError(
-                    'ee_pose is enabled but a source/target frame is empty -- '
-                    'refusing to default to a robot-specific value.'
-                )
-            self.skip_cameras = (
-                self.get_parameter('cameras.skip').get_parameter_value().bool_value
-            )
-            self.primary_camera = (
+            self.ee_pose_enabled = False
+            self.ee_configs = []
+
+        # Cameras. Exclude every camera name for a state/action-only dataset.
+        self.skip_cameras = False
+        active_cams = desc.active_cameras
+        if active_cams:
+            self.cameras_names = [c.name for c in active_cams]
+            self.cameras_compressed = [c.compressed for c in active_cams]
+            primary_param = (
                 self.get_parameter('cameras.primary').get_parameter_value().string_value
             )
-            raw_names = (
-                self.get_parameter('cameras.names').get_parameter_value().string_array_value
-            )
-            self.cameras_names = [n for n in raw_names if n]
-            self.cameras_compressed = list(
-                self.get_parameter('cameras.compressed')
-                .get_parameter_value().bool_array_value
-            )
-            raw_depth_names = (
-                self.get_parameter('depth_cameras.names').get_parameter_value().string_array_value
-            )
-            self.depth_cameras_names = [n for n in raw_depth_names if n]
-            self.depth_cameras_compressed = list(
-                self.get_parameter('depth_cameras.compressed')
-                .get_parameter_value().bool_array_value
-            )
+            if not primary_param:
+                self.primary_camera = active_cams[0].name
+            else:
+                self.primary_camera = primary_param
+        else:
+            self.cameras_names = []
+            self.cameras_compressed = []
+            self.skip_cameras = True
+
+        # Depth cameras (parallel tracking, never merged with RGB above)
+        active_depth_cams = desc.active_depth_cameras
+        self.depth_cameras_names = [c.name for c in active_depth_cams]
+        self.depth_cameras_compressed = [c.compressed for c in active_depth_cams]
 
         # Configuration attributes (populated from YAML)
         self.camera_topics = {}
@@ -324,6 +253,11 @@ class RosbagConversionNode(Node):
 
         # One-shot timer to start conversion after the node is ready
         self.timer = self.create_timer(1.0, self.timer_callback)
+
+    def _str_list(self, name: str) -> list:
+        """Read a string-array parameter, dropping the empty-default sentinel."""
+        raw = self.get_parameter(name).get_parameter_value().string_array_value
+        return [s for s in raw if s]
 
     def timer_callback(self):
         """One-shot timer callback to trigger the conversion."""
@@ -402,7 +336,7 @@ class RosbagConversionNode(Node):
             if use_compressed:
                 topic = all_cam_compressed.get(name, '')
                 if not topic:
-                    self.get_logger().warn(
+                    self.get_logger().warning(
                         f"{label} '{name}': no compressed topic in metadata, "
                         'falling back to raw.'
                     )
@@ -696,7 +630,7 @@ class RosbagConversionNode(Node):
 
         if self.primary_camera not in self.camera_topics:
             fallback = list(self.camera_topics.keys())[0]
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f"Primary camera '{self.primary_camera}' not in selected cameras. "
                 f"Falling back to '{fallback}'."
             )
@@ -848,9 +782,8 @@ class RosbagConversionNode(Node):
                 group_dir = bag_group
             else:
                 group_dir = os.path.join(meta_src, bag_group)
-            # Same fallback as the conversion loop below — metadata written
-            # on another machine may carry stale absolute paths, but the
-            # task dir name is stable relative to the yaml.
+            # Same fallback as the conversion loop below — metadata from another machine
+            # may carry stale absolute paths, but the task dir name is stable vs the yaml.
             if not os.path.isdir(group_dir):
                 group_dir = os.path.join(meta_src, task_name)
             if os.path.isdir(group_dir):
@@ -875,7 +808,7 @@ class RosbagConversionNode(Node):
             if not os.path.isdir(group_dir):
                 group_dir = os.path.join(meta_src, task_name)
                 if not os.path.isdir(group_dir):
-                    self.get_logger().warn(f'Directory not found: {group_dir}')
+                    self.get_logger().warning(f'Directory not found: {group_dir}')
                     continue
 
             episodes_dict = task_info.get('episodes', {})
@@ -998,7 +931,7 @@ class RosbagConversionNode(Node):
                 ) = result
 
                 if not frames:
-                    self.get_logger().warn(
+                    self.get_logger().warning(
                         f'No frames extracted from {bagfile} '
                         f'(downsample={ep_skipped_ds}, static={ep_skipped_static}, '
                         f'tf={ep_skipped_tf}, img_decode={ep_skipped_img})'
@@ -1018,7 +951,7 @@ class RosbagConversionNode(Node):
                     duration = frames[-1][0] - frames[0][0]
                     actual_fps = (len(frames) - 1) / duration if duration > 0 else 0.0
                     if actual_fps < self.fps * 0.8:
-                        self.get_logger().warn(
+                        self.get_logger().warning(
                             f'Proceeding with {bagfile}: actual fps ({actual_fps:.1f}) is below '
                             f'configured fps ({self.fps}) threshold (80%).'
                         )
