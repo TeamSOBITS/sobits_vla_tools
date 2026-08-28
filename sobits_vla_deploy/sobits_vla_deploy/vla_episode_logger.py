@@ -40,6 +40,8 @@ Each line is one timestep dict with:
   max_jerk       — float, max |2nd difference| over joints this step
   tracking_error — dict[joint_name -> rad]  (commanded - measured)
   track_abs_mean — float, mean |tracking_error| this step
+  track_abs_mean_by_group — dict[group -> mean |tracking_error|] using the
+                   descriptor's joint groups, so analysis needs no name prefixes
   base_vel       — {x, y, theta}
   base_speed     — float, sqrt(x^2 + y^2)
   ee_pose        — {x, y, z, roll, pitch, yaw} in the WORLD frame, directly
@@ -66,11 +68,12 @@ Automatic termination (evaluate_termination, polled by the deploy node):
   - success_lift: block lifted > lift_success_m (default 0.05)
   - fallen:       robot tilt > tilt_threshold or world-z drop > fall_z_drop_m
   - timeout:      elapsed sim time >= episode_timeout_s (default 60)
+  - dropped:      place mode only -- object left low and away from the
+                  goal for drop_abort_s (0 = disabled)
 
-World reset (called between episodes):
-  - Teleports robot to spawn_pose via gz service
-  - Teleports block to block_reset_pose via gz service
-  Both use the UserCommands plugin which is already in simple_data_collection.world.xacro.
+World reset between episodes is performed by the shared world_reset_node
+(sobits_vla_common); the spawn/block poses here only seed the lift and fall
+baselines below.
 """
 
 from __future__ import annotations
@@ -80,16 +83,17 @@ import json
 import math
 import os
 from pathlib import Path
-import re
 import subprocess
 import threading
 from time import monotonic
 from typing import Any, Dict, List, Optional
 
+from sobits_vla_common.gz_utils import gz_get_pose, wrap_pi
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+
+def _known_fields(**values) -> Dict[str, float]:
+    """Drop unknown (None) components so metadata never records a guess."""
+    return {k: v for k, v in values.items() if v is not None}
 
 
 def _sobits_vla_tools_rev() -> str:
@@ -128,183 +132,14 @@ def _lerobot_version_str() -> str:
         return 'unknown'
 
 
-def _gz_set_pose(
-    world_name: str,
-    model_name: str,
-    x: float, y: float, z: float,
-    qx: float, qy: float, qz: float, qw: float,
-    timeout: float = 3.0,
-) -> bool:
-    """
-    Teleport a Gazebo model via the /world/.../set_pose service.
-
-    Uses gz-transport CLI so no Python gz bindings are required.
-    The UserCommands plugin must be loaded in the world.
-    """
-    # gz.msgs.Pose identifies the entity via its own `name` field — there is
-    # no `entity` wrapper. The old wrapped format failed to parse, and
-    # `gz service` STILL exited 0, so this function reported success while
-    # the model never moved.
-    req = (
-        'name: "{name}" '
-        'position: {{x: {x} y: {y} z: {z}}} '
-        'orientation: {{x: {qx} y: {qy} z: {qz} w: {qw}}}'
-    ).format(name=model_name, x=x, y=y, z=z, qx=qx, qy=qy, qz=qz, qw=qw)
-
-    cmd = [
-        'gz', 'service',
-        '-s', '/world/{}/set_pose'.format(world_name),
-        '--reqtype', 'gz.msgs.Pose',
-        '--reptype', 'gz.msgs.Boolean',
-        '--timeout', str(int(timeout * 1000)),
-        '--req', req,
-    ]
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout + 1.0
-        )
-        # Exit code is unreliable (0 even on request-parse failure) — trust
-        # only the service's Boolean reply on stdout.
-        return result.returncode == 0 and 'data: true' in result.stdout
-    except Exception:
-        return False
-
-
-def _wrap_pi(angle: float) -> float:
-    """Wrap an angle to (-pi, pi]."""
-    return math.atan2(math.sin(angle), math.cos(angle))
-
-
-def _gz_get_pose_dynamic(
-    world_name: str,
-    model_name: str,
-    timeout: float = 2.0,
-) -> Optional[Dict[str, float]]:
-    """
-    Read a model's LIVE world pose from the dynamic_pose/info topic.
-
-    `gz model -m <name> -p` reports the model's static/spawn pose, which never
-    changes once the simulation is running -- a block picked up and lifted
-    still reports its table position. dynamic_pose/info carries the per-entity
-    poses the physics engine actually updates, so it is the only source that
-    reflects motion.
-
-    Returns {x, y, z, roll, pitch, yaw} (RPY converted from the quaternion),
-    or None if the entity is absent from the message (static entities are not
-    published here -- the caller falls back to the static query).
-    """
-    topic = '/world/{}/dynamic_pose/info'.format(world_name)
-    cmd = ['gz', 'topic', '-e', '-t', topic, '-n', '1']
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout + 1.0
-        )
-        if result.returncode != 0:
-            return None
-        # Pose_V text format: repeated `pose { name: "x" position {...}
-        # orientation {...} }` blocks. Walk to the block whose name matches.
-        blocks, cur, depth, inside = [], [], 0, False
-        for ln in result.stdout.splitlines():
-            if not inside and ln.strip().startswith('pose {'):
-                inside, cur, depth = True, [], 0
-            if inside:
-                cur.append(ln)
-                depth += ln.count('{') - ln.count('}')
-                if depth == 0:
-                    blocks.append('\n'.join(cur))
-                    inside = False
-        for blk in blocks:
-            name = re.search(r'name:\s*"([^"]*)"', blk)
-            if not name or name.group(1) != model_name:
-                continue
-            pos = re.search(
-                r'position\s*{([^}]*)}', blk, re.S)
-            ori = re.search(
-                r'orientation\s*{([^}]*)}', blk, re.S)
-            if not pos:
-                continue
-
-            def _f(body, key):
-                m = re.search(r'%s:\s*(-?[\d.eE+-]+)' % key, body)
-                return float(m.group(1)) if m else 0.0
-
-            px, py, pz = (_f(pos.group(1), k) for k in ('x', 'y', 'z'))
-            if ori:
-                qx, qy, qz = (_f(ori.group(1), k) for k in ('x', 'y', 'z'))
-                qw = _f(ori.group(1), 'w')
-            else:
-                qx = qy = qz = 0.0
-                qw = 1.0
-            # Quaternion -> RPY (ZYX convention), matching gz's own output.
-            sinr = 2.0 * (qw * qx + qy * qz)
-            cosr = 1.0 - 2.0 * (qx * qx + qy * qy)
-            roll = math.atan2(sinr, cosr)
-            sinp = 2.0 * (qw * qy - qz * qx)
-            pitch = (math.copysign(math.pi / 2, sinp)
-                     if abs(sinp) >= 1 else math.asin(sinp))
-            siny = 2.0 * (qw * qz + qx * qy)
-            cosy = 1.0 - 2.0 * (qy * qy + qz * qz)
-            yaw = math.atan2(siny, cosy)
-            return {'x': px, 'y': py, 'z': pz,
-                    'roll': roll, 'pitch': pitch, 'yaw': yaw}
-        return None
-    except Exception:
-        return None
-
-
-def _gz_get_pose(
-    world_name: str,
-    model_name: str,
-    timeout: float = 2.0,
-) -> Optional[Dict[str, float]]:
-    """
-    Query a model's world pose, preferring the live (dynamic) pose.
-
-    Tries dynamic_pose/info first -- the only source that reflects motion --
-    and falls back to `gz model -m <name> -p` for entities the physics engine
-    never moves (which are absent from the dynamic topic).
-    """
-    live = _gz_get_pose_dynamic(world_name, model_name, timeout=timeout)
-    if live is not None:
-        return live
-    cmd = ['gz', 'model', '-m', model_name, '-p']
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout + 1.0
-        )
-        if result.returncode != 0:
-            return None
-        # Output format:
-        #   - Pose [ XYZ (m) ] [ RPY (rad) ]:
-        #     [x y z]
-        #     [r p y]
-        lines = [ln.strip() for ln in result.stdout.splitlines()]
-        for i, ln in enumerate(lines):
-            if 'Pose [ XYZ' in ln and i + 2 < len(lines):
-                xyz = lines[i + 1].strip('[]').split()
-                rpy = lines[i + 2].strip('[]').split()
-                if len(xyz) == 3 and len(rpy) == 3:
-                    x_, y_, z_ = (float(v) for v in xyz)
-                    roll, pitch, yaw = (float(v) for v in rpy)
-                    return {'x': x_, 'y': y_, 'z': z_,
-                            'roll': roll, 'pitch': pitch, 'yaw': yaw}
-        return None
-    except Exception:
-        return None
-
-
 def _gz_get_pose_fast(world_name: str, model_name: str) -> Optional[Dict[str, float]]:
     """
-    Like _gz_get_pose but uses /world/…/state_async for lower latency.
+    Like gz_get_pose but uses a shorter timeout for lower latency.
 
     Falls back to pose/info on any error.
     """
-    return _gz_get_pose(world_name, model_name, timeout=1.5)
+    return gz_get_pose(world_name, model_name, timeout=1.5)
 
-
-# ---------------------------------------------------------------------------
-# EpisodeLogger
-# ---------------------------------------------------------------------------
 
 class EpisodeLogger:
     """
@@ -315,17 +150,19 @@ class EpisodeLogger:
     reset_world() is called from end_episode() in a background thread so it
     does not block the ROS spin.
 
-    Parameters (all optional, sensible defaults for simple_data_collection):
+    Parameters:
       log_dir          — output directory (default /tmp/vla_logs)
-      world_name       — Gazebo world name (default simple_data_collection)
-      robot_name       — Gazebo model name (default sobit_home)
-      block_name       — Gazebo model name of the blue block (default box_to_pick)
-      spawn_x/y/z      — robot reset position (default 2.0/-1.5/0.0)
-      spawn_qx/y/z/w   — robot reset orientation (default yaw=π/2)
-      block_x/y/z      — block reset position (default 2.0/-0.5/0.45)
+      world_name       — Gazebo world name ('' = unset)
+      robot_name       — Gazebo model name of the robot ('' = fall detection off)
+      block_name       — Gazebo model name of the tracked object ('' = lift scoring off)
+      spawn_z/block_z  — reset heights; the lift and fall baselines
+      spawn_x/y, spawn_qx/y/z/w, block_x/y — recorded-only. None (the default)
+                          omits the field rather than inventing a pose.
       tilt_threshold_deg — |roll| or |pitch| above this → fallen=True (default 30°)
       episode_timeout_s — auto-terminate after this many sim seconds (default 60)
       lift_success_m    — block lift above this → success_lift (default 0.05)
+      place_z_max_m     — for place mode, the object must also be below
+                          this world z (0 = no height condition)
       success_settle_s  — ignore lift crossings for this long after PLAY, so
                           world-reset settling cannot score a success
                           (default 2.0)
@@ -336,33 +173,64 @@ class EpisodeLogger:
     def __init__(
         self,
         log_dir: str = '/tmp/vla_logs',
-        world_name: str = 'simple_data_collection',
-        robot_name: str = 'sobit_home',
-        block_name: str = 'box_to_pick',
-        spawn_x: float = 2.0,
-        spawn_y: float = -1.5,
+        world_name: str = '',
+        robot_name: str = '',
+        block_name: str = '',
+        # Only the z components are used (lift/fall baselines); x/y/orientation
+        # are recorded-only. None means unknown -- omitted, never invented.
         spawn_z: float = 0.0,
-        spawn_qx: float = 0.0,
-        spawn_qy: float = 0.0,
-        spawn_qz: float = 0.7071,
-        spawn_qw: float = 0.7071,
-        block_x: float = 2.0,
-        block_y: float = -0.5,
-        block_z: float = 0.45,
+        block_z: float = 0.0,
+        spawn_x: Optional[float] = None,
+        spawn_y: Optional[float] = None,
+        spawn_qx: Optional[float] = None,
+        spawn_qy: Optional[float] = None,
+        spawn_qz: Optional[float] = None,
+        spawn_qw: Optional[float] = None,
+        block_x: Optional[float] = None,
+        block_y: Optional[float] = None,
         tilt_threshold_deg: float = 30.0,
         episode_timeout_s: float = 60.0,
         lift_success_m: float = 0.05,
         fall_z_drop_m: float = 0.15,
         success_settle_s: float = 2.0,
+        goal_name: str = '',
+        place_radius_m: float = 0.12,
+        place_settle_s: float = 1.0,
+        place_z_max_m: float = 0.0,
+        drop_abort_s: float = 0.0,
+        drop_abort_z_max_m: float = 0.0,
         enabled: bool = True,
         model_repo_id: str = '',
         sim_enabled: bool = True,
+        joint_groups: Optional[Dict[str, List[str]]] = None,
     ) -> None:
         self._model_repo_id = model_repo_id
+        # {group_name: [joint feature names]} from the robot descriptor; lets
+        # tracking error be reported per group instead of by name prefix.
+        self._joint_groups: Dict[str, List[str]] = dict(joint_groups or {})
         self._log_dir = Path(log_dir)
         self._world_name = world_name
         self._robot_name = robot_name
         self._block_name = block_name
+        # Pick-and-place goal. Empty = lift-only scoring (plain pickup task).
+        self._goal_name = goal_name
+        self._place_radius_m = place_radius_m
+        self._place_settle_s = place_settle_s
+        # Object must also sit below this world z to count as placed
+        # (0 = no height condition). Separates 'in the bin' from
+        # 'on the floor next to the bin'.
+        self._place_z_max_m = place_z_max_m
+        # Early abort: if the object sits below drop_abort_z_max_m and
+        # farther than place_radius_m from the goal continuously for
+        # drop_abort_s, the episode is unrecoverable -- stop waiting.
+        # 0 disables. Measured separation on the can task: true drops
+        # dwell 170-188 s, the worst success only 4.7 s.
+        self._drop_abort_s = drop_abort_s
+        self._drop_abort_z_max_m = drop_abort_z_max_m
+        self._dropped_since: Optional[float] = None
+        self._goal_xy: Optional[tuple] = None
+        self._goal_reached_at: Optional[float] = None
+        self._lifted = False
         self._spawn = (spawn_x, spawn_y, spawn_z, spawn_qx, spawn_qy, spawn_qz, spawn_qw)
         self._block_reset = (block_x, block_y, block_z)
         self._tilt_rad = math.radians(tilt_threshold_deg)
@@ -398,19 +266,22 @@ class EpisodeLogger:
         self._poller_stop = threading.Event()
         self._poller_thread: Optional[threading.Thread] = None
 
-        # On the real robot (sim_enabled=False) there is no Gazebo to poll:
-        # cached poses stay None, so block-lift/fall auto-termination is
-        # unavailable (timeout still works) and per-step block/robot poses
-        # log as null. Skipping the poller avoids 5 Hz failing gz calls.
+        # Real robot (sim_enabled=False): no Gazebo to poll, so poses stay None
+        # (lift/fall auto-term unavailable, timeout still works); skip poller.
         self._sim_enabled = sim_enabled
         if self.enabled:
+            if not log_dir:
+                # An empty log_dir would resolve to '.' and silently write
+                # episode files into the process's current working directory.
+                self._log_dir = Path('/tmp/vla_logs')
+                print(
+                    "[WARN] logging.log_dir is empty -- defaulting to '{}'.".format(
+                        self._log_dir
+                    )
+                )
             self._log_dir.mkdir(parents=True, exist_ok=True)
             if self._sim_enabled:
                 self._start_poller()
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def begin_episode(self) -> None:
         if not self.enabled:
@@ -418,9 +289,9 @@ class EpisodeLogger:
         # Fresh blocking read, not the 200 ms-lagged poller cache: a stale
         # pre-teleport pose makes the reset itself read as a +0.4 m lift.
         block_pose = _gz_get_pose_fast(self._world_name, self._block_name) \
-            if self._sim_enabled else None
+            if (self._sim_enabled and self._block_name) else None
         robot_pose = _gz_get_pose_fast(self._world_name, self._robot_name) \
-            if self._sim_enabled else None
+            if (self._sim_enabled and self._robot_name) else None
 
         # Deviating further than this from the reset height means the read
         # caught the block mid-teleport -- use the configured value instead.
@@ -447,6 +318,11 @@ class EpisodeLogger:
             self._baseline_robot_z = float(robot_pose['z'])
         else:
             self._baseline_robot_z = self._spawn[2]
+        # Goal xy is re-read per episode: randomize may have moved it.
+        self._goal_xy = None
+        self._goal_reached_at = None
+        self._dropped_since = None
+        self._lifted = False
 
         # Seed the cache so the first tick uses post-reset poses.
         with self._pose_lock:
@@ -474,6 +350,10 @@ class EpisodeLogger:
             self._file = open(fname, 'w')  # buffered; flushed on close in end_episode
             sx, sy, sz, sqx, sqy, sqz, sqw = self._spawn
             bx, by, bz = self._block_reset
+            spawn_pose = _known_fields(
+                x=sx, y=sy, z=sz, qx=sqx, qy=sqy, qz=sqz, qw=sqw
+            )
+            block_reset_pose = _known_fields(x=bx, y=by, z=bz)
             meta = {
                 'type': 'meta',
                 'episode': self._episode_idx,
@@ -484,11 +364,9 @@ class EpisodeLogger:
                 'world_name': self._world_name,
                 'robot_name': self._robot_name,
                 'block_name': self._block_name,
-                'spawn_pose': {
-                    'x': sx, 'y': sy, 'z': sz,
-                    'qx': sqx, 'qy': sqy, 'qz': sqz, 'qw': sqw,
-                },
-                'block_reset_pose': {'x': bx, 'y': by, 'z': bz},
+                'spawn_pose': spawn_pose,
+                'block_reset_pose': block_reset_pose,
+                'joint_groups': self._joint_groups or None,
                 'baseline_block_z': round(self._baseline_block_z, 4),
                 'baseline_robot_z': round(self._baseline_robot_z, 4),
                 'thresholds': {
@@ -555,6 +433,7 @@ class EpisodeLogger:
         # ---- Tracking error (commanded - measured) -------------------------
         tracking_error: Optional[Dict[str, float]] = None
         track_abs_mean: Optional[float] = None
+        track_by_group: Optional[Dict[str, float]] = None
         if joints_measured:
             te = {
                 k: joints[k] - joints_measured[k]
@@ -565,6 +444,20 @@ class EpisodeLogger:
                 track_abs_mean = sum(abs(v) for v in te.values()) / len(te)
                 self._track_err_sum += track_abs_mean
                 self._track_err_n += 1
+                # Per-group means, so downstream analysis selects a group by
+                # name instead of guessing joint-name prefixes.
+                track_by_group = {}
+                for group, feats in self._joint_groups.items():
+                    vals = [abs(te[f]) for f in feats if f in te]
+                    if vals:
+                        track_by_group[group] = sum(vals) / len(vals)
+                        self._track_err_group_sum[group] = (
+                            self._track_err_group_sum.get(group, 0.0)
+                            + track_by_group[group]
+                        )
+                        self._track_err_group_n[group] = (
+                            self._track_err_group_n.get(group, 0) + 1
+                        )
 
         # ---- Base speed ----------------------------------------------------
         base_speed = math.hypot(
@@ -607,7 +500,7 @@ class EpisodeLogger:
                 'z': round(ee_z_w, 4),
                 'roll': round(ee_pose[3], 4),
                 'pitch': round(ee_pose[4], 4),
-                'yaw': round(_wrap_pi(ee_pose[5] + yaw), 4),
+                'yaw': round(wrap_pi(ee_pose[5] + yaw), 4),
             }
         if ee_world is not None and block_pose is not None:
             dx = block_pose['x'] - ee_x_w
@@ -652,6 +545,10 @@ class EpisodeLogger:
             ),
             'track_abs_mean': (
                 round(track_abs_mean, 5) if track_abs_mean is not None else None
+            ),
+            'track_abs_mean_by_group': (
+                {k: round(v, 5) for k, v in track_by_group.items()}
+                if track_by_group else None
             ),
             'base_vel': {k: round(v, 5) for k, v in base_vel.items()},
             'base_speed': round(base_speed, 5),
@@ -698,12 +595,10 @@ class EpisodeLogger:
             robot_pose = dict(self._cached_robot_pose) if self._cached_robot_pose else None
             block_pose = dict(self._cached_block_pose) if self._cached_block_pose else None
 
-        # The tick that triggers termination returns before log_step runs, so
-        # fold the evaluated poses into the accumulators here — otherwise the
-        # summary misses the terminal instant (e.g. the peak lift that crossed
-        # the success threshold).
-        # Success: block lifted clear of its start height.
+        # Fold poses into accumulators here: this tick returns before log_step
+        # runs, so the summary would otherwise miss the terminal instant.
         if block_pose is not None:
+            # Success: block lifted clear of its start height.
             lift = block_pose['z'] - self._baseline_block_z
             if lift > self._max_block_lift:
                 self._max_block_lift = lift
@@ -711,10 +606,53 @@ class EpisodeLogger:
             # A crossing this early is reset settling, not a pick: real picks
             # took 30-45 s, the observed false positive fired at 0.84 s.
             settled = elapsed_sim_s >= self._success_settle_s
-            if lift > self._lift_success_m and settled:
-                if self._time_to_success is None:
-                    self._time_to_success = elapsed_sim_s
-                return 'success_lift'
+            # Use the running MAX lift: a shelf -> floor-bin placement ends
+            # far below its start height, so the instantaneous lift is
+            # negative by the time the object reaches the goal.
+            if self._max_block_lift > self._lift_success_m and settled:
+                self._lifted = True
+                # Pickup-only task: the lift itself is the success criterion.
+                if not self._goal_name:
+                    if self._time_to_success is None:
+                        self._time_to_success = elapsed_sim_s
+                    return 'success_lift'
+
+            # Pick-and-place: the object must reach the goal AND stay there,
+            # so a fly-through on the way past does not score.
+            if self._goal_name and self._lifted and settled:
+                if self._goal_xy is None:
+                    goal = gz_get_pose(self._world_name, self._goal_name)
+                    if goal is not None:
+                        self._goal_xy = (goal['x'], goal['y'])
+                if self._goal_xy is not None:
+                    dist = math.hypot(
+                        block_pose['x'] - self._goal_xy[0],
+                        block_pose['y'] - self._goal_xy[1],
+                    )
+                    low_enough = (self._place_z_max_m <= 0.0
+                                  or block_pose['z'] <= self._place_z_max_m)
+                    if dist <= self._place_radius_m and low_enough:
+                        if self._goal_reached_at is None:
+                            self._goal_reached_at = elapsed_sim_s
+                        elif elapsed_sim_s - self._goal_reached_at >= self._place_settle_s:
+                            if self._time_to_success is None:
+                                self._time_to_success = elapsed_sim_s
+                            return 'success_place'
+                    else:
+                        self._goal_reached_at = None
+
+                    # Early abort: object at rest low and away from the goal.
+                    if self._drop_abort_s > 0.0 and self._lifted:
+                        low = (self._drop_abort_z_max_m <= 0.0
+                               or block_pose['z'] <= self._drop_abort_z_max_m)
+                        if low and dist > self._place_radius_m:
+                            if self._dropped_since is None:
+                                self._dropped_since = elapsed_sim_s
+                            elif (elapsed_sim_s - self._dropped_since
+                                    >= self._drop_abort_s):
+                                return 'dropped'
+                        else:
+                            self._dropped_since = None
 
         # Failure: the robot tipped over or dropped in world-z.
         if robot_pose is not None:
@@ -751,6 +689,11 @@ class EpisodeLogger:
                 self._track_err_sum / self._track_err_n
                 if self._track_err_n else None
             )
+            mean_track_err_by_group = {
+                g: round(s / self._track_err_group_n[g], 5)
+                for g, s in self._track_err_group_sum.items()
+                if self._track_err_group_n.get(g)
+            } or None
             summary = {
                 'type': 'summary',
                 'outcome': outcome,
@@ -780,6 +723,7 @@ class EpisodeLogger:
                 'mean_abs_tracking_error': (
                     round(mean_track_err, 5) if mean_track_err is not None else None
                 ),
+                'mean_abs_tracking_error_by_group': mean_track_err_by_group,
             }
             self._write(summary)
             if self._file:
@@ -791,10 +735,6 @@ class EpisodeLogger:
         self._poller_stop.set()
         if self._poller_thread is not None:
             self._poller_thread.join(timeout=2.0)
-
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
 
     def _reset_accumulators(self) -> None:
         """Reset per-episode aggregate metrics. Called from begin_episode."""
@@ -809,6 +749,8 @@ class EpisodeLogger:
         self._base_speed_n = 0
         self._track_err_sum = 0.0
         self._track_err_n = 0
+        self._track_err_group_sum: Dict[str, float] = {}
+        self._track_err_group_n: Dict[str, int] = {}
         self._time_to_success: Optional[float] = None
 
     def _start_poller(self) -> None:

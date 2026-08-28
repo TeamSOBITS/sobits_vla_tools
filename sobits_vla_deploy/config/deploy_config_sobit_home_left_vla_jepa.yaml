@@ -41,25 +41,27 @@
       debug: false
 
     logging:
-      # Episode evaluation logging. The vla_experiment.launch.py overrides
-      # enabled/log_dir per model run; these are the defaults for plain deploy.
+      # Where episodes are recorded.
       enabled: false
       log_dir: ""
-      tilt_threshold_deg: 30.0
-      # Automatic episode termination thresholds.
-      episode_timeout_s: 60.0   # stop after 60 sim seconds
-      lift_success_m: 0.05      # block lifted > 5 cm -> success
-      # Ignore lift crossings for the first 2 s: reset settling is not a pick.
-      success_settle_s: 2.0
-      fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
 
-    reset:
-      pose_name: "initial_pose"
-      duration_s: 1.5
-      action_name: "/sobit_home/move_to_pose"
+    task:
+      # Selects which block below defines success.
+      mode: pick
 
-    sim:
-      robot_model_name: sobit_home
+      # Applies to every mode.
+      common:
+        robot_model_name: sobit_home
+        tracked_model_name: box_to_pick
+        episode_timeout_s: 60.0
+        success_settle_s: 2.0
+        tilt_threshold_deg: 30.0
+        fall_z_drop_m: 0.15
+
+      # success_lift once tracked_model rises lift_success_m.
+      pick:
+        lift_success_m: 0.05
+
 
     robot:
       # sobit_home_frozen is the only 19-dim descriptor (head 2 + body 1 +
@@ -67,12 +69,8 @@
       # Plain sobit_home carries an extra arm_left_lower_flex_joint (20-dim),
       # which would shift every index under positional mapping.
       descriptor_id: sobit_home_frozen
-      active_groups:
-        - head
-        - body
-        - arm_left
-        - hand_left
-      active_cameras:
-        - head_camera
-        - hand_left_camera
-      active_mobile_base: true
+      exclude:
+        groups: []
+        cameras: []
+        ee_poses: []
+        mobile_base: false

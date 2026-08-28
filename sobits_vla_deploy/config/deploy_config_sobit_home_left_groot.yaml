@@ -47,25 +47,29 @@
       inference_delay: 5
       debug: false
 
-    reset:
-      action_name: "/sobit_home/move_to_pose"
 
-    sim:
-      robot_model_name: sobit_home
+    task:
+      # Selects which block below defines success.
+      mode: pick
+
+      # Applies to every mode.
+      common:
+        robot_model_name: sobit_home
+        tracked_model_name: box_to_pick
+
+      # success_lift once tracked_model rises lift_success_m.
+      pick:
+        lift_success_m: 0.05
 
     robot:
       # Morphology (joint groups, command topics, joints, max_joint_delta,
       # mobile_base, cameras) is loaded from the shared robot descriptor:
       #   sobits_vla_common/robots/sobit_home.robot.yaml
-      # active_groups / active_cameras / active_mobile_base select the subset
-      # used for this task (left-arm pickup) without re-listing joints/topics.
+      # exclude trims it to the subset this task uses (left-arm pickup)
+      # without re-listing joints/topics. Unknown names raise.
       descriptor_id: sobit_home
-      active_groups:
-        - head
-        - body
-        - arm_left
-        - hand_left
-      active_cameras:
-        - head_camera
-        - hand_left_camera
-      active_mobile_base: true
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        cameras: ["hand_right_camera"]
+        ee_poses: ["right"]
+        mobile_base: false

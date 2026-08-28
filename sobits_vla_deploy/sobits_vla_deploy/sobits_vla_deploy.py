@@ -37,18 +37,13 @@ from typing import Any, Dict, List, Optional  # noqa: E402
 from builtin_interfaces.msg import Duration  # noqa: E402
 from geometry_msgs.msg import Twist  # noqa: E402
 from nav_msgs.msg import Odometry  # noqa: E402
-import numpy as np  # noqa: E402
 import rclpy  # noqa: E402
-from rclpy.action import ActionClient  # noqa: E402
 from rclpy.callback_groups import ReentrantCallbackGroup  # noqa: E402
-import rclpy.duration  # noqa: E402
 from rclpy.executors import MultiThreadedExecutor  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 from rclpy.qos import QoSProfile, ReliabilityPolicy  # noqa: E402
-import rclpy.time  # noqa: E402
 from sensor_msgs.msg import CompressedImage, Image, JointState, Joy  # noqa: E402
-from sobits_interfaces.action import MoveToPose  # noqa: E402
-from sobits_interfaces.srv import VlaCommand, VlaUpdateTask  # noqa: E402
+from sobits_interfaces.srv import VlaCommand, VlaResetWorld, VlaUpdateTask  # noqa: E402
 from sobits_vla_common import runtime_deps  # noqa: E402
 from sobits_vla_common.image_codec import decode_image_message  # noqa: E402
 from sobits_vla_common.lerobot_compat import apply_deploy_patches  # noqa: E402
@@ -95,6 +90,8 @@ class LeRobotDeployNode(Node):
 
         self._cb_group = ReentrantCallbackGroup()
         self._lock = Lock()
+        self._reset_lock = Lock()
+        self._episode_start_lock = Lock()
 
         self._configure_parameters()
         self._load_robot_profile()
@@ -219,10 +216,8 @@ class LeRobotDeployNode(Node):
                 callback_group=self._cb_group,
             )
 
-        # Camera drivers (orbbec, realsense, ...) publish sensor data
-        # BEST_EFFORT. A RELIABLE subscriber is an incompatible QoS match and
-        # silently receives NOTHING -- no error, no callback, just a policy
-        # that never sees an image. Sensor QoS is required here.
+        # Camera drivers publish BEST_EFFORT; a RELIABLE subscriber is an
+        # incompatible QoS match and silently gets nothing — no error at all.
         image_qos = QoSProfile(depth=1)
         image_qos.reliability = ReliabilityPolicy.BEST_EFFORT
 
@@ -286,6 +281,9 @@ class LeRobotDeployNode(Node):
             max_vel_x=self._max_vel_x,
             max_vel_y=self._max_vel_y,
             max_vel_theta=self._max_vel_theta,
+            max_vel_z=self._max_vel_z,
+            linear_deadband=self._base_linear_deadband,
+            angular_deadband=self._base_angular_deadband,
             step_duration=self._step_duration,
             logger=self.get_logger(),
         )
@@ -306,40 +304,40 @@ class LeRobotDeployNode(Node):
             ee_poses=[(ee.name, ee.source_frame, ee.target_frame) for ee in self._ee_poses],
         )
 
-        sx, sy, sz, sqx, sqy, sqz, sqw = self._sim_spawn
-        bx, by, bz = self._sim_block_reset
         self._episode_logger = EpisodeLogger(
             log_dir=self._log_dir,
-            world_name=self._sim_world_name,
-            robot_name=self._sim_robot_model,
-            block_name=self._sim_block_model,
-            spawn_x=sx, spawn_y=sy, spawn_z=sz,
-            spawn_qx=sqx, spawn_qy=sqy, spawn_qz=sqz, spawn_qw=sqw,
-            block_x=bx, block_y=by, block_z=bz,
+            world_name=self._log_world_name,
+            robot_name=self._log_robot_model,
+            block_name=self._log_tracked_model,
+            spawn_z=self._log_robot_spawn_z,
+            block_z=self._log_tracked_z,
             tilt_threshold_deg=self._log_tilt_deg,
             episode_timeout_s=self._episode_timeout_s,
             lift_success_m=self._lift_success_m,
             success_settle_s=self._success_settle_s,
+            goal_name=self._log_goal_model,
+            place_radius_m=self._log_place_radius_m,
+            place_settle_s=self._log_place_settle_s,
+            place_z_max_m=self._log_place_z_max_m,
+            drop_abort_s=self._log_drop_abort_s,
+            drop_abort_z_max_m=self._log_drop_abort_z_max_m,
             fall_z_drop_m=self._fall_z_drop_m,
             enabled=self._logging_enabled,
             model_repo_id=self._model_repo_id,
             sim_enabled=self._sim_enabled,
+            joint_groups={g.name: list(g.features) for g in self._joint_groups},
         )
         if self._logging_enabled:
             self.get_logger().info(
                 'Episode logging enabled → {}'.format(self._log_dir)
             )
 
-        # Reset pose action client — callbacks run on the node's reentrant
-        # group, served by the spinning MultiThreadedExecutor, so the reset
-        # worker thread can block on the futures safely.
-        self._reset_pose_client = ActionClient(
-            self, MoveToPose, self._reset_action_name,
+        # world_reset_node owns teleports + arm reset-pose. Callback runs on
+        # the reentrant group so the reset worker thread can block safely.
+        self._reset_world_client = self.create_client(
+            VlaResetWorld, self._reset_world_service,
             callback_group=self._cb_group,
         )
-        # Lazy ros_gz SetEntityPose client (sim teleports); falls back to
-        # the gz CLI when the bridge doesn't expose the service.
-        self._set_pose_client = None
 
         # Deadman safety trigger state (Joy timestamped with a monotonic
         # clock so a paused sim can't keep a stale press alive).
@@ -408,10 +406,9 @@ class LeRobotDeployNode(Node):
         self.declare_parameter('rtc.inference_delay', 4)
         self.declare_parameter('rtc.debug', False)
 
-        # Gamepad input arrives via the shared GamepadClient node
-        # (sobits_vla_common), which calls the VlaCommand service below.
-        # This node no longer subscribes to /joy directly.
-        self.declare_parameter('gamepad.command_service', '/vla/command')
+        # Gamepad input arrives via the shared GamepadClient node, which
+        # calls the VlaCommand service below; no direct /joy subscription.
+        self.declare_parameter('gamepad.command_service', '/vla/deploy_command')
 
         self._model_repo_id = str(self.get_parameter('model.repo_id').value)
         if not self._model_repo_id:
@@ -461,105 +458,140 @@ class LeRobotDeployNode(Node):
             self.get_parameter('gamepad.command_service').value
         )
 
-        # Episode logging parameters
+        # Where episodes are recorded.
         self.declare_parameter('logging.enabled', False)
         self.declare_parameter('logging.log_dir', '/tmp/vla_logs')
-        self.declare_parameter('logging.tilt_threshold_deg', 30.0)
-        # Automatic episode termination thresholds.
-        self.declare_parameter('logging.episode_timeout_s', 60.0)
-        self.declare_parameter('logging.lift_success_m', 0.05)
-        # Grace period after PLAY during which a lift crossing is ignored, so
-        # the world reset settling cannot be scored as a pick.
-        self.declare_parameter('logging.success_settle_s', 2.0)
-        self.declare_parameter('logging.fall_z_drop_m', 0.15)
 
-        # Simulation reset parameters
-        # Reset motion (applies in sim AND on the real robot): move to a
-        # predefined pose via the action server with the given duration.
-        self.declare_parameter('reset.pose_name', 'initial_pose')
-        # Time allowance handed to the action for the reset motion — raise
-        # on the real robot where fast transitions are unsafe.
-        self.declare_parameter('reset.duration_s', 1.5)
-        self.declare_parameter('reset.action_name', '')
+        # task.mode picks which block defines success; task.common holds what
+        # every mode needs. Only the selected mode's block is read.
+        self.declare_parameter('task.mode', 'pick')
+        self.declare_parameter('task.common.tilt_threshold_deg', 30.0)
+        self.declare_parameter('task.common.episode_timeout_s', 60.0)
+        # Grace period after PLAY during which a success crossing is ignored,
+        # so the world reset settling cannot be scored as a pick.
+        self.declare_parameter('task.common.success_settle_s', 2.0)
+        self.declare_parameter('task.common.fall_z_drop_m', 0.15)
 
-        # Deadman safety trigger (real robot): generated actions are only
-        # commanded while the trigger is held. Values come from the shared
-        # gamepad_config.yaml; index follows the GamepadClient convention
-        # (negative = axis with >0.5 pressed, non-negative = button).
-        self.declare_parameter('gamepad.safety.enabled', False)
-        self.declare_parameter('gamepad.safety.trigger_index', -4)
-        self.declare_parameter('gamepad.safety.joy_timeout_s', 0.5)
-        self.declare_parameter('sim.world_name', 'simple_data_collection')
-        self.declare_parameter('sim.robot_model_name', '')
-        self.declare_parameter('sim.block_model_name', 'box_to_pick')
-        self.declare_parameter('sim.spawn_x', 2.0)
-        self.declare_parameter('sim.spawn_y', -1.5)
-        self.declare_parameter('sim.spawn_z', 0.0)
-        self.declare_parameter('sim.spawn_qx', 0.0)
-        self.declare_parameter('sim.spawn_qy', 0.0)
-        self.declare_parameter('sim.spawn_qz', 0.7071)
-        self.declare_parameter('sim.spawn_qw', 0.7071)
-        self.declare_parameter('sim.block_x', 2.0)
-        self.declare_parameter('sim.block_y', -0.5)
-        self.declare_parameter('sim.block_z', 0.45)
+        # World reset: delegated to the shared world_reset_node, which owns
+        # the scene teleports and the arm reset-pose action.
+        self.declare_parameter('reset.world_service', '/world_reset_node/reset_world')
+        # Scene preset to request. Empty defers to the reset node's
+        # world_reset.active_preset; set this only to override it here.
+        self.declare_parameter('reset.preset', '')
+        # Keep above the reset node's worst case, else resets overlap.
+        self.declare_parameter('reset.timeout_s', 45.0)
+
+        # Deadman trigger (real robot): actions commanded only while held.
+        # Index follows GamepadClient convention: negative = axis >0.5, else button.
+        self.declare_parameter('gamepad.controller', 'quest')
+        safety_ns = 'gamepad.{}.button_mapping.deploy.safety'.format(
+            str(self.get_parameter('gamepad.controller').value)
+        )
+        self.declare_parameter(safety_ns + '.enabled', False)
+        self.declare_parameter(safety_ns + '.trigger_index', -4)
+        self.declare_parameter(safety_ns + '.joy_timeout_s', 0.5)
+        # world_reset scene YAML is the single source of truth for world name
+        # and rest poses; the logger reads baselines from there to avoid drift.
+        self.declare_parameter('logging.scene_config', '')
+        self.declare_parameter('logging.scene_preset', 'default')
+        self.declare_parameter('task.common.robot_model_name', '')
+        self.declare_parameter('task.common.tracked_model_name', '')
+        # Per-mode blocks. lift_success_m appears in both: 'place' needs a
+        # lift before the object can count as placed.
+        self.declare_parameter('task.pick.lift_success_m', 0.05)
+        self.declare_parameter('task.place.lift_success_m', 0.05)
+        self.declare_parameter('task.place.goal_model_name', '')
+        self.declare_parameter('task.place.place_radius_m', 0.12)
+        self.declare_parameter('task.place.place_settle_s', 1.0)
+        # Object must also be below this world z to count as placed
+        # (0 = no height condition). Distinguishes 'in the bin' from
+        # 'on the floor beside it' when the goal is a container.
+        self.declare_parameter('task.place.place_z_max_m', 0.0)
+        # Abort an episode whose object is lying low and away from the
+        # goal for this long (sim seconds). 0 disables.
+        self.declare_parameter('task.place.drop_abort_s', 0.0)
+        self.declare_parameter('task.place.drop_abort_z_max_m', 0.0)
 
         self._logging_enabled = bool(self.get_parameter('logging.enabled').value)
         self._log_dir = str(self.get_parameter('logging.log_dir').value)
-        self._log_tilt_deg = float(self.get_parameter('logging.tilt_threshold_deg').value)
+        self._log_tilt_deg = float(
+            self.get_parameter('task.common.tilt_threshold_deg').value
+        )
         self._episode_timeout_s = float(
-            self.get_parameter('logging.episode_timeout_s').value
+            self.get_parameter('task.common.episode_timeout_s').value
         )
-        self._lift_success_m = float(self.get_parameter('logging.lift_success_m').value)
         self._success_settle_s = float(
-            self.get_parameter('logging.success_settle_s').value
+            self.get_parameter('task.common.success_settle_s').value
         )
-        self._fall_z_drop_m = float(self.get_parameter('logging.fall_z_drop_m').value)
-        # Sim vs real is derived from use_sim_time (set true by the sim
-        # launches): in sim, world resets also teleport robot+block via
-        # Gazebo and the episode logger polls gz poses; on the real robot
-        # only the reset pose motion runs.
+        self._fall_z_drop_m = float(
+            self.get_parameter('task.common.fall_z_drop_m').value
+        )
+        # Sim vs real from use_sim_time: in sim the reset node teleports and
+        # the logger polls gz poses; on real hardware the operator re-stages it.
         self._sim_enabled = bool(self.get_parameter('use_sim_time').value)
-        self._reset_pose_name = str(self.get_parameter('reset.pose_name').value)
-        self._reset_pose_duration_s = float(
-            self.get_parameter('reset.duration_s').value
+        self._reset_world_service = str(self.get_parameter('reset.world_service').value)
+        self._reset_preset = str(self.get_parameter('reset.preset').value or '')
+        self._reset_timeout_s = float(self.get_parameter('reset.timeout_s').value)
+        safety_ns = 'gamepad.{}.button_mapping.deploy.safety'.format(
+            str(self.get_parameter('gamepad.controller').value)
         )
-        self._reset_action_name = str(self.get_parameter('reset.action_name').value)
-        # Reset runs on every STOP -- required, no robot-specific default.
-        if not self._reset_action_name:
-            raise RuntimeError(
-                'reset.action_name is required -- refusing to default to a '
-                'robot-specific value.'
-            )
-        self._safety_enabled = bool(self.get_parameter('gamepad.safety.enabled').value)
+        self._safety_enabled = bool(
+            self.get_parameter(safety_ns + '.enabled').value
+        )
         self._safety_trigger_index = int(
-            self.get_parameter('gamepad.safety.trigger_index').value
+            self.get_parameter(safety_ns + '.trigger_index').value
         )
         self._safety_joy_timeout_s = float(
-            self.get_parameter('gamepad.safety.joy_timeout_s').value
+            self.get_parameter(safety_ns + '.joy_timeout_s').value
         )
-        self._sim_world_name = str(self.get_parameter('sim.world_name').value)
-        self._sim_robot_model = str(self.get_parameter('sim.robot_model_name').value)
-        if self._sim_enabled and not self._sim_robot_model:
+        # Optional: without it, fall detection is unavailable but the EE-frame
+        # metrics and lift/place scoring still work.
+        self._log_robot_model = str(
+            self.get_parameter('task.common.robot_model_name').value
+        )
+        self._log_tracked_model = str(
+            self.get_parameter('task.common.tracked_model_name').value
+        )
+        # Only the selected mode's block is read, so a stale goal under
+        # task.place can't leak into 'pick'. Unknown mode is a config error.
+        self._task_mode = str(self.get_parameter('task.mode').value).strip().lower()
+        if self._task_mode not in ('pick', 'place'):
             raise RuntimeError(
-                'sim.robot_model_name is required when running in sim -- '
-                'refusing to default to a robot-specific value.'
+                'task.mode must be "pick" or "place", got {!r}.'.format(
+                    self._task_mode
+                )
             )
-        self._sim_block_model = str(self.get_parameter('sim.block_model_name').value)
-        self._sim_spawn = (
-            float(self.get_parameter('sim.spawn_x').value),
-            float(self.get_parameter('sim.spawn_y').value),
-            float(self.get_parameter('sim.spawn_z').value),
-            float(self.get_parameter('sim.spawn_qx').value),
-            float(self.get_parameter('sim.spawn_qy').value),
-            float(self.get_parameter('sim.spawn_qz').value),
-            float(self.get_parameter('sim.spawn_qw').value),
+        self._lift_success_m = float(
+            self.get_parameter(
+                'task.{}.lift_success_m'.format(self._task_mode)
+            ).value
         )
-        self._sim_block_reset = (
-            float(self.get_parameter('sim.block_x').value),
-            float(self.get_parameter('sim.block_y').value),
-            float(self.get_parameter('sim.block_z').value),
+        self._log_goal_model = ''
+        self._log_place_radius_m = float(
+            self.get_parameter('task.place.place_radius_m').value
         )
-
+        self._log_place_z_max_m = float(
+            self.get_parameter('task.place.place_z_max_m').value
+        )
+        self._log_drop_abort_s = float(
+            self.get_parameter('task.place.drop_abort_s').value
+        )
+        self._log_drop_abort_z_max_m = float(
+            self.get_parameter('task.place.drop_abort_z_max_m').value
+        )
+        self._log_place_settle_s = float(
+            self.get_parameter('task.place.place_settle_s').value
+        )
+        if self._task_mode == 'place':
+            self._log_goal_model = str(
+                self.get_parameter('task.place.goal_model_name').value
+            )
+            if not self._log_goal_model:
+                raise RuntimeError(
+                    'task.mode is "place" but task.place.goal_model_name is '
+                    'unset -- there is nothing to place into.'
+                )
+        self._load_scene_baselines()
         self._actions_per_chunk = max(self._actions_per_chunk, 1)
         self._control_hz = max(self._control_hz, 1.0)
         self._chunk_size_threshold = min(max(self._chunk_size_threshold, 0.0), 1.0)
@@ -571,22 +603,32 @@ class LeRobotDeployNode(Node):
 
         if not desc_id:
             raise RuntimeError(
-                'robot.descriptor_id, robot.name, and robot.active_profile '
-                'are all unset -- refusing to default to a robot-specific '
-                'profile.'
+                'robot.descriptor_id is unset -- refusing to default to a '
+                'robot-specific profile. Set it to a descriptor id under '
+                'sobits_vla_common/robots/<id>.robot.yaml.'
             )
 
         from sobits_vla_common.robot_descriptor import load_robot_descriptor
         desc = load_robot_descriptor(desc_id)
         self._active_profile = desc_id
 
-        self.declare_parameter('robot.active_groups', [g.name for g in desc.active_groups])
-        self.declare_parameter('robot.active_cameras', [c.name for c in desc.active_cameras])
-        self.declare_parameter('robot.active_mobile_base', True)
+        # Trim the shared descriptor to the subset this model drives. Unknown
+        # names raise, so a typo fails loudly instead of running a wrong body.
+        self.declare_parameter('robot.exclude.groups', [''])
+        self.declare_parameter('robot.exclude.cameras', [''])
+        self.declare_parameter('robot.exclude.ee_poses', [''])
+        self.declare_parameter('robot.exclude.mobile_base', False)
 
-        active_groups_list = list(self.get_parameter('robot.active_groups').value)
-        active_cameras_list = list(self.get_parameter('robot.active_cameras').value)
-        active_mobile_base = bool(self.get_parameter('robot.active_mobile_base').value)
+        desc = desc.filtered(
+            exclude_groups=self._str_list('robot.exclude.groups'),
+            exclude_cameras=self._str_list('robot.exclude.cameras'),
+            exclude_ee_poses=self._str_list('robot.exclude.ee_poses'),
+        )
+        active_groups_list = [g.name for g in desc.active_groups]
+        active_cameras_list = [c.name for c in desc.active_cameras]
+        active_mobile_base = not bool(
+            self.get_parameter('robot.exclude.mobile_base').value
+        )
 
         self._joint_states_topic = desc.joint_states_topic
         self._joint_groups = []
@@ -618,6 +660,9 @@ class LeRobotDeployNode(Node):
             self._max_vel_x = desc.mobile_base.max_vel_x
             self._max_vel_y = desc.mobile_base.max_vel_y
             self._max_vel_theta = desc.mobile_base.max_vel_theta
+            self._max_vel_z = desc.mobile_base.max_vel_z
+            self._base_linear_deadband = desc.mobile_base.linear_deadband
+            self._base_angular_deadband = desc.mobile_base.angular_deadband
         else:
             self._odom_topic = ''
             self._mobile_base_cmd_topic = ''
@@ -625,6 +670,9 @@ class LeRobotDeployNode(Node):
             self._max_vel_x = 0.0
             self._max_vel_y = 0.0
             self._max_vel_theta = 0.0
+            self._max_vel_z = 0.0
+            self._base_linear_deadband = 0.0
+            self._base_angular_deadband = 0.0
 
         self._relative_exclude_features = desc.relative_exclude_features(
             active_groups=active_groups_list,
@@ -646,6 +694,76 @@ class LeRobotDeployNode(Node):
                     self._camera_topics[cam.name] = cam.raw_topic
                     self._camera_compressed[cam.name] = False
                 self._camera_encodings[cam.name] = cam.encoding if cam.encoding else 'rgb8'
+
+    def _load_scene_baselines(self) -> None:
+        """
+        Read world name and rest heights from the world_reset scene YAML.
+
+        Sharing that file with world_reset_node keeps the lift/fall baselines
+        pinned to the same poses the reset teleports to. Required whenever
+        episode logging runs against Gazebo: a guessed baseline silently
+        mis-scores lift-success and fall termination for every episode.
+        """
+        # Placeholders only: any run that actually scores lifts overwrites
+        # these from the scene YAML or raises below.
+        self._log_world_name = ''
+        self._log_tracked_z = 0.0
+        self._log_robot_spawn_z = 0.0
+
+        # Baselines are read from Gazebo poses, so they only matter for a
+        # logged sim run; a real-robot or logging-off run needs no scene.
+        scoring_required = self._logging_enabled and self._sim_enabled
+
+        path = str(self.get_parameter('logging.scene_config').value)
+        if not path or not os.path.isfile(path):
+            if scoring_required:
+                raise RuntimeError(
+                    'logging.enabled=true with use_sim_time=true but '
+                    'logging.scene_config is {} -- refusing to score episodes '
+                    'against a guessed lift baseline. Point it at the '
+                    'world_reset scene YAML used for this run.'.format(
+                        'unset' if not path else '{!r} (not found)'.format(path)
+                    )
+                )
+            return
+
+        import yaml
+        with open(path, 'r') as f:
+            params = (yaml.safe_load(f) or {}).get('/**', {}).get(
+                'ros__parameters', {})
+        scene = params.get('world_reset', {})
+        self._log_world_name = str(scene.get('world_name', self._log_world_name))
+
+        preset_name = str(self.get_parameter('logging.scene_preset').value)
+        preset = scene.get(preset_name, {})
+        for name, attr in (
+            (self._log_tracked_model, '_log_tracked_z'),
+            (self._log_robot_model, '_log_robot_spawn_z'),
+        ):
+            pose = (preset.get(name) or {}).get('pose') if name else None
+            if pose is None or 'z' not in pose:
+                if scoring_required and name:
+                    raise RuntimeError(
+                        'Model {!r} has no pose.z in scene preset {!r} of {} -- '
+                        'cannot derive a lift/fall baseline.'.format(
+                            name, preset_name, os.path.basename(path)
+                        )
+                    )
+                continue
+            setattr(self, attr, float(pose['z']))
+
+        self.get_logger().info(
+            'Logger baselines from {}: world={!r}, {}.z={:.4f}, {}.z={:.4f}'.format(
+                os.path.basename(path), self._log_world_name,
+                self._log_tracked_model, self._log_tracked_z,
+                self._log_robot_model, self._log_robot_spawn_z,
+            )
+        )
+
+    def _str_list(self, name: str) -> List[str]:
+        """Read a string-array parameter, dropping the empty-default sentinel."""
+        raw = self.get_parameter(name).get_parameter_value().string_array_value
+        return [s for s in raw if s]
 
     def _on_set_parameters(self, params: List[Any]) -> Any:
         from rcl_interfaces.msg import SetParametersResult
@@ -695,36 +813,36 @@ class LeRobotDeployNode(Node):
                 self._logging_enabled = bool(p.value)
                 self._episode_logger.enabled = self._logging_enabled
                 self.get_logger().info('logging.enabled → {}'.format(self._logging_enabled))
-            elif p.name == 'logging.tilt_threshold_deg':
+            elif p.name == 'task.common.tilt_threshold_deg':
                 import math as _math
                 self._log_tilt_deg = float(p.value)
                 self._episode_logger._tilt_rad = _math.radians(self._log_tilt_deg)
                 self.get_logger().info(
-                    'logging.tilt_threshold_deg → {}'.format(self._log_tilt_deg)
+                    'task.common.tilt_threshold_deg → {}'.format(self._log_tilt_deg)
                 )
-            elif p.name == 'logging.episode_timeout_s':
+            elif p.name == 'task.common.episode_timeout_s':
                 self._episode_timeout_s = float(p.value)
                 self._episode_logger._episode_timeout_s = self._episode_timeout_s
                 self.get_logger().info(
-                    'logging.episode_timeout_s → {}'.format(self._episode_timeout_s)
+                    'task.common.episode_timeout_s → {}'.format(self._episode_timeout_s)
                 )
-            elif p.name == 'logging.lift_success_m':
+            elif p.name == 'task.{}.lift_success_m'.format(self._task_mode):
                 self._lift_success_m = float(p.value)
                 self._episode_logger._lift_success_m = self._lift_success_m
                 self.get_logger().info(
-                    'logging.lift_success_m → {}'.format(self._lift_success_m)
+                    'task.{}.lift_success_m → {}'.format(self._task_mode, self._lift_success_m)
                 )
-            elif p.name == 'logging.success_settle_s':
+            elif p.name == 'task.common.success_settle_s':
                 self._success_settle_s = float(p.value)
                 self._episode_logger._success_settle_s = self._success_settle_s
                 self.get_logger().info(
-                    'logging.success_settle_s → {}'.format(self._success_settle_s)
+                    'task.common.success_settle_s → {}'.format(self._success_settle_s)
                 )
-            elif p.name == 'logging.fall_z_drop_m':
+            elif p.name == 'task.common.fall_z_drop_m':
                 self._fall_z_drop_m = float(p.value)
                 self._episode_logger._fall_z_drop_m = self._fall_z_drop_m
                 self.get_logger().info(
-                    'logging.fall_z_drop_m → {}'.format(self._fall_z_drop_m)
+                    'task.common.fall_z_drop_m → {}'.format(self._fall_z_drop_m)
                 )
         return SetParametersResult(successful=True)
 
@@ -761,120 +879,51 @@ class LeRobotDeployNode(Node):
         future.add_done_callback(lambda _f: done.set())
         return done.wait(timeout=timeout_s)
 
-    def _set_entity_pose(
-        self, name: str,
-        x: float, y: float, z: float,
-        qx: float, qy: float, qz: float, qw: float,
-    ) -> bool:
-        """
-        Teleport a Gazebo entity.
-
-        Prefers the bridged ros_gz SetEntityPose service
-        (/world/<world>/set_pose); falls back to the `gz service` CLI when
-        the bridge does not expose it.
-        """
-        try:
-            from ros_gz_interfaces.msg import Entity
-            from ros_gz_interfaces.srv import SetEntityPose
-
-            if self._set_pose_client is None:
-                self._set_pose_client = self.create_client(
-                    SetEntityPose,
-                    '/world/{}/set_pose'.format(self._sim_world_name),
-                    callback_group=self._cb_group,
-                )
-            if self._set_pose_client.wait_for_service(timeout_sec=1.0):
-                req = SetEntityPose.Request()
-                req.entity = Entity(name=name, type=Entity.MODEL)
-                req.pose.position.x = float(x)
-                req.pose.position.y = float(y)
-                req.pose.position.z = float(z)
-                req.pose.orientation.x = float(qx)
-                req.pose.orientation.y = float(qy)
-                req.pose.orientation.z = float(qz)
-                req.pose.orientation.w = float(qw)
-                fut = self._set_pose_client.call_async(req)
-                if self._wait_future(fut, timeout_s=3.0) and fut.result() is not None:
-                    return bool(fut.result().success)
-                self.get_logger().warn(
-                    'SetEntityPose service call timed out — falling back to gz CLI.'
-                )
-        except ImportError:
-            pass
-        from sobits_vla_deploy.vla_episode_logger import _gz_set_pose
-        return _gz_set_pose(self._sim_world_name, name, x, y, z, qx, qy, qz, qw)
-
     def _do_world_reset(self, outcome: Optional[str] = None) -> None:
-        """Reset the scene: teleports (sim only), then the reset pose action."""
-        try:
-            self._run_world_reset()
-        finally:
-            if outcome is not None:
-                self._publish_episode_done(outcome)
+        """
+        Reset the scene via the shared world_reset_node; blocking.
+
+        Serialized: a second reset landing mid-flight would race the first on
+        the same set_pose service and both would report failures.
+        """
+        with self._reset_lock:
+            try:
+                self._run_world_reset()
+            finally:
+                if outcome is not None:
+                    self._publish_episode_done(outcome)
 
     def _run_world_reset(self) -> None:
-        """Teleports (sim only) + reset pose action; blocking."""
-        if self._sim_enabled:
-            sx, sy, sz, sqx, sqy, sqz, sqw = self._sim_spawn
-            bx, by, bz = self._sim_block_reset
-            ok_robot = self._set_entity_pose(
-                self._sim_robot_model, sx, sy, sz, sqx, sqy, sqz, sqw
-            )
-            ok_block = self._set_entity_pose(
-                self._sim_block_model, bx, by, bz, 0.0, 0.0, 0.0, 1.0
-            )
-            self.get_logger().info(
-                'World reset: robot={} block={}'.format(ok_robot, ok_block)
-            )
-        else:
-            self.get_logger().info(
-                'Real-robot reset: sending pose {!r} only.'.format(
-                    self._reset_pose_name
-                )
-            )
-
-        if not self._reset_pose_client.wait_for_server(timeout_sec=3.0):
+        """Call VlaResetWorld on the shared reset node; blocking."""
+        if not self._reset_world_client.wait_for_service(timeout_sec=3.0):
             self.get_logger().error(
-                'Reset action server {!r} unavailable — robot NOT re-posed.'.format(
-                    self._reset_action_name
+                'World reset service {!r} unavailable — scene NOT reset.'.format(
+                    self._reset_world_service
                 )
             )
             return
 
-        goal = MoveToPose.Goal()
-        goal.pose_name = self._reset_pose_name
-        goal.time_allowance.sec = int(self._reset_pose_duration_s)
-        goal.time_allowance.nanosec = int(
-            (self._reset_pose_duration_s - int(self._reset_pose_duration_s)) * 1e9
-        )
-
-        send_fut = self._reset_pose_client.send_goal_async(goal)
-        if not self._wait_future(send_fut, timeout_s=5.0):
-            self.get_logger().error('Reset goal send timed out.')
-            return
-        goal_handle = send_fut.result()
-        if goal_handle is None or not goal_handle.accepted:
-            self.get_logger().error('Reset goal rejected by the action server.')
-            return
-
-        result_fut = goal_handle.get_result_async()
-        if not self._wait_future(
-            result_fut, timeout_s=self._reset_pose_duration_s + 10.0
-        ):
+        req = VlaResetWorld.Request()
+        # Empty -> the reset node's world_reset.active_preset decides.
+        req.preset = self._reset_preset
+        fut = self._reset_world_client.call_async(req)
+        # Must exceed the reset node's own budget (pose call + settle wait +
+        # teleports); a shorter timeout here just starts a competing reset.
+        if not self._wait_future(fut, timeout_s=self._reset_timeout_s):
             self.get_logger().error(
-                'Reset motion did not finish within {:.0f}s — cancelling.'.format(
-                    self._reset_pose_duration_s + 10.0
+                'World reset call timed out after {:.0f}s.'.format(
+                    self._reset_timeout_s
                 )
             )
-            goal_handle.cancel_goal_async()
             return
 
-        result = result_fut.result().result
+        result = fut.result()
+        if result is None:
+            self.get_logger().error('World reset call returned no response.')
+            return
         self.get_logger().info(
-            'move_to_pose {}: {}{}'.format(
-                self._reset_pose_name,
-                'OK' if result.success else 'FAIL',
-                ' ({})'.format(result.message) if result.message else '',
+            'World reset: {} ({})'.format(
+                'OK' if result.success else 'FAIL', result.message
             )
         )
 
@@ -894,21 +943,25 @@ class LeRobotDeployNode(Node):
         response.message = 'succeeded'
         return response
 
+    def _do_begin_episode(self) -> None:
+        """Run begin_episode's blocking gz pose reads off the callback thread."""
+        with self._episode_start_lock:
+            self._episode_logger.begin_episode()
+            self._inference_engine.update_play_enabled(True)
+
     def _start_play(self) -> bool:
         """Atomically start PLAY if not already running. Returns True if it started."""
         with self._lock:
             if self._play_enabled:
                 return False
             self._cmd_vector = dict(self._obs_builder.state_vector)
-            # With the safety trigger enabled the robot stays frozen until the
-            # operator engages it — start the episode clock on first
-            # engagement instead of at PLAY (see the safety gate).
+            # With safety trigger enabled, start the episode clock on first
+            # engagement, not at PLAY — the robot stays frozen till then.
             self._episode_t0 = (
                 None if self._safety_enabled else self.get_clock().now()
             )
             self._play_enabled = True
-        self._episode_logger.begin_episode()
-        self._inference_engine.update_play_enabled(True)
+        Thread(target=self._do_begin_episode, daemon=True).start()
         return True
 
     def _stop_play(self, outcome: str) -> bool:
@@ -917,7 +970,10 @@ class LeRobotDeployNode(Node):
             if not self._play_enabled:
                 return False
             self._play_enabled = False
-        self._episode_logger.end_episode(outcome)
+        # Serialize against an in-flight _do_begin_episode so end_episode()
+        # cannot land before begin_episode() has opened the episode file.
+        with self._episode_start_lock:
+            self._episode_logger.end_episode(outcome)
         self._inference_engine.update_play_enabled(False)
         self._reset_episode_state(outcome=outcome)
         return True
@@ -938,13 +994,23 @@ class LeRobotDeployNode(Node):
             if self._stop_play('manual_stop'):
                 self.get_logger().info('VLA execution stopped via service command STOP.')
             else:
-                # Idle STOP = reset the world to the start pose. The experiment
-                # runner issues this before episode 1 so the first episode does
-                # not start from a stale (un-reset) pose.
+                # Idle STOP resets the world to start pose — the experiment
+                # runner issues this before episode 1 to avoid a stale pose.
                 self.get_logger().info('STOP while idle → resetting world to start pose.')
                 self._reset_episode_state(outcome='reset')
             response.success = True
             response.message = 'STOP execution disabled'
+            response.status = VlaCommand.Response.STATE_STOPPED
+        elif cmd == VlaCommand.Request.RESET:
+            # _stop_play already resets the world as part of stopping; only
+            # trigger a standalone reset when play was not running.
+            if self._stop_play('manual_stop'):
+                self.get_logger().info('World reset requested via RESET (was playing).')
+            else:
+                self.get_logger().info('World reset requested via RESET (was idle).')
+                self._reset_episode_state(outcome='reset')
+            response.success = True
+            response.message = 'World reset triggered'
             response.status = VlaCommand.Response.STATE_STOPPED
         else:
             response.success = False
@@ -1018,7 +1084,7 @@ class LeRobotDeployNode(Node):
         else:
             decode_exc = None
         if image is None:
-            self.get_logger().warn(
+            self.get_logger().warning(
                 'Image decode failed for {!r} (encoding={!r}, compressed={}): {}'.format(
                     cam_name, encoding, is_compressed, decode_exc
                 ),
@@ -1054,11 +1120,8 @@ class LeRobotDeployNode(Node):
                 self._base_pub.publish(cmd)
             return
 
-        # Automatic termination: success (block lifted), failure (fall), or
-        # timeout. Checked before consuming the action queue so an empty queue
-        # cannot stall a timeout. Uses the sim-time-aware node clock.
-        # Snapshot to a local: the reset thread can null this out between the
-        # check and the subtraction below, raising TypeError.
+        # Auto-termination (success/fall/timeout) checked before consuming the
+        # queue. Snapshot to a local: the reset thread can null this mid-check.
         episode_t0 = self._episode_t0
         if self._logging_enabled and episode_t0 is not None:
             elapsed = (self.get_clock().now() - episode_t0).nanoseconds * 1e-9
@@ -1070,7 +1133,7 @@ class LeRobotDeployNode(Node):
         if self._safety_enabled:
             if not self._safety_pressed():
                 if self._safety_was_pressed:
-                    self.get_logger().warn(
+                    self.get_logger().warning(
                         'Safety trigger released — holding commands.'
                     )
                     self._safety_was_pressed = False
@@ -1084,9 +1147,8 @@ class LeRobotDeployNode(Node):
                 self._interpolator.reset()
                 self._safety_was_pressed = True
                 if self._episode_t0 is None:
-                    # Deferred episode clock: timing (and the episode
-                    # timeout) starts now, not while the scene was being
-                    # staged with the trigger released.
+                    # Deferred episode clock: timing/timeout start now, not
+                    # while the scene was staged with the trigger released.
                     self._episode_t0 = self.get_clock().now()
                 self.get_logger().info(
                     'Safety trigger engaged — resuming with fresh actions.'
@@ -1096,7 +1158,7 @@ class LeRobotDeployNode(Node):
         if self._single_step_mode:
             step = self._inference_engine.pop_single_step_result()
             if step is None:
-                self.get_logger().warn(
+                self.get_logger().warning(
                     'Single-step inference not ready yet.',
                     throttle_duration_sec=2.0,
                 )
@@ -1119,7 +1181,7 @@ class LeRobotDeployNode(Node):
                         self._interpolator.add(popped)
                 step = self._interpolator.get()
             if step is None:
-                self.get_logger().warn(
+                self.get_logger().warning(
                     'Action queue empty. Increase actions_per_chunk or lower control_hz.',
                     throttle_duration_sec=2.0,
                 )

@@ -7,12 +7,12 @@
       # NOTE: smolvla has no action_feature_names — the node maps actions
       # positionally, which is correct because the robot.groups order below
       # matches the dataset feature order exactly. Do not reorder groups.
-      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_smolvla_vlmft"
+      repo_id: "team-sobits/sobit_home_left_sim-pnp_pear_bowl-abs-200-smolvla_fft"
       policy_class: "lerobot.policies.smolvla.modeling_smolvla.SmolVLAPolicy"
       device: "cuda"
       use_amp: false
       use_relative_actions: false
-      default_task_label: "Pick up the block"
+      default_task_label: "Pick up the pear and place it over the bowl"
       dataset_repo_id: ""
 
     runtime:
@@ -45,53 +45,47 @@
       debug: false
 
     logging:
-      # Episode evaluation logging. The vla_experiment.launch.py overrides
-      # enabled/log_dir per model run; these are the defaults for plain deploy.
+      # Where episodes are recorded. vla_experiment.launch.py overrides
+      # enabled/log_dir per model run; these are the plain-deploy defaults.
       enabled: false
       log_dir: ""
-      tilt_threshold_deg: 30.0
-      # Automatic episode termination thresholds.
-      episode_timeout_s: 60.0   # stop after 60 sim seconds
-      lift_success_m: 0.05      # block lifted > 5 cm -> success
-      # Ignore lift crossings for the first 2 s: reset settling is not a pick.
-      success_settle_s: 2.0
-      fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
 
-    reset:
-      # Reset moves the robot to this predefined pose via the action server
-      # with the given time allowance. Sim vs real is auto-detected from
-      # use_sim_time: in sim the world reset also teleports robot+block via
-      # Gazebo first and gz-based auto-termination is active; on the real
-      # robot only the pose motion runs (episode timeout still applies when
-      # logging is enabled).
-      # initial_pose: vla_pose_on_table is teleop-only, absent from the sim
-      # pose_list.yaml, so move_to_pose would fail on every reset here.
-      pose_name: "initial_pose"
-      duration_s: 1.5
-      action_name: "/sobit_home/move_to_pose"
-
-    sim:
-      robot_model_name: sobit_home
+    task:
+      # Selects which block below defines success. Only that block is read.
+      mode: place
+      common:
+        robot_model_name: "sobit_home"
+        tracked_model_name: "pear"
+        tilt_threshold_deg: 30.0
+        episode_timeout_s: 120.0
+        # Ignore success crossings for the first 2 s: reset settling is not
+        # a pick.
+        success_settle_s: 2.0
+        fall_z_drop_m: 0.15
+      place:
+        # The pear must clear the desk before it can count as placed.
+        lift_success_m: 0.05
+        goal_model_name: "bowl"
+        # Bowl mesh is 0.16 m across; 0.12 m from centre keeps the pear
+        # inside the rim without crediting a near miss on the desk.
+        place_radius_m: 0.12
+        place_settle_s: 1.0
 
     robot:
       # Morphology (joint groups, command topics, joints, max_joint_delta,
       # mobile_base, cameras) is loaded from the shared robot descriptor:
       #   sobits_vla_common/robots/sobit_home.robot.yaml
-      # active_groups / active_cameras / active_mobile_base select the subset
-      # used for this task (left-arm pickup) without re-listing joints/topics.
+      # exclude trims it to the subset this task uses (left-arm pickup)
+      # without re-listing joints/topics. Unknown names raise.
       # sobit_home_frozen == sobit_home with body + mobile_base immobilized.
-      # body and active_mobile_base MUST stay listed here: this model has no
+      # body and the mobile base MUST NOT be excluded: this model has no
       # action_feature_names, so actions map positionally over
-      # joint_features + mobile_base_features. Removing body (-1) or the base
+      # joint_features + mobile_base_features. Excluding body (-1) or the base
       # (-3) would shrink the 20-dim vector the model was trained on and shift
       # every arm/hand index. Freezing happens in the descriptor instead.
-      descriptor_id: sobit_home_frozen
-      active_groups:
-        - head
-        - body          # frozen (max_joint_delta 0.0005) -- keeps slot 2
-        - arm_left
-        - hand_left
-      active_cameras:
-        - head_camera
-        - hand_left_camera
-      active_mobile_base: true   # frozen via max_vel_* -- keeps slots 17-19
+      descriptor_id: sobit_home
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        cameras: ["hand_right_camera"]
+        ee_poses: ["right"]
+        mobile_base: false

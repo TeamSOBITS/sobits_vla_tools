@@ -50,6 +50,7 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     EmitEvent,
+    LogInfo,
     OpaqueFunction,
     RegisterEventHandler,
 )
@@ -59,13 +60,22 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 import yaml
 
-from sobits_vla_common.launch.utils import default_package_root, default_pixi_manifest, pixi_prefix
+from sobits_vla_common.launch.utils import default_package_root, default_pixi_manifest, pixi_env_for, pixi_prefix
 
 # Required for PI05 bfloat16 model loading on CUDA without OOM.
 os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
 
-# Both nodes here are sobits_vla_deploy executables -> same pixi env.
-_DEFAULT_PIXI_ENV = 'deploy-gpu'
+
+def _resolve_pixi_env(context) -> str:
+    """pixi_env wins when set; 'none' disables the prefix; else enable_gpu."""
+    explicit = LaunchConfiguration('pixi_env').perform(context).strip()
+    if explicit:
+        return '' if explicit.lower() == 'none' else explicit
+    return pixi_env_for(LaunchConfiguration('enable_gpu').perform(context))
+
+
+# Both nodes here are sobits_vla_deploy executables -> same pixi env; only the
+# accelerator varies, GPU by default. Override with  enable_gpu:=false
 _DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
@@ -108,7 +118,7 @@ def _setup(context, *args, **kwargs):
     )
 
     prefix = pixi_prefix(
-        LaunchConfiguration('pixi_env').perform(context),
+        _resolve_pixi_env(context),
         LaunchConfiguration('pixi_manifest').perform(context),
     )
 
@@ -130,18 +140,37 @@ def _setup(context, *args, **kwargs):
 
     controller = LaunchConfiguration('controller').perform(context).strip()
 
+    # Same scene the reset node teleports to: the logger derives its lift/fall
+    # baselines from it so they cannot drift from the reset targets.
+    world_reset_config = os.path.join(
+        get_package_share_directory('sobits_vla_common'),
+        'config',
+        'world_reset_' + robot_name + '.yaml',
+    )
+
     overrides = {
         'use_sim_time': use_sim_time,
         'logging.enabled': True,
         'logging.log_dir': episode_log_dir,
-        'logging.episode_timeout_s': episode_timeout_s,
-        'logging.lift_success_m': lift_success_m,
-        'logging.fall_z_drop_m': fall_z_drop_m,
+        'task.common.episode_timeout_s': episode_timeout_s,
+        'task.common.fall_z_drop_m': fall_z_drop_m,
+        # lift_success_m is per mode; only the active block is read, so
+        # setting both keeps the override mode-agnostic.
+        'task.pick.lift_success_m': lift_success_m,
+        'task.place.lift_success_m': lift_success_m,
     }
+    if os.path.isfile(world_reset_config):
+        overrides['logging.scene_config'] = world_reset_config
     if not controller:
-        # No /joy publisher without a controller -- the deadman would never
-        # be pressed and freeze every unattended episode.
-        overrides['gamepad.safety.enabled'] = False
+        # No /joy without a controller -- deadman would never be pressed, freezing
+        # every unattended episode. Safety lives under the active controller's deploy block.
+        with open(gamepad_config, 'r') as f:
+            gp = (yaml.safe_load(f) or {}).get('/**', {}).get(
+                'ros__parameters', {}).get('gamepad', {})
+        active = str(gp.get('controller', 'quest'))
+        overrides[
+            'gamepad.{}.button_mapping.deploy.safety.enabled'.format(active)
+        ] = False
 
     deploy_node = Node(
         package='sobits_vla_deploy',
@@ -162,7 +191,7 @@ def _setup(context, *args, **kwargs):
         parameters=[{
             'use_sim_time': use_sim_time,
             'num_episodes': num_episodes,
-            'command_service': '/vla/command',
+            'command_service': '/vla/deploy_command',
             'episode_done_topic': '/vla/episode_done',
             'episode_timeout_s': episode_timeout_s,
             'done_wait_margin_s': done_wait_margin_s,
@@ -180,9 +209,30 @@ def _setup(context, *args, **kwargs):
 
     actions = [deploy_node, runner_node, shutdown_on_runner_exit]
 
-    # Optional controller bring-up for REAL trial runs: teleop input drivers
-    # (joy only — no teleop control node) + the gamepad client in deploy
-    # mode (play toggle, reset button, deadman trigger source).
+    enable_world_reset = _str_to_bool(
+        LaunchConfiguration('enable_world_reset').perform(context)
+    )
+    if enable_world_reset:
+        if os.path.isfile(world_reset_config):
+            actions.append(Node(
+                package='sobits_vla_common',
+                executable='world_reset_node',
+                name='world_reset_node',
+                output='screen',
+                prefix=prefix or None,
+                parameters=[
+                    world_reset_config,
+                    {'use_sim_time': use_sim_time},
+                ],
+            ))
+        else:
+            actions.append(LogInfo(msg=(
+                '[world_reset] no scene YAML at {} -- reset node not started; '
+                'episode resets will not teleport the scene.'.format(world_reset_config)
+            )))
+
+    # Optional controller bring-up for REAL trial runs: teleop input drivers (joy only,
+    # no teleop control node) + gamepad client in deploy mode (play/reset/deadman).
     controller = LaunchConfiguration('controller').perform(context).strip()
     if controller:
         from launch.actions import IncludeLaunchDescription
@@ -207,10 +257,35 @@ def _setup(context, *args, **kwargs):
             output='screen',
             parameters=[
                 gamepad_config,
-                {'gamepad.mode': 'deploy',
-                 'use_sim_time': use_sim_time},
+                {'use_sim_time': use_sim_time},
             ],
         ))
+
+    # Poses-only profile (<device>_vla.yaml: no control_velocity/quest_control) so the
+    # pose button works without fighting the VLA; reset itself uses world_reset_node instead.
+    if controller:
+        teleop_share = get_package_share_directory('sobits_teleop')
+        teleop_pose_config = os.path.join(
+            teleop_share, 'config', robot_name,
+            controller + '_vla.yaml')
+        if os.path.isfile(teleop_pose_config):
+            actions.append(Node(
+                package='sobits_teleop',
+                executable='sobits_teleop',
+                name='sobits_teleop',
+                namespace=robot_name,
+                output='screen',
+                parameters=[
+                    os.path.join(teleop_share, 'config', robot_name, 'robot.yaml'),
+                    teleop_pose_config,
+                    {'use_sim_time': use_sim_time},
+                ],
+            ))
+        else:
+            actions.append(LogInfo(msg=(
+                '[teleop] no poses-only profile at {} -- reset will not re-pose '
+                'the robot.'.format(teleop_pose_config)
+            )))
 
     return actions
 
@@ -258,11 +333,21 @@ def generate_launch_description() -> LaunchDescription:
             description='Robot namespace for the deploy node.',
         ),
         DeclareLaunchArgument(
-            'pixi_env',
-            default_value=_DEFAULT_PIXI_ENV,
+            'enable_gpu',
+            default_value='true',
             description=(
-                'pixi environment (Python deps) for both deploy nodes. '
-                'Use deploy-cpu without a GPU, or "" to disable the prefix.'
+                'true -> run the node in the `gpu` pixi env (CUDA torch); '
+                'false -> the `cpu` env. Set pixi_env:="" to skip the pixi '
+                'prefix entirely and use the ambient interpreter.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'pixi_env',
+            default_value='',
+            description=(
+                'Explicit pixi environment name, overriding enable_gpu. '
+                'Empty (default) derives it from enable_gpu; "none" '
+                'disables the pixi prefix.'
             ),
         ),
         DeclareLaunchArgument(
@@ -303,6 +388,14 @@ def generate_launch_description() -> LaunchDescription:
             'fall_z_drop_m',
             default_value='0.15',
             description='Robot world-z drop (m) above which it counts as fallen.',
+        ),
+        DeclareLaunchArgument(
+            'enable_world_reset',
+            default_value='true',
+            description=(
+                'Bring up the shared world_reset_node so the runner\'s resets '
+                'actually teleport the scene. Disable if one is already running.'
+            ),
         ),
         OpaqueFunction(function=_setup),
     ])

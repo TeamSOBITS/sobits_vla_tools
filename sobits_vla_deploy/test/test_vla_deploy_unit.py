@@ -36,9 +36,7 @@ from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
 from sobits_vla_deploy.sobits_vla_deploy import ActionChunkBuffer  # noqa: E402
 
 
-# ---------------------------------------------------------------------------
-# ActionChunkBuffer tests
-# ---------------------------------------------------------------------------
+# --- ActionChunkBuffer tests ---
 
 def _make_step(val: float) -> dict:
     return {'j0': val, 'j1': val * 2}
@@ -112,9 +110,7 @@ class TestActionChunkBufferAggregate:
         assert torch.allclose(result[0], torch.tensor([1.0, 2.0]))
 
 
-# ---------------------------------------------------------------------------
-# _to_action_steps tests (the live copy, InferenceEngine)
-# ---------------------------------------------------------------------------
+# --- _to_action_steps tests (the live copy, InferenceEngine) ---
 
 
 def _make_engine(
@@ -198,9 +194,7 @@ class TestToActionSteps:
         assert steps == []
 
 
-# ---------------------------------------------------------------------------
-# _apply_manual_delta tests
-# ---------------------------------------------------------------------------
+# --- _apply_manual_delta tests ---
 
 
 class TestApplyManualDelta:
