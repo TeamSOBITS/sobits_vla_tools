@@ -36,6 +36,20 @@ from pathlib import Path
 from typing import Callable, Optional
 
 
+def _colcon_ignored(pkg_dir, src_root) -> bool:
+    """True if any ancestor up to src_root carries a COLCON_IGNORE marker.
+
+    Excludes trees colcon itself skips (e.g. a read-only backup copy of the
+    repo) so they can never shadow the real package in resolution.
+    """
+    node = pkg_dir
+    while node != src_root and node != node.parent:
+        if (node / 'COLCON_IGNORE').exists():
+            return True
+        node = node.parent
+    return False
+
+
 def output_root(
     package: str,
     dirname: str,
@@ -60,19 +74,26 @@ def output_root(
     candidate = start.parent
 
     for _ in range(8):
-        if (candidate / 'package.xml').exists() and (candidate / dirname).is_dir():
+        # share/<pkg> in an install space carries package.xml AND the output
+        # dir (its installed .gitignore) -- a false direct hit; skip it so
+        # resolution keeps walking to the real source tree.
+        in_share = candidate.parent.name == 'share'
+        if (not in_share and (candidate / 'package.xml').exists()
+                and (candidate / dirname).is_dir()):
             return candidate / dirname
 
         src_root = candidate / 'src'
         if src_root.is_dir():
             if recursive:
                 for path in src_root.rglob('package.xml'):
-                    if path.parent.name == package and (path.parent / dirname).is_dir():
+                    if (path.parent.name == package and (path.parent / dirname).is_dir()
+                            and not _colcon_ignored(path.parent, src_root)):
                         return path.parent / dirname
             else:
                 for pattern in (f'*/{package}', f'*/*/{package}'):
                     for pkg_dir in src_root.glob(pattern):
-                        if (pkg_dir / dirname).is_dir():
+                        if ((pkg_dir / dirname).is_dir()
+                                and not _colcon_ignored(pkg_dir, src_root)):
                             return pkg_dir / dirname
 
         candidate = candidate.parent

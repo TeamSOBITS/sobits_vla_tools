@@ -133,3 +133,38 @@ def test_default_final_fallback_uses_ament_index(tmp_path, monkeypatch):
     result = output_root('sobits_vla_demo', 'outputs', anchor_file=str(anchor))
     assert calls == ['sobits_vla_demo']
     assert result == tmp_path / 'share' / 'sobits_vla_demo' / 'outputs'
+
+
+class TestInstallShareSkip:
+
+    def test_share_dir_with_installed_gitignore_is_not_a_direct_hit(self, tmp_path):
+        # Reproduces the live bug: install/<pkg>/share/<pkg> holds package.xml
+        # and <dirname>/ (the installed .gitignore), shadowing the source tree.
+        ws = tmp_path
+        share_pkg = ws / 'install' / 'pkg_a' / 'share' / 'pkg_a'
+        (share_pkg / 'logs').mkdir(parents=True)
+        (share_pkg / 'package.xml').write_text('<package/>')
+        src_pkg = ws / 'src' / 'repo' / 'pkg_a'
+        (src_pkg / 'logs').mkdir(parents=True)
+        (src_pkg / 'package.xml').write_text('<package/>')
+        anchor = share_pkg / 'launch' / 'f.launch.py'
+        anchor.parent.mkdir()
+        anchor.write_text('')
+        result = output_root('pkg_a', 'logs', anchor_file=str(anchor))
+        assert result == src_pkg / 'logs'
+
+    def test_colcon_ignored_sibling_copy_never_shadows(self, tmp_path):
+        # A backup copy with COLCON_IGNORE must lose to the real package even
+        # when rglob encounters it first.
+        ws = tmp_path
+        for repo, ignored in (('aaa_backup', True), ('repo', False)):
+            pkg = ws / 'src' / repo / 'pkg_a'
+            (pkg / 'logs').mkdir(parents=True)
+            (pkg / 'package.xml').write_text('<package/>')
+            if ignored:
+                (ws / 'src' / repo / 'COLCON_IGNORE').write_text('')
+        anchor = ws / 'install' / 'x' / 'share' / 'x' / 'f.py'
+        anchor.parent.mkdir(parents=True)
+        anchor.write_text('')
+        result = output_root('pkg_a', 'logs', anchor_file=str(anchor))
+        assert result == ws / 'src' / 'repo' / 'pkg_a' / 'logs'
