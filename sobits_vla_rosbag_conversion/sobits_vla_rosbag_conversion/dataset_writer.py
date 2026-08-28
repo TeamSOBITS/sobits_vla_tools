@@ -44,14 +44,8 @@ from sobits_vla_common.lerobot_adapter import (
 )
 import yaml
 
-# lerobot 0.6.0's meta/info.json loads into a typed `DatasetInfo` dataclass
-# (lerobot.datasets.utils.DatasetInfo) with a fixed field set — it has no
-# `robot_info`/`user_info` fields, and `write_info()` serializes it via
-# `dataclasses.asdict()`, so unknown keys assigned through the (deprecated)
-# dict-style `__setitem__` shim either raise KeyError or are silently dropped
-# on the next save/reload. There is no supported way to attach arbitrary
-# custom keys to DatasetInfo itself, so we persist them in a small sidecar
-# file next to the standard meta/ files instead.
+# lerobot 0.6.0's meta/info.json is a typed DatasetInfo dataclass (no robot_info/
+# user_info); unknown keys via __setitem__ raise or drop on reload, so we sidecar them.
 _CUSTOM_INFO_FILENAME = 'sobits_vla_info.json'
 
 
@@ -115,12 +109,8 @@ def _make_create_kwargs(
     creation path as production conversion (see test_dataset_roundtrip).
     """
     rgb_encoder = RGBEncoderConfig(vcodec=vcodec)
-    # 'auto' now probes hardware encoders (lerobot 0.6.0, #3455) and picks
-    # h264_nvenc on NVIDIA machines, but get_codec_options() never sets 'bf'
-    # for nvenc — nvenc's default B-frames then violate its own constraint
-    # against lerobot's default GOP g=2 ("Gop Length should be greater than
-    # number of B frames + 1") and avcodec_open2 fails. Resolve the codec
-    # here and pin bf=0 for nvenc (upstreaming candidate).
+    # 'auto' probes hardware encoders and may pick h264_nvenc, but its default B-frames
+    # violate lerobot's default GOP g=2 constraint and avcodec_open2 fails; pin bf=0.
     rgb_encoder.resolve_vcodec()
     if rgb_encoder.vcodec.endswith('_nvenc') and 'bf' not in rgb_encoder.extra_options:
         rgb_encoder.extra_options = {**rgb_encoder.extra_options, 'bf': 0}
@@ -187,7 +177,7 @@ class DatasetWriter:
     def log_warn(self, msg: str):
         """Log warning messages using target logger or print."""
         if self.logger:
-            self.logger.warn(msg)
+            self.logger.warning(msg)
         else:
             print(f'[WARN] {msg}')
 
@@ -206,9 +196,8 @@ class DatasetWriter:
             dataset_root = HF_LEROBOT_HOME / self.dataset_name
 
         if self.overwrite and dataset_root.exists():
-            # Refuse to delete a non-empty directory that doesn't look like a
-            # LeRobot dataset — a mispointed output_directory with
-            # overwrite=true must not wipe arbitrary data.
+            # Refuse to delete a non-empty directory that doesn't look like a LeRobot
+            # dataset — a mispointed output_directory must not wipe arbitrary data.
             is_dataset = (dataset_root / 'meta' / 'info.json').exists()
             is_empty = not any(dataset_root.iterdir())
             if not is_dataset and not is_empty:
@@ -233,9 +222,8 @@ class DatasetWriter:
         )
         self.dataset = LeRobotDataset.create(**create_kwargs)
 
-        # Version provenance: which lerobot + which sobits_vla_tools revision
-        # produced this dataset. Helps triage a bad conversion after a
-        # lerobot bump.
+        # Version provenance: which lerobot + sobits_vla_tools revision produced this
+        # dataset, to help triage a bad conversion after a lerobot bump.
         provenance = {
             'lerobot_version': '.'.join(str(p) for p in LEROBOT_VERSION),
             'sobits_vla_tools_rev': _sobits_vla_tools_rev(),
@@ -253,10 +241,8 @@ class DatasetWriter:
         else:
             user_info = provenance
 
-        # lerobot 0.6.0's meta/info.json is a typed DatasetInfo dataclass with
-        # no robot_info/user_info fields — see the write_custom_info docstring
-        # above. Persisted eagerly (not deferred to finalize()) so it survives
-        # even if conversion is interrupted before finalize().
+        # meta/info.json is a typed dataclass with no robot_info/user_info fields (see
+        # write_custom_info); persisted eagerly so it survives an interrupted conversion.
         write_custom_info(
             self.dataset.root,
             robot_info=self.robot_info,
@@ -297,10 +283,8 @@ class DatasetWriter:
         if not self.has_subtasks:
             return
 
-        # lerobot 0.6.0 removed native subtasks support (meta.subtasks /
-        # load_subtasks are gone — superseded by language columns, #3467), so
-        # meta/subtasks.parquet is now purely our own sidecar: verify it on
-        # disk directly instead of through the reloaded metadata object.
+        # lerobot 0.6.0 removed native subtasks support (superseded by language columns),
+        # so meta/subtasks.parquet is purely our sidecar: verify it on disk directly.
         reloaded = LeRobotDataset(self.dataset_name, root=Path(self.dataset.root))
         subtasks_path = Path(self.dataset.root) / 'meta' / 'subtasks.parquet'
         if not subtasks_path.exists():

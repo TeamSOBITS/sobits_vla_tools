@@ -64,10 +64,8 @@ if LEROBOT_VERSION < (0, 6):
     )
 
 
-# name -> backing module. lerobot.datasets.feature_utils.{build_dataset_frame,
-# hw_to_dataset_features} moved to lerobot.utils.feature_utils, and
-# lerobot.utils.control_utils.predict_action moved to
-# lerobot.common.control_utils in 0.6.0 — see docs/lerobot_v060_changes.md §7.
+# name -> backing module. feature_utils and predict_action both moved in
+# lerobot 0.6.0 — see docs/lerobot_v060_changes.md §7.
 _SYMBOLS: dict[str, str] = {
     'LeRobotDataset':                    'lerobot.datasets.lerobot_dataset',
     'LeRobotDatasetMetadata':            'lerobot.datasets.lerobot_dataset',

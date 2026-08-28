@@ -1,3 +1,31 @@
+# Copyright (c) 2026, Team SOBITS
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from this
+#   software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
 """
 Monkey patches applied on top of lerobot 0.6.0.
 
@@ -230,17 +258,12 @@ def _patch_processor_registry() -> None:
     try:
         from sobits_vla_common.lerobot_adapter import ProcessorStepRegistry
 
-        # Preferred: public register()/get() API. get() raises KeyError if
-        # 'relative_actions_processor' isn't registered (nothing to alias
-        # from); register() raises ValueError if 'delta_actions_processor'
-        # is already registered — either way, skip quietly.
+        # Public register()/get() API: get() KeyErrors if nothing to alias from,
+        # register() ValueErrors if the alias already exists — skip quietly either way.
         try:
             step_cls = ProcessorStepRegistry.get('relative_actions_processor')
-            # register() also stamps step_cls._registry_name with the new
-            # name, which is the key used when SERIALIZING pipelines — keep
-            # the native name so pipelines we push stay loadable by stock
-            # lerobot 0.6.0 (the alias is for loading legacy 0.5.1-serialized
-            # pipelines only, never for new writes).
+            # register() also overwrites step_cls._registry_name (used when SERIALIZING) —
+            # restore the native name so we keep writing stock-0.6.0-loadable pipelines.
             native_name = getattr(step_cls, '_registry_name', 'relative_actions_processor')
             ProcessorStepRegistry.register('delta_actions_processor')(step_cls)
             step_cls._registry_name = native_name
