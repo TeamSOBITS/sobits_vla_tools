@@ -50,7 +50,8 @@ _DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
 def _config_declares(config_file, key):
-    """Return True if *config_file* sets *key* to a non-empty value.
+    """
+    Return True if *config_file* sets *key* to a non-empty value.
 
     Used to tell a config file that deliberately points at an external
     dataset tree apart from one that leaves the path empty and expects the

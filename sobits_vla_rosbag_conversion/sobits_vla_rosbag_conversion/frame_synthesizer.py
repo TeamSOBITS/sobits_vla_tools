@@ -140,7 +140,8 @@ class FrameSynthesizer:
         return res
 
     def _hold_dict(self, series, target_time, keys, times=None):
-        """Zero-order hold of a (t, dict_of_floats) series at target_time.
+        """
+        Zero-order hold of a (t, dict_of_floats) series at target_time.
 
         Commanded positions are discrete set-points, not samples of a
         continuous signal: a trajectory point stays in force until the next

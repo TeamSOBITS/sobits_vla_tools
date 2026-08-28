@@ -58,9 +58,10 @@ from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from sobits_vla_common.launch.utils import (
+    default_package_root, default_pixi_manifest, pixi_env_for, pixi_prefix,
+)
 import yaml
-
-from sobits_vla_common.launch.utils import default_package_root, default_pixi_manifest, pixi_env_for, pixi_prefix
 
 # Required for PI05 bfloat16 model loading on CUDA without OOM.
 os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
@@ -393,7 +394,7 @@ def generate_launch_description() -> LaunchDescription:
             'enable_world_reset',
             default_value='true',
             description=(
-                'Bring up the shared world_reset_node so the runner\'s resets '
+                "Bring up the shared world_reset_node so the runner's resets "
                 'actually teleport the scene. Disable if one is already running.'
             ),
         ),

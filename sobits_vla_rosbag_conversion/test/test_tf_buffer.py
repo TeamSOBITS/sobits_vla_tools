@@ -33,8 +33,8 @@ a known rotation, then checks resolve() returns T(target<-source) — not
 its inverse.
 """
 
-import sys
 from pathlib import Path
+import sys
 
 import numpy as np
 import pytest
@@ -85,7 +85,7 @@ class _TFMessage:
 
 
 def _build_tree() -> OfflineTFTree:
-    """base -> link1 (+1m x, 90 deg z) -> ee (+0.5m x, no rotation)."""
+    """Build base -> link1 (+1m x, 90 deg z) -> ee (+0.5m x, no rotation)."""
     tree = OfflineTFTree()
 
     q1 = Rotation.from_euler('z', 90, degrees=True).as_quat()  # [x,y,z,w]

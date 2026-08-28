@@ -81,7 +81,8 @@ def find_package_src_dir() -> Path:
 
 
 def _default_model_root() -> Path:
-    """Resolve the checkpoint output root: <package_src>/lerobotmodel/.
+    """
+    Resolve the checkpoint output root: <package_src>/lerobotmodel/.
 
     Every non-absolute checkpoint.output_dir is resolved against this root, so
     it must resolve even before the directory exists (lerobot creates it) —
@@ -103,7 +104,8 @@ def _default_model_root() -> Path:
 
 
 def resolve_output_dir(out_dir_raw: str, hub_repo_id: str) -> Path:
-    """Resolve checkpoint.output_dir to the directory training writes into.
+    """
+    Resolve checkpoint.output_dir to the directory training writes into.
 
     Anything that is not absolute lands under <package_src>/lerobotmodel/::
 
@@ -112,9 +114,11 @@ def resolve_output_dir(out_dir_raw: str, hub_repo_id: str) -> Path:
         "a/b"        -> lerobotmodel/a/b
         "/abs/path"  -> /abs/path                    (verbatim)
 
-    Raises:
+    Raises
+    ------
         RuntimeError: If both arguments are empty — with no identifier at all
             every run would collide on the shared lerobotmodel/ root.
+
     """
     model_root = _default_model_root()
 
@@ -255,26 +259,26 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
 
     peft_cfg, peft_extra = build_peft_config(params)
 
-    train_kwargs: dict[str, Any] = dict(
-        dataset=dataset_cfg,
-        policy=policy_cfg,
-        output_dir=output_dir,
-        job_name=job_name,
-        resume=params.get('checkpoint.resume', False),
-        seed=params.get('training.seed', 1000),
-        num_workers=params.get('dataset.num_workers', 4),
-        batch_size=params.get('training.batch_size', 32),
-        steps=params.get('training.steps', 100000),
-        log_freq=params.get('training.log_freq', 200),
-        env_eval_freq=params.get('training.eval_freq', 20000),
-        save_checkpoint=params.get('checkpoint.save_checkpoint', True),
-        save_freq=params.get('checkpoint.save_freq', 20000),
-        use_policy_training_preset=params.get('training.use_policy_training_preset', True),
-        wandb=wandb_cfg,
-        peft=peft_cfg,
-        rename_map=rename_map,
-        save_checkpoint_to_hub=params.get('hub.save_checkpoints', False),
-    )
+    train_kwargs: dict[str, Any] = {
+        'dataset': dataset_cfg,
+        'policy': policy_cfg,
+        'output_dir': output_dir,
+        'job_name': job_name,
+        'resume': params.get('checkpoint.resume', False),
+        'seed': params.get('training.seed', 1000),
+        'num_workers': params.get('dataset.num_workers', 4),
+        'batch_size': params.get('training.batch_size', 32),
+        'steps': params.get('training.steps', 100000),
+        'log_freq': params.get('training.log_freq', 200),
+        'env_eval_freq': params.get('training.eval_freq', 20000),
+        'save_checkpoint': params.get('checkpoint.save_checkpoint', True),
+        'save_freq': params.get('checkpoint.save_freq', 20000),
+        'use_policy_training_preset': params.get('training.use_policy_training_preset', True),
+        'wandb': wandb_cfg,
+        'peft': peft_cfg,
+        'rename_map': rename_map,
+        'save_checkpoint_to_hub': params.get('hub.save_checkpoints', False),
+    }
 
     optimizer_override, scheduler_override = build_optimizer_scheduler_override(params)
     if optimizer_override is not None:

@@ -31,8 +31,8 @@ from time import monotonic
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import torch
 from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES
+import torch
 
 try:
     from sobits_vla_common.lerobot_adapter import predict_action, prepare_observation_for_inference
@@ -466,8 +466,10 @@ class InferenceEngine:
         self, steps: List[Dict[str, float]], state_vector: Dict[str, float]
     ) -> None:
         """
-        Add current state to model output in place, for policies that predict
-        deltas but ship no AbsoluteActionsProcessorStep to do it themselves.
+        Add current state to model output in place.
+
+        For policies that predict deltas but ship no
+        AbsoluteActionsProcessorStep to do it themselves.
 
         Skips mobile-base and relative_exclude features (e.g. a gripper),
         which must stay absolute regardless of the policy's delta mode.

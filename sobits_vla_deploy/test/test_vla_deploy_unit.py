@@ -135,7 +135,9 @@ def _make_engine(
         model_action_feature_names=None,
         model_use_relative_actions=False,
         joint_features=joint_features if joint_features is not None else ['j0', 'j1', 'j2'],
-        mobile_base_features=mobile_base_features if mobile_base_features is not None else ['x.vel'],
+        mobile_base_features=(
+            mobile_base_features if mobile_base_features is not None else ['x.vel']
+        ),
         relative_exclude_features=relative_exclude_features,
     )
 

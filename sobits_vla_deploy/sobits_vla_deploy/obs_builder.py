@@ -29,8 +29,8 @@ from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import torch
 from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES
+import torch
 
 try:
     from sobits_vla_common.lerobot_adapter import build_dataset_frame, hw_to_dataset_features

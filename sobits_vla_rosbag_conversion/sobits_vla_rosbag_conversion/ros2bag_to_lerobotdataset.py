@@ -500,7 +500,8 @@ class RosbagConversionNode(Node):
                                 for j in part_info.get('joint_names', []):
                                     if j in self.excluded_joints:
                                         continue
-                                    if self.active_ros_names is not None and j not in self.active_ros_names:
+                                    if (self.active_ros_names is not None
+                                            and j not in self.active_ros_names):
                                         continue
                                     self.action_features.append(j)
                                 cmd_topic = part_info.get('command_topic', '')
@@ -533,8 +534,8 @@ class RosbagConversionNode(Node):
                     return
                 if not self._sensors_match(ref_sensors, sensors_block):
                     self.get_logger().error(
-                        f'Sensor config mismatch in {meta_file}. All sessions must share identical '
-                        'sensor topics/shapes. Aborting.'
+                        f'Sensor config mismatch in {meta_file}. All sessions '
+                        'must share identical sensor topics/shapes. Aborting.'
                     )
                     return
 

@@ -150,7 +150,8 @@ class EpisodeLogger:
     reset_world() is called from end_episode() in a background thread so it
     does not block the ROS spin.
 
-    Parameters:
+    Parameters
+    ----------
       log_dir          — output directory (default /tmp/vla_logs)
       world_name       — Gazebo world name ('' = unset)
       robot_name       — Gazebo model name of the robot ('' = fall detection off)
@@ -168,6 +169,7 @@ class EpisodeLogger:
                           (default 2.0)
       fall_z_drop_m     — robot world-z drop above this → fallen (default 0.15)
       enabled          — master switch; if False all methods are no-ops
+
     """
 
     def __init__(

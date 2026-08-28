@@ -116,7 +116,6 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
                 exclude_ee_poses=params.get('robot.exclude.ee_poses', []),
             )
 
-            active_groups = [g.name for g in desc.active_groups]
             active_cameras = [c.name for c in desc.active_cameras]
             active_mobile_base = not params.get('robot.exclude.mobile_base', False)
 

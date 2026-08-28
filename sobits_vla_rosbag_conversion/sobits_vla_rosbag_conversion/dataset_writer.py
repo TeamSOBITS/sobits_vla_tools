@@ -36,11 +36,11 @@ import subprocess
 import numpy as np
 import pandas as pd
 from sobits_vla_common.lerobot_adapter import (
+    depth_encoder_defaults,
     HF_LEROBOT_HOME,
     LEROBOT_VERSION,
     LeRobotDataset,
     RGBEncoderConfig,
-    depth_encoder_defaults,
 )
 import yaml
 

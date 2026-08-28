@@ -31,8 +31,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import torch
 from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES
+import torch
 
 # LeRobot imports (via the single seam — see lerobot_adapter.py)
 try:
