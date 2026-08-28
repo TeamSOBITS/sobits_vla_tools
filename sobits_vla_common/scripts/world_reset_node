@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright (c) 2026, Team SOBITS
 #
 # Redistribution and use in source and binary forms, with or without
@@ -25,35 +26,9 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""Shared pure-Python quaternion/rotation math, no scipy dependency."""
+"""Executable wrapper for running the shared world reset node."""
 
-import math
-from typing import Tuple
+from sobits_vla_common.world_reset_node import main
 
-
-def quat_to_rpy(x: float, y: float, z: float, w: float) -> Tuple[float, float, float]:
-    """Quaternion → (roll, pitch, yaw) in radians."""
-    sinr = 2.0 * (w * x + y * z)
-    cosr = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr, cosr)
-    sinp = 2.0 * (w * y - z * x)
-    pitch = math.asin(max(-1.0, min(1.0, sinp)))
-    siny = 2.0 * (w * z + x * y)
-    cosy = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(siny, cosy)
-    return roll, pitch, yaw
-
-
-def rpy_to_quat(
-    roll: float, pitch: float, yaw: float
-) -> Tuple[float, float, float, float]:
-    """(roll, pitch, yaw) in radians → quaternion (x, y, z, w). Inverse of quat_to_rpy."""
-    cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
-    cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
-    cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
-    return (
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-        cr * cp * cy + sr * sp * sy,
-    )
+if __name__ == '__main__':
+    main()

@@ -29,7 +29,16 @@
   <depend>rclcpp_components</depend>
   <depend>sensor_msgs</depend>
   <depend>sobits_interfaces</depend>
+  <depend>python3-yaml</depend>
+  <!-- image_codec decodes ROS images with cv2; apt build stays ABI-matched
+       with cv_bridge. Consumers get it transitively via this package. -->
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>ros_gz_interfaces</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
 
+  <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
