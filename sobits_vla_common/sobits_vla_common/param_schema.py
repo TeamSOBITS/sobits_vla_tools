@@ -97,13 +97,20 @@ def declare_from_schema(node: Any, schema: Dict[str, Any], ns: str = '') -> None
 
 
 def _declare_template(node: Any, ns: str, tmpl: Template) -> None:
-    items = node.get_parameter(tmpl.key_param).value or []
-    for item in items:
+    for item in _template_items(node, tmpl):
         declare_from_schema(node, tmpl.subtree, ns=_expand_template_ns(ns, item))
 
 
 def _expand_template_ns(ns: str, item: str) -> str:
     return ns.replace('<item>', str(item))
+
+
+def _template_items(node: Any, tmpl: Template) -> List[Any]:
+    """key_param's value as a list; a scalar (e.g. a single controller name) is one item."""
+    value = node.get_parameter(tmpl.key_param).value
+    if value is None or value == '':
+        return []
+    return value if isinstance(value, list) else [value]
 
 
 def read_schema(node: Any, schema: Dict[str, Any], ns: str = '') -> types.SimpleNamespace:
@@ -136,10 +143,9 @@ def _read_leaf(node: Any, name: str, leaf: P) -> Any:
 
 def _read_template(node: Any, ns: str, tmpl: Template) -> List[tuple]:
     """[(item_name, its subtree namespace), ...] for every item in key_param's list."""
-    items = node.get_parameter(tmpl.key_param).value or []
     return [
         (str(item), read_schema(node, tmpl.subtree, ns=_expand_template_ns(ns, item)))
-        for item in items
+        for item in _template_items(node, tmpl)
     ]
 
 

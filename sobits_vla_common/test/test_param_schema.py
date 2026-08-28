@@ -181,6 +181,51 @@ class TestTemplate:
             'robot_info.name': 'sobit_robot',
         }
 
+    def _gamepad_schema(self):
+        return {
+            'gamepad': {
+                'controller': P('quest'),
+                '<item>': Template('gamepad.controller', {
+                    'enabled': P(True),
+                }),
+            },
+        }
+
+    def test_scalar_key_param_expands_one_subtree(self):
+        node = FakeNode()
+        declare_from_schema(node, self._gamepad_schema())
+        assert node._params['gamepad.quest.enabled'] is True
+        assert len(node._params) == 2
+
+    def test_scalar_key_param_does_not_explode_per_character(self):
+        node = FakeNode()
+        declare_from_schema(node, self._gamepad_schema())
+        for ch in 'quest':
+            assert 'gamepad.{}.enabled'.format(ch) not in node._params
+
+    def test_none_key_param_expands_nothing(self):
+        node = FakeNode()
+        node.declare_parameter('gamepad.controller', None)
+        declare_from_schema(node, {
+            'gamepad': {'<item>': self._gamepad_schema()['gamepad']['<item>']},
+        })
+        assert node._params == {'gamepad.controller': None}
+
+    def test_empty_string_key_param_expands_nothing(self):
+        node = FakeNode()
+        node.declare_parameter('gamepad.controller', '')
+        declare_from_schema(node, {
+            'gamepad': {'<item>': self._gamepad_schema()['gamepad']['<item>']},
+        })
+        assert node._params == {'gamepad.controller': ''}
+
+    def test_read_scalar_key_param(self):
+        node = FakeNode()
+        schema = self._gamepad_schema()
+        declare_from_schema(node, schema)
+        ns = read_schema(node, schema)
+        assert ns.gamepad.quest.enabled is True
+
 
 class TestValidateConfig:
 
