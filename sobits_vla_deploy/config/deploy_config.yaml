@@ -76,11 +76,16 @@
         mobile_base: false
 
     gamepad:
-      topic: "/joy"
-      name: controller_name
-      controllers:
-        - controller_name
-      controller_name:
+      # Service the shared GamepadClient calls for this stage; the button
+      # mapping itself lives in sobits_vla_common/config/gamepad_config.yaml.
+      command_service: "/vla/deploy_command"
+      controller: quest
+      quest:
         button_mapping:
-          play: 0
-          stop: 1
+          deploy:
+            # Deadman: actions are commanded only while this control is held.
+            # Negative = axis index (pressed when > 0.5), else button index.
+            safety:
+              enabled: false
+              trigger_index: -4
+              joy_timeout_s: 0.5
