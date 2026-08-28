@@ -35,8 +35,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
 from sobits_vla_deploy.deploy_node import ActionChunkBuffer  # noqa: E402
+from sobits_vla_deploy.episode_logger import EpisodeLogger  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
-from sobits_vla_deploy.vla_episode_logger import EpisodeLogger  # noqa: E402
 
 
 # --- ActionChunkBuffer tests ---
@@ -430,7 +430,7 @@ class TestEvaluateTerminationPlace:
             **kwargs,
         )
         monkeypatch.setattr(
-            'sobits_vla_deploy.vla_episode_logger.gz_get_pose',
+            'sobits_vla_deploy.episode_logger.gz_get_pose',
             lambda world, name, timeout=None: {
                 'x': goal_xy[0], 'y': goal_xy[1], 'z': 0.0,
                 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0,

@@ -53,10 +53,10 @@ from sobits_vla_common.param_schema import (  # noqa: E402
 from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.action_executor import ActionExecutor  # noqa: E402
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
+from sobits_vla_deploy.episode_logger import EpisodeLogger  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
 from sobits_vla_deploy.obs_builder import ObsBuilder  # noqa: E402
 from sobits_vla_deploy.policy_loader import PolicyLoader  # noqa: E402
-from sobits_vla_deploy.vla_episode_logger import EpisodeLogger  # noqa: E402
 from std_msgs.msg import Bool, String  # noqa: E402
 import tf2_ros  # noqa: E402
 from trajectory_msgs.msg import JointTrajectory  # noqa: E402
