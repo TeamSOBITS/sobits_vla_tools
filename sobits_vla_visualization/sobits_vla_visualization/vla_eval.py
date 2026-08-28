@@ -98,25 +98,14 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 
-# ---------------------------------------------------------------------------
-# Style — validated palette (see sobits_vla_visualization docs)
-# ---------------------------------------------------------------------------
-# Categorical slots for the compared tasks/models. Slots 1-2 of the reference
-# categorical theme; validated all-pairs on the light surface (worst CVD
-# dE 24.7, normal-vision dE 33.6, both >= 3:1 contrast) so the two series stay
-# distinguishable for colourblind readers and in greyscale print.
+# --- Style — validated palette (see sobits_vla_visualization docs) ---
+
+# Categorical slots 1-2 of the reference theme; validated all-pairs on the
+# light surface (worst CVD dE 24.7, both >= 3:1 contrast) for CVD/greyscale.
 SERIES_COLORS = ['#2a78d6', '#eb6834', '#1baf7a']
-# Ordinal ramp for the 1-5 stage score: ONE hue, light -> dark, because the
-# score is an ordered scale, not an identity. Validated: monotone lightness,
-# adjacent dL >= 0.093, lightest step 2.06:1 vs the light surface.
-#
-# Five steps is more than one hue's usable band can separate cleanly: adjacent
-# pairs land at dE ~9.8-10.1, under the 15 floor for telling categories apart
-# (widening the ramp pushes the pale end below the 2:1 ordinal floor instead —
-# there is no 5-step blue that clears both). Since each segment here is a
-# discrete category rather than a point on a continuous scale, the ramp carries
-# a second channel: alternating segments are hatched, so neighbours differ by
-# texture as well as lightness. That also survives greyscale print and full CVD.
+
+# Ordinal ramp: ONE hue, light->dark (score is ordered). Alternating segments
+# also hatched — hue alone can't separate 5 steps (adjacent dE ~9.8-10.1).
 SCORE_COLORS = ['#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#0d366b']
 SCORE_HATCH = ['', '///', '', '///', '']
 SURFACE = '#fcfcfb'
@@ -125,9 +114,8 @@ INK_SOFT = '#52514e'
 GRID = '#e6e5e1'
 NEUTRAL = '#9a9892'
 
-# The operator score is the number of CUMULATIVE pick-and-place stages the
-# policy completed, so score N implies every stage below N also succeeded.
-# Only a 5 (object placed at its destination) is a completed task.
+# Score = number of CUMULATIVE pick-and-place stages completed (score N
+# implies every stage below N also succeeded). Only 5 = completed task.
 SCORE_LABELS = {
     1: '1 reached over object',
     2: '2 grasped',
@@ -139,16 +127,12 @@ SCORE_LABELS = {
 STAGE_LABELS = ['reach', 'grasp', 'lift', 'move', 'place']
 SUCCESS_SCORE = 5  # full task completion — the final stage
 
-# A pick-only task ("Pick up the block") ends at the lift: there is no
-# destination to move to, so it has 3 stages and success == 3. Scoring it out
-# of 5 would understate it, and comparing its success rate against a
-# pick-and-place task's is comparing different tasks — see PICK_ONLY below.
+# A pick-only task ends at the lift (3 stages, success == 3); scoring it out
+# of 5 would understate it and isn't comparable to a pick-and-place task.
 PICK_ONLY_STAGES = 3
 
-# Block displacement (m) that counts as "moved the block but did not lift it"
-# when deriving stage 2 from simulation ground truth. Sits in the empty gap
-# between jostling (<= 0.006 m observed) and a real lift (>= 0.076 m observed),
-# so it is well clear of contact noise on either side.
+# Displacement (m) marking stage-2 "moved but not lifted" from sim ground
+# truth. Sits clear of contact noise: jostling <= 0.006 m, real lift >= 0.076 m.
 GRASP_LIFT_M = 0.01
 
 
@@ -178,7 +162,36 @@ OUTCOME_COLORS = {
     'incomplete': '#c9c7c0',
 }
 
-ARM_PREFIXES = ('arm_', 'body_lift')
+# Group names excluded from the arm tracking-error metric. Hands/grippers and
+# the head are not what the policy is judged on and skew the mean.
+NON_ARM_GROUP_HINTS = ('hand', 'gripper', 'finger', 'head', 'end_effector')
+
+# Explicit --arm-groups selection; None = derive from each episode's meta.
+ARM_GROUPS: Optional[set] = None
+
+
+def set_arm_groups(groups) -> None:
+    """Pin the joint groups counted as arm, overriding per-episode inference."""
+    global ARM_GROUPS
+    ARM_GROUPS = {g for g in (groups or []) if g} or None
+
+
+def resolve_arm_groups(joint_groups) -> Optional[set]:
+    """
+    Pick the groups whose tracking error represents the arm.
+
+    An explicit --arm-groups wins. Otherwise every group is counted except
+    hands/grippers/head, matching the intent of the old prefix filter but
+    driven by the descriptor's own group names.
+    """
+    if ARM_GROUPS is not None:
+        return set(ARM_GROUPS)
+    if not joint_groups:
+        return None
+    return {
+        g for g in joint_groups
+        if not any(h in g.lower() for h in NON_ARM_GROUP_HINTS)
+    } or None
 
 
 def _set_hatch_color(patch, color: str, alpha: float = 0.55) -> None:
@@ -242,9 +255,7 @@ def apply_style() -> None:
     })
 
 
-# ---------------------------------------------------------------------------
-# Loading
-# ---------------------------------------------------------------------------
+# --- Loading ---
 
 def parse_logs_arg(items: List[str]) -> List[Tuple[str, str]]:
     """Parse ``label:dir`` items into (label, dir) tuples."""
@@ -295,6 +306,9 @@ def load_episode_file(path: str) -> Optional[Dict]:
     meta: Dict = {}
     summary: Dict = {}
     rows: List[Dict] = []
+    # Groups whose tracking error counts as "arm". Resolved from the meta line
+    # (written first), so steps are flattened with the grouping already known.
+    arm_groups: Optional[set] = None
     with open(path, 'r') as fh:
         for line in fh:
             line = line.strip()
@@ -307,13 +321,13 @@ def load_episode_file(path: str) -> Optional[Dict]:
             kind = obj.get('type')
             if kind == 'meta':
                 meta = obj
+                arm_groups = resolve_arm_groups(meta.get('joint_groups'))
             elif kind == 'summary':
                 summary = obj
             elif kind == 'step':
-                rows.append(_flatten_step(obj))
-    # Keep episodes that have a meta or summary even with zero steps — an
-    # immediate abort can terminate before any step is logged, and dropping
-    # those would bias the termination-reason counts.
+                rows.append(_flatten_step(obj, arm_groups))
+    # Keep zero-step episodes with a meta/summary — an immediate abort logs
+    # no steps, and dropping it would bias the termination-reason counts.
     if not rows and not meta and not summary:
         return None
     steps = (pd.DataFrame(rows).sort_values('t').reset_index(drop=True)
@@ -321,7 +335,7 @@ def load_episode_file(path: str) -> Optional[Dict]:
     return {'path': path, 'meta': meta, 'summary': summary, 'steps': steps}
 
 
-def _flatten_step(obj: Dict) -> Dict:
+def _flatten_step(obj: Dict, arm_groups: Optional[set] = None) -> Dict:
     """
     Flatten one step into scalar columns.
 
@@ -340,11 +354,11 @@ def _flatten_step(obj: Dict) -> Dict:
         'ee_roll': ee.get('roll'), 'ee_pitch': ee.get('pitch'),
         'ee_yaw': ee.get('yaw'),
     }
-    # Arm-only tracking error: the hand/head joints dominate the all-joint mean
-    # and are not what the policy is being judged on.
-    track = obj.get('tracking_error') or {}
-    arm = [abs(v) for k, v in track.items()
-           if k.startswith(ARM_PREFIXES) and isinstance(v, (int, float))]
+    # Arm-only tracking error from per-group means — hand/head joints skew
+    # the all-joint mean and aren't what the policy is judged on.
+    by_group = obj.get('track_abs_mean_by_group') or {}
+    arm = [abs(v) for g, v in by_group.items()
+           if (arm_groups is None or g in arm_groups) and isinstance(v, (int, float))]
     row['track_arm_abs_mean'] = float(np.mean(arm)) if arm else None
     row['track_arm_abs_max'] = float(np.max(arm)) if arm else None
     return row
@@ -360,20 +374,15 @@ def load_model(label: str, directory: str, pick_only: bool = False) -> Dict:
             episodes.append(ep)
     model = {'label': label, 'dir': directory, 'episodes': episodes,
              'pick_only': pick_only}
-    # A run is "simulated" when the Gazebo observer actually reported a block
-    # pose; that is also what makes its stage scores derivable without an
-    # operator. Test `min_ee_block_dist`, not `max_block_lift`: the logger
-    # defaults the latter to 0.0 even on hardware, where it means "never
-    # observed" rather than "did not move", so it is not a sim/real signal.
+    # "Simulated" = Gazebo reported a block pose. Test `min_ee_block_dist`, not
+    # `max_block_lift`: it defaults to 0.0 on hardware too ("never observed").
     model['is_sim'] = any(
         ep['summary'].get('min_ee_block_dist') is not None
         for ep in episodes)
     return model
 
 
-# ---------------------------------------------------------------------------
-# Operator scores
-# ---------------------------------------------------------------------------
+# --- Operator scores ---
 
 SCORE_COLUMNS = ['model', 'episode', 'file', 'score', 'note']
 
@@ -421,9 +430,7 @@ def attach_scores(per_ep: pd.DataFrame,
     return per_ep
 
 
-# ---------------------------------------------------------------------------
-# Aggregation
-# ---------------------------------------------------------------------------
+# --- Aggregation ---
 
 def per_episode_table(model: Dict) -> pd.DataFrame:
     """One row per episode, from the summary line plus step-derived columns."""
@@ -505,9 +512,8 @@ def aggregate_table(per_ep: pd.DataFrame) -> pd.DataFrame:
             'episodes': n,
             'scored': int(sc.size),
         }
-        # Stages are cumulative: score N means stages 1..N all succeeded, so
-        # the rate for stage N is simply the share of episodes scoring >= N.
-        # Only the final stage (place) counts as task success.
+        # Stages cumulative: score N means stages 1..N succeeded, so stage N's
+        # rate is the share scoring >= N. Only the final stage counts as success.
         if sc.size:
             row['mean_stage'] = '{:.2f} ± {:.2f}'.format(sc.mean(),
                                                          sc.std(ddof=0))
@@ -531,8 +537,10 @@ def aggregate_table(per_ep: pd.DataFrame) -> pd.DataFrame:
             'timeout_rate_%': (round(100.0 * outcomes.get('timeout', 0) / n, 1)
                                if n else 0.0),
             'duration_s': _mean_std(g['duration_s'], '{:.1f}'),
-            'arm_track_err_rad': _mean_std(g.get('arm_track_mean',
-                                                 g['mean_abs_tracking_error'])),
+            # Blank, not all-joint mean: substituting it would silently report
+            # a different metric under the arm-only label.
+            'arm_track_err_rad': (_mean_std(g['arm_track_mean'])
+                                  if 'arm_track_mean' in g else '--'),
             'jerk_p95_rad': _mean_std(g.get('jerk_p95', g['max_joint_jerk'])),
             'joint_path_rad': _mean_std(g['joint_path_length'], '{:.1f}'),
             'ee_path_m': _mean_std(g['ee_path_len_m'], '{:.2f}'),
@@ -587,9 +595,7 @@ def write_latex(df: pd.DataFrame, path: str) -> None:
         fh.write('\n'.join(out) + '\n')
 
 
-# ---------------------------------------------------------------------------
-# Time-series resampling for mean +/- std bands
-# ---------------------------------------------------------------------------
+# --- Time-series resampling for mean +/- std bands ---
 
 def resample(episodes: List[Dict], column: str, grid: np.ndarray) -> np.ndarray:
     """
@@ -661,9 +667,7 @@ def plot_band(ax, models: List[Dict], column: str, dt: float = 0.1,
                         color=c, alpha=0.10, linewidth=0)
 
 
-# ---------------------------------------------------------------------------
-# Figures
-# ---------------------------------------------------------------------------
+# --- Figures ---
 
 def fig_scores(per_ep: pd.DataFrame):
     """Operator score distribution (1-5) per task — the headline result."""
@@ -776,9 +780,8 @@ def fig_stage_funnel(per_ep: pd.DataFrame):
                     va='bottom', fontsize=8, color=INK_SOFT)
             ax.text(xi + off, r + 9.0, '{}/{}'.format(k, n_ep), ha='center',
                     va='bottom', fontsize=7, color=NEUTRAL)
-        # Mark EVERY stage the task does not have, so the absent bars are not
-        # misread as zeros — a gap at one stage and nothing at the next reads
-        # as "failed here", which is the opposite of "never attempted".
+        # Mark every missing stage explicitly — a blank bar next to real ones
+        # would misread as "failed here" instead of "never attempted".
         for xi in x[n_stages:]:
             ax.text(xi + off, 3, 'n/a', ha='center', va='bottom',
                     fontsize=8, color=NEUTRAL, rotation=90)
@@ -905,8 +908,13 @@ def fig_jerk(models):
         return None
     # Width follows the box count so two boxes don't sprawl across 7 inches.
     fig, ax = plt.subplots(figsize=(2.0 + 1.5 * len(data), 3.8))
-    bp = ax.boxplot(data, labels=labels, showfliers=False, patch_artist=True,
-                    widths=0.4, medianprops={'color': INK, 'linewidth': 2})
+    # 'labels' was renamed 'tick_labels' in matplotlib 3.9 and removed in 3.11.
+    label_kw = ('tick_labels'
+                if tuple(int(p) for p in matplotlib.__version__.split('.')[:2]) >= (3, 9)
+                else 'labels')
+    bp = ax.boxplot(data, showfliers=False, patch_artist=True, widths=0.4,
+                    medianprops={'color': INK, 'linewidth': 2},
+                    **{label_kw: labels})
     for box, mi in zip(bp['boxes'], used):
         box.set_facecolor(SERIES_COLORS[mi % len(SERIES_COLORS)])
         box.set_alpha(0.30)
@@ -1012,9 +1020,7 @@ def fig_ee_trajectory(models, per_ep: pd.DataFrame):
     return fig
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+# --- Main ---
 
 def main() -> None:
     """Load episode logs, write tables and figures, print the summary."""
@@ -1033,6 +1039,10 @@ def main() -> None:
                              'block") and so has 3 stages, not 5. Their '
                              'success rate means "lifted" and is NOT '
                              'comparable with a pick-and-place success rate.')
+    parser.add_argument('--arm-groups', nargs='+', default=None, metavar='GROUP',
+                        help='Descriptor joint groups counted as the arm for '
+                             'tracking error. Default: every group in the '
+                             "episode's joint_groups except hand/gripper/head.")
     parser.add_argument('--scores', default=None,
                         help='CSV of operator scores (model,episode,file,'
                              'score,note) with score the number of cumulative '
@@ -1058,6 +1068,7 @@ def main() -> None:
 
     os.makedirs(args.out, exist_ok=True)
     apply_style()
+    set_arm_groups(args.arm_groups)
 
     pairs = parse_logs_arg(args.logs)
     pick_only = set(args.pick_only)
@@ -1084,9 +1095,8 @@ def main() -> None:
     scores = load_scores(args.scores)
     per_ep = attach_scores(per_ep, scores)
 
-    # Simulated runs carry the ground truth the operator sheet exists to
-    # replace, so fill their stages automatically — but never overwrite a score
-    # that was supplied by hand.
+    # Sim runs have ground truth, so auto-fill stages — never overwrite an
+    # operator-supplied score.
     per_ep['score_source'] = np.where(per_ep['score'].notna(), 'operator', '')
     for m in models:
         if not m['is_sim']:
