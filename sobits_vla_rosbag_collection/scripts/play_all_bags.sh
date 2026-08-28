@@ -3,7 +3,7 @@
 # Usage: ./play_all_bags.sh [--dir <rosbags-dir>] [--rate <rate>] [--loop]
 #                          [--topics <topic1> <topic2> ...]
 #
-# --dir defaults to the directory holding this script. Point it elsewhere when
+# --dir defaults to the sibling rosbags/ dir. Point it elsewhere when
 # the episodes live on another disk, e.g. the merged pnp_bottle_bin tree:
 #   ./play_all_bags.sh --dir /media/$USER/<uuid>/pnp_bottle_bin_all
 # The directory must contain recorded_bags_meta.yaml plus the session subdirs.
@@ -17,7 +17,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROSBAGS_DIR="$SCRIPT_DIR"
+# Script lives in scripts/; default output root is the sibling rosbags/ dir.
+ROSBAGS_DIR="$(cd "$SCRIPT_DIR/../rosbags" && pwd)"
 
 # ── defaults ──────────────────────────────────────────────────────────────────
 RATE=1.0

@@ -42,6 +42,7 @@ setup(
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/' + package_name + '/launch', glob('launch/*.py')),
         ('share/' + package_name + '/scripts', glob('scripts/*.sh')),
+        ('share/' + package_name + '/logs', glob('logs/.gitignore')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

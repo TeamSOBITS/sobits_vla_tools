@@ -75,6 +75,10 @@ install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(FILES rosbags/.gitignore
+  DESTINATION share/${PROJECT_NAME}/rosbags
+)
+
 # Headers are internal to this package: no downstream package includes them,
 # so they are deliberately not installed or exported.
 
