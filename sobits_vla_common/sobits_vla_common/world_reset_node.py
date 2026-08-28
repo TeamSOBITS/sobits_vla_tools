@@ -432,10 +432,11 @@ class WorldResetNode(Node):
 
         if self._sim_enabled:
             result = self._resetter.reset(preset=request.preset)
+            # Empty request defers to the scene's active_preset; log the one
+            # actually applied, not a misleading 'default' literal.
+            effective = request.preset or self._scene.get('active_preset') or 'default'
             self.get_logger().info(
-                'World reset (preset={!r}): {}'.format(
-                    request.preset or 'default', result.message
-                )
+                'World reset (preset={!r}): {}'.format(effective, result.message)
             )
         else:
             result = ResetResult(True, 'Sim disabled -- no teleports.')
