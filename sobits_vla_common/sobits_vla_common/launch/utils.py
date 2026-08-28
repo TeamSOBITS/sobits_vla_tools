@@ -45,6 +45,9 @@ boolean and map it through :func:`pixi_env_for`.
 
 import os
 
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+
 
 def _search_up_for(filename: str, start: str) -> str:
     """Walk up from `start` returning the dir-joined `filename` if found."""
@@ -169,3 +172,55 @@ def pixi_prefix(pixi_env: str, manifest: str = '') -> str:
         return ''
     manifest = manifest or default_pixi_manifest()
     return f'pixi run --manifest-path {manifest} -e {env} python'
+
+
+def resolve_pixi_env(context) -> str:
+    """
+    Resolve the pixi env for the current launch context.
+
+    ``pixi_env`` (an explicit env name) wins when set; the literal 'none'
+    disables the prefix; otherwise the ``enable_gpu`` boolean picks cpu/gpu
+    via :func:`pixi_env_for`. Requires the launch file to have declared both
+    the ``pixi_env`` and ``enable_gpu`` launch arguments (see
+    :func:`pixi_launch_arguments`).
+    """
+    explicit = LaunchConfiguration('pixi_env').perform(context).strip()
+    if explicit:
+        return '' if explicit.lower() == 'none' else explicit
+    return pixi_env_for(LaunchConfiguration('enable_gpu').perform(context))
+
+
+def pixi_launch_arguments(default_pixi_manifest_value: str) -> list:
+    """
+    Return the enable_gpu/pixi_env/pixi_manifest DeclareLaunchArgument triple.
+
+    Shared verbatim by every launch file that runs a node in a pixi env.
+    ``default_pixi_manifest_value`` is normally the caller's own
+    ``default_pixi_manifest()`` result, kept as a module-level constant so it
+    is computed once at launch-description build time, not per-argument.
+    """
+    return [
+        DeclareLaunchArgument(
+            'enable_gpu',
+            default_value='true',
+            description=(
+                'true -> run the node in the `gpu` pixi env (CUDA torch); '
+                'false -> the `cpu` env. Set pixi_env:="" to skip the pixi '
+                'prefix entirely and use the ambient interpreter.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'pixi_env',
+            default_value='',
+            description=(
+                'Explicit pixi environment name, overriding enable_gpu. '
+                'Empty (default) derives it from enable_gpu; "none" '
+                'disables the pixi prefix.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'pixi_manifest',
+            default_value=default_pixi_manifest_value,
+            description='Path to pixi.toml (override for installed layouts).',
+        ),
+    ]

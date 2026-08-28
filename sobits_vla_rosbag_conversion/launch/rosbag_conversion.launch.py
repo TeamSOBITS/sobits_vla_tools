@@ -33,16 +33,9 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-from sobits_vla_common.launch.utils import default_pixi_manifest, pixi_env_for, pixi_prefix
-
-
-def _resolve_pixi_env(context) -> str:
-    """pixi_env wins when set; 'none' disables the prefix; else enable_gpu."""
-    explicit = LaunchConfiguration('pixi_env').perform(context).strip()
-    if explicit:
-        return '' if explicit.lower() == 'none' else explicit
-    return pixi_env_for(LaunchConfiguration('enable_gpu').perform(context))
-
+from sobits_vla_common.launch.utils import (
+    default_pixi_manifest, pixi_launch_arguments, pixi_prefix, resolve_pixi_env,
+)
 
 # Conversion imports pandas/scipy/matplotlib/rosbags/torch -> shared pixi env;
 # only the accelerator varies, GPU by default. Override with enable_gpu:=false
@@ -165,7 +158,7 @@ def generate_launch_description_impl(context, *args, **kwargs):
         parameters.append(override_params)
 
     prefix = pixi_prefix(
-        _resolve_pixi_env(context),
+        resolve_pixi_env(context),
         LaunchConfiguration('pixi_manifest').perform(context),
     )
 
@@ -229,29 +222,7 @@ def generate_launch_description():
                 default_value='false',
                 description='Delete existing output dataset before converting.',
             ),
-            DeclareLaunchArgument(
-                'enable_gpu',
-                default_value='true',
-                description=(
-                    'true -> run the node in the `gpu` pixi env (CUDA torch); '
-                    'false -> the `cpu` env. Set pixi_env:="" to skip the pixi '
-                    'prefix entirely and use the ambient interpreter.'
-                ),
-            ),
-            DeclareLaunchArgument(
-                'pixi_env',
-                default_value='',
-                description=(
-                    'Explicit pixi environment name, overriding enable_gpu. '
-                    'Empty (default) derives it from enable_gpu; "none" '
-                    'disables the pixi prefix.'
-                ),
-            ),
-            DeclareLaunchArgument(
-                'pixi_manifest',
-                default_value=_DEFAULT_PIXI_MANIFEST,
-                description='Path to pixi.toml (override for installed layouts).',
-            ),
+            *pixi_launch_arguments(_DEFAULT_PIXI_MANIFEST),
             OpaqueFunction(function=generate_launch_description_impl),
         ]
     )
