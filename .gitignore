@@ -1,2 +1,4 @@
 rosbags
 __pycache__
+pytest.xml
+.pytest_cache/
