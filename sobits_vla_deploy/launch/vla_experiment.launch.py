@@ -180,6 +180,8 @@ def _setup(context, *args, **kwargs):
         package='sobits_vla_deploy',
         executable='vla_experiment_runner',
         name='vla_experiment_runner',
+        # Grouping only: all runner I/O is the absolute /vla/* bus.
+        namespace=robot_name,
         output='screen',
         prefix=prefix or None,
         parameters=[{
