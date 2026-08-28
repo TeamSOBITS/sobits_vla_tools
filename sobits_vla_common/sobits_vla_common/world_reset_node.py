@@ -77,8 +77,44 @@ from rclpy.qos import QoSProfile
 from sensor_msgs.msg import JointState
 from sobits_interfaces.srv import VlaResetWorld
 from sobits_vla_common import gz_utils
+from sobits_vla_common.param_schema import declare_from_schema, P, read_schema
 from sobits_vla_common.world_reset import POSE_FIELDS, ResetResult, WorldResetter
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+
+# Fixed-name params only. Presets/models/reset_pose groups are keyed by list
+# params resolved at runtime (Template can't nest a dynamic key inside
+# another dynamic key), so that scene-loading stays hand-written below.
+_SCHEMA = {
+    'world_reset': {
+        'world_name': P(''),
+        'settle_s': P(0.5),
+        'presets': P(['default']),
+        # Preset applied when a caller sends preset:"" -- which every caller
+        # does unless it sets the field. Switches scenes without code changes.
+        'active_preset': P(''),
+        # Redraw budget when a randomized pose lands inside another model's
+        # radius. Exceeding it accepts an overlap rather than skipping a reset.
+        'max_placement_tries': P(100),
+        # Robot re-pose is published straight to the joint controllers from
+        # this node's own scene YAML -- no dependency on a teleop node.
+        'reset_pose': {
+            'groups': P(['']),
+            'time_from_start': P(3.0),
+            # Trajectories are fire-and-forget, so wait out the motion before
+            # teleporting onto a still-moving base.
+            'wait_s': P(4.0),
+            # False skips waiting for the arm to settle before teleporting --
+            # faster, but a still-moving base gets shoved by arm reaction torque.
+            'wait': P(True),
+        },
+        # Absolute: this node runs un-namespaced, so a relative name would
+        # resolve to /joint_states where the robot publishes nothing.
+        'joint_states_topic': P('/sobit_home/joint_states'),
+        'still_eps_rad': P(0.002),
+        'still_hold_s': P(0.4),
+    },
+}
 
 
 class WorldResetNode(Node):
@@ -87,51 +123,22 @@ class WorldResetNode(Node):
         super().__init__('world_reset_node')
         self._cb_group = ReentrantCallbackGroup()
 
-        self.declare_parameter('world_reset.world_name', '')
-        self.declare_parameter('world_reset.settle_s', 0.5)
-        self.declare_parameter('world_reset.presets', ['default'])
-        # Preset applied when a caller sends preset:"" -- which every caller
-        # does unless it sets the field. Switches scenes without code changes.
-        self.declare_parameter('world_reset.active_preset', '')
-        # Redraw budget when a randomized pose lands inside another model's
-        # radius. Exceeding it accepts an overlap rather than skipping a reset.
-        self.declare_parameter('world_reset.max_placement_tries', 100)
-        # Robot re-pose is published straight to the joint controllers from
-        # this node's own scene YAML -- no dependency on a teleop node.
-        self.declare_parameter('world_reset.reset_pose.groups', [''])
-        self.declare_parameter('world_reset.reset_pose.time_from_start', 3.0)
-        # Trajectories are fire-and-forget, so wait out the motion before
-        # teleporting onto a still-moving base.
-        self.declare_parameter('world_reset.reset_pose.wait_s', 4.0)
-        # False skips waiting for the arm to settle before teleporting -- faster, but a
-        # still-moving base gets shoved off target by the arm's reaction torque.
-        self.declare_parameter('world_reset.reset_pose.wait', True)
+        declare_from_schema(self, _SCHEMA)
+        params = read_schema(self, _SCHEMA).world_reset
 
-        self._world_name = str(self.get_parameter('world_reset.world_name').value)
-        self._settle_s = float(self.get_parameter('world_reset.settle_s').value)
-        self._pose_time_from_start = float(
-            self.get_parameter('world_reset.reset_pose.time_from_start').value
-        )
-        self._pose_wait_s = float(
-            self.get_parameter('world_reset.reset_pose.wait_s').value
-        )
-        self._pose_wait = bool(
-            self.get_parameter('world_reset.reset_pose.wait').value
-        )
-        # Absolute: this node runs un-namespaced, so a relative name would
-        # resolve to /joint_states where the robot publishes nothing.
-        self.declare_parameter(
-            'world_reset.joint_states_topic', '/sobit_home/joint_states')
-        self.declare_parameter('world_reset.still_eps_rad', 0.002)
-        self.declare_parameter('world_reset.still_hold_s', 0.4)
-        self._still_eps = float(self.get_parameter('world_reset.still_eps_rad').value)
-        self._still_hold_s = float(
-            self.get_parameter('world_reset.still_hold_s').value
-        )
+        self._world_name = str(params.world_name)
+        self._settle_s = float(params.settle_s)
+        self._pose_time_from_start = float(params.reset_pose.time_from_start)
+        self._pose_wait_s = float(params.reset_pose.wait_s)
+        self._pose_wait = bool(params.reset_pose.wait)
+        self._joint_states_topic = str(params.joint_states_topic)
+        self._still_eps = float(params.still_eps_rad)
+        self._still_hold_s = float(params.still_hold_s)
+        self._max_placement_tries = int(params.max_placement_tries)
         self._joint_lock = Lock()
         self._reset_lock = Lock()
         self._last_joint_positions: Optional[Dict[str, float]] = None
-        self._scene = self._load_scene()
+        self._scene = self._load_scene(params)
         if not self._scene['presets']:
             raise RuntimeError(
                 'No world_reset presets resolved -- pass a scene config to this '
@@ -143,16 +150,14 @@ class WorldResetNode(Node):
 
         self._resetter = WorldResetter(
             self._scene, self._set_entity_pose, logger=self.get_logger(),
-            max_placement_tries=int(
-                self.get_parameter('world_reset.max_placement_tries').value
-            ),
+            max_placement_tries=self._max_placement_tries,
         )
 
-        self._pose_groups = self._load_reset_pose()
+        self._pose_groups = self._load_reset_pose(params)
         if self._pose_groups:
             self.create_subscription(
                 JointState,
-                str(self.get_parameter('world_reset.joint_states_topic').value),
+                self._joint_states_topic,
                 self._on_joint_states,
                 QoSProfile(depth=10),
                 callback_group=self._cb_group,
@@ -175,11 +180,10 @@ class WorldResetNode(Node):
             )
         )
 
-    def _load_reset_pose(self) -> list:
+    def _load_reset_pose(self, params: Any) -> list:
         """Read the reset_pose block: one trajectory publisher per joint group."""
         groups = []
-        names = self.get_parameter('world_reset.reset_pose.groups').value or []
-        for name in [n for n in names if n]:
+        for name in params.reset_pose.groups:
             base = 'world_reset.reset_pose.{}'.format(name)
             self.declare_parameter(base + '.topic', '')
             self._declare_array(base + '.joints')
@@ -294,15 +298,14 @@ class WorldResetNode(Node):
             name, None, ParameterDescriptor(dynamic_typing=True)
         )
 
-    def _load_scene(self) -> Dict[str, Any]:
+    def _load_scene(self, params: Any) -> Dict[str, Any]:
         """Build the WorldResetter scene dict from the flat world_reset.* params."""
         scene: Dict[str, Any] = {
             'presets': {},
             # Used when a caller sends preset:"". Empty -> 'default'.
-            'active_preset': str(
-                self.get_parameter('world_reset.active_preset').value or ''),
+            'active_preset': str(params.active_preset or ''),
         }
-        for preset in self.get_parameter('world_reset.presets').value or []:
+        for preset in params.presets:
             base = 'world_reset.{}'.format(preset)
             self._declare_array(base + '.models')
             models = []
