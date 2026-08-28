@@ -170,6 +170,14 @@ if(BUILD_TESTING)
           PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
         TIMEOUT 60
       )
+      # Sweeps sibling packages' config YAMLs against their node _SCHEMAs, so
+      # it only runs from a source tree where those packages sit next to us.
+      ament_add_pytest_test(test_config_schemas test/test_config_schemas.py
+        PYTHON_EXECUTABLE "${_wr_python}"
+        APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+        TIMEOUT 60
+      )
     endif()
   endif()
 endif()
