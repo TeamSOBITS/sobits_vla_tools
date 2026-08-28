@@ -78,6 +78,8 @@ Usage:
            bottle_bin:<pkg>/logs/smolvla_pnp_bottle_bin \\
     --scores /tmp/vla_eval/scores.csv \\
     --out /tmp/vla_eval
+
+--out is optional; it defaults to <sobits_vla_deploy logs root>/eval.
 """
 
 from __future__ import annotations
@@ -92,6 +94,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
+from sobits_vla_common.output_root import output_root  # noqa: E402
 from sobits_vla_deploy.eval.context import EvalContext  # noqa: E402
 from sobits_vla_deploy.eval.export import (  # noqa: E402
     attach_scores, write_latex, write_markdown, write_scores_template,
@@ -115,8 +118,9 @@ def _parse_args():
         help='One or more task/model log dirs, e.g. '
              'ball_bowl:/tmp/vla_logs/smolvla_pnp_ball_bowl',
     )
-    parser.add_argument('--out', default='./vla_eval_out',
-                        help='Output directory for tables and figures.')
+    parser.add_argument('--out', default=None,
+                        help='Output directory for tables and figures. '
+                             'Default: <sobits_vla_deploy logs root>/eval.')
     parser.add_argument('--pick-only', nargs='*', default=[], metavar='LABEL',
                         help='Labels whose task ends at the lift ("Pick up the '
                              'block") and so has 3 stages, not 5. Their '
@@ -261,6 +265,8 @@ def _render_figures(args, models, per_ep, fmts):
 def main() -> None:
     """Load episode logs, write tables and figures, print the summary."""
     args = _parse_args()
+    if args.out is None:
+        args.out = str(output_root('sobits_vla_deploy', 'logs') / 'eval')
 
     supported = matplotlib.figure.Figure().canvas.get_supported_filetypes()
     fmts = [f.lower().lstrip('.') for f in args.formats]
