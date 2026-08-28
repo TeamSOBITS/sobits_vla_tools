@@ -25,10 +25,19 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer
-from sobits_vla_deploy.sobits_vla_deploy import LeRobotDeployNode
-
 __all__ = [
     'LeRobotDeployNode',
     'ActionChunkBuffer',
 ]
+
+
+def __getattr__(name):
+    # Lazy so importing a light submodule (e.g. eval/) never pulls in torch
+    # via the deploy node's own heavy import chain. PEP 562.
+    if name == 'LeRobotDeployNode':
+        from sobits_vla_deploy.sobits_vla_deploy import LeRobotDeployNode
+        return LeRobotDeployNode
+    if name == 'ActionChunkBuffer':
+        from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer
+        return ActionChunkBuffer
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
