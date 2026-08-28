@@ -51,6 +51,9 @@ from typing import Any, Dict, List, Union
 class P:
     default: Any
     description: str = ''
+    # Caller-built ParameterDescriptor (e.g. for a description or
+    # dynamic_typing); kept opaque so this module stays rclpy-free.
+    descriptor: Any = None
 
 
 @dataclass
@@ -73,7 +76,10 @@ def _is_str_list_default(default: Any) -> bool:
 
 
 def _declare_leaf(node: Any, name: str, leaf: P) -> None:
-    node.declare_parameter(name, leaf.default)
+    if leaf.descriptor is not None:
+        node.declare_parameter(name, leaf.default, leaf.descriptor)
+    else:
+        node.declare_parameter(name, leaf.default)
 
 
 def declare_from_schema(node: Any, schema: Dict[str, Any], ns: str = '') -> None:
@@ -147,6 +153,23 @@ def _read_template(node: Any, ns: str, tmpl: Template) -> List[tuple]:
         (str(item), read_schema(node, tmpl.subtree, ns=_expand_template_ns(ns, item)))
         for item in _template_items(node, tmpl)
     ]
+
+
+def read_flat(node: Any, schema: Dict[str, Any], ns: str = '') -> Dict[str, Any]:
+    """Like read_schema, but {dotted_name: value} -- for callers built around a flat dict."""
+    flat: Dict[str, Any] = {}
+    for key, value in schema.items():
+        name = _join(ns, key)
+        if isinstance(value, P):
+            flat[name] = _read_leaf(node, name, value)
+        elif isinstance(value, Template):
+            for item in _template_items(node, tmpl=value):
+                flat.update(read_flat(node, value.subtree, ns=_expand_template_ns(name, item)))
+        elif isinstance(value, dict):
+            flat.update(read_flat(node, value, ns=name))
+        else:
+            raise TypeError('Unsupported schema node at {!r}: {!r}'.format(name, value))
+    return flat
 
 
 def _flatten_schema_keys(schema: Dict[str, Any], ns: str = '') -> Dict[str, Any]:

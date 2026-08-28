@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pytest  # noqa: E402
 
 from sobits_vla_common.param_schema import (  # noqa: E402
-    declare_from_schema, P, read_schema, Template, validate_config,
+    declare_from_schema, P, read_flat, read_schema, Template, validate_config,
 )
 
 import yaml  # noqa: E402
@@ -52,9 +52,11 @@ class FakeNode:
 
     def __init__(self):
         self._params = {}
+        self._descriptors = {}
 
     def declare_parameter(self, name, default, descriptor=None):
         self._params[name] = default
+        self._descriptors[name] = descriptor
         return FakeParam(default)
 
     def get_parameter(self, name):
@@ -79,6 +81,17 @@ def _morphology_schema():
     }
 
 
+def _gamepad_schema():
+    return {
+        'gamepad': {
+            'controller': P('quest'),
+            '<item>': Template('gamepad.controller', {
+                'enabled': P(True),
+            }),
+        },
+    }
+
+
 class TestDeclareFromSchema:
 
     def test_nested_dotted_names(self):
@@ -92,6 +105,17 @@ class TestDeclareFromSchema:
         schema = {'a': {'b': P(1)}}
         declare_from_schema(node, schema, ns='world_reset')
         assert node._params['world_reset.a.b'] == 1
+
+    def test_descriptor_passed_through_when_set(self):
+        node = FakeNode()
+        marker = object()
+        declare_from_schema(node, {'a': P(1, descriptor=marker)})
+        assert node._descriptors['a'] is marker
+
+    def test_no_descriptor_by_default(self):
+        node = FakeNode()
+        declare_from_schema(node, {'a': P(1)})
+        assert node._descriptors['a'] is None
 
     def test_multiple_leaves_at_different_depths(self):
         node = FakeNode()
@@ -181,25 +205,15 @@ class TestTemplate:
             'robot_info.name': 'sobit_robot',
         }
 
-    def _gamepad_schema(self):
-        return {
-            'gamepad': {
-                'controller': P('quest'),
-                '<item>': Template('gamepad.controller', {
-                    'enabled': P(True),
-                }),
-            },
-        }
-
     def test_scalar_key_param_expands_one_subtree(self):
         node = FakeNode()
-        declare_from_schema(node, self._gamepad_schema())
+        declare_from_schema(node, _gamepad_schema())
         assert node._params['gamepad.quest.enabled'] is True
         assert len(node._params) == 2
 
     def test_scalar_key_param_does_not_explode_per_character(self):
         node = FakeNode()
-        declare_from_schema(node, self._gamepad_schema())
+        declare_from_schema(node, _gamepad_schema())
         for ch in 'quest':
             assert 'gamepad.{}.enabled'.format(ch) not in node._params
 
@@ -207,7 +221,7 @@ class TestTemplate:
         node = FakeNode()
         node.declare_parameter('gamepad.controller', None)
         declare_from_schema(node, {
-            'gamepad': {'<item>': self._gamepad_schema()['gamepad']['<item>']},
+            'gamepad': {'<item>': _gamepad_schema()['gamepad']['<item>']},
         })
         assert node._params == {'gamepad.controller': None}
 
@@ -215,16 +229,69 @@ class TestTemplate:
         node = FakeNode()
         node.declare_parameter('gamepad.controller', '')
         declare_from_schema(node, {
-            'gamepad': {'<item>': self._gamepad_schema()['gamepad']['<item>']},
+            'gamepad': {'<item>': _gamepad_schema()['gamepad']['<item>']},
         })
         assert node._params == {'gamepad.controller': ''}
 
     def test_read_scalar_key_param(self):
         node = FakeNode()
-        schema = self._gamepad_schema()
+        schema = _gamepad_schema()
         declare_from_schema(node, schema)
         ns = read_schema(node, schema)
         assert ns.gamepad.quest.enabled is True
+
+
+class TestReadFlat:
+
+    def test_nested_names_are_dotted(self):
+        node = FakeNode()
+        schema = {'a': {'b': P(1), 'c': P('s')}}
+        declare_from_schema(node, schema)
+        assert read_flat(node, schema) == {'a.b': 1, 'a.c': 's'}
+
+    def test_namespace_prefix(self):
+        node = FakeNode()
+        schema = {'a': {'b': P(1)}}
+        declare_from_schema(node, schema, ns='world_reset')
+        flat = read_flat(node, schema, ns='world_reset')
+        assert flat == {'world_reset.a.b': 1}
+
+    def test_empty_string_list_sentinel_filtered(self):
+        node = FakeNode()
+        schema = {'names': P([''])}
+        declare_from_schema(node, schema)
+        assert read_flat(node, schema) == {'names': []}
+
+    def test_template_expands_to_concrete_dotted_names(self):
+        node = FakeNode()
+        schema = _morphology_schema()
+        declare_from_schema(node, schema)
+        node.set_value('robot_info.morphology.arm.is_actionable', True)
+        flat = read_flat(node, schema)
+        assert flat['robot_info.morphology.base.is_actionable'] is False
+        assert flat['robot_info.morphology.arm.is_actionable'] is True
+        assert 'robot_info.morphology.<item>.is_actionable' not in flat
+
+    def test_scalar_template_expands_to_one_concrete_name(self):
+        node = FakeNode()
+        schema = _gamepad_schema()
+        declare_from_schema(node, schema)
+        flat = read_flat(node, schema)
+        assert flat == {
+            'gamepad.controller': 'quest',
+            'gamepad.quest.enabled': True,
+        }
+
+    def test_matches_read_schema_leaf_values(self):
+        node = FakeNode()
+        schema = _morphology_schema()
+        declare_from_schema(node, schema)
+        flat = read_flat(node, schema)
+        ns = read_schema(node, schema)
+        assert flat['robot_info.name'] == ns.robot_info.name
+        assert flat['robot_info.morphology.base.is_actionable'] == (
+            ns.robot_info.morphology.base.is_actionable
+        )
 
 
 class TestValidateConfig:
