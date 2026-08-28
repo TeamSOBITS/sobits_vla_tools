@@ -25,40 +25,35 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+"""
+Figure registry.
 
-from glob import glob
+FIGURES maps name -> plotting function, so adding a plot means adding a
+module here, not editing cli.py's orchestration.
+"""
 
-from setuptools import find_packages, setup
+from typing import Callable, Dict
 
-package_name = 'sobits_vla_deploy'
+from sobits_vla_deploy.eval.figures.duration import fig_duration
+from sobits_vla_deploy.eval.figures.economy import fig_economy
+from sobits_vla_deploy.eval.figures.ee_trajectory import fig_ee_trajectory
+from sobits_vla_deploy.eval.figures.jerk import fig_jerk
+from sobits_vla_deploy.eval.figures.outcomes import fig_outcomes
+from sobits_vla_deploy.eval.figures.scores import fig_scores
+from sobits_vla_deploy.eval.figures.stage_funnel import fig_stage_funnel
+from sobits_vla_deploy.eval.figures.timeseries import fig_timeseries
 
-setup(
-    name=package_name,
-    version='0.1.0',
-    packages=find_packages(exclude=['test']),
-    data_files=[
-        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/config', glob('config/*.yaml')),
-        ('share/' + package_name + '/launch', glob('launch/*.py')),
-        ('share/' + package_name + '/scripts', glob('scripts/*.sh')),
-    ],
-    install_requires=['setuptools'],
-    zip_safe=True,
-    maintainer='VALENTIN Keith',
-    maintainer_email='kvalentincardenas@gmail.com',
-    description='ROS packages for SOBITS VLA Deploy.',
-    license='BSD-3-Clause',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
-    entry_points={
-        'console_scripts': [
-            'sobits_vla_deploy = sobits_vla_deploy.sobits_vla_deploy:main',
-            'vla_experiment_runner = sobits_vla_deploy.experiment_runner:main',
-            'vla_eval = sobits_vla_deploy.eval.cli:main',
-        ],
-    },
-)
+# Signatures vary (per_ep-only, models-only, or models+column+...), so cli.py
+# calls each entry with the args its own docstring/name implies -- this
+# registry exists so a new figure is one import + one dict entry, not a
+# cli.py edit.
+FIGURES: Dict[str, Callable] = {
+    'operator_scores': fig_scores,
+    'stage_funnel': fig_stage_funnel,
+    'outcomes': fig_outcomes,
+    'duration': fig_duration,
+    'tracking_error': fig_timeseries,
+    'joint_jerk': fig_jerk,
+    'motion_economy': fig_economy,
+    'ee_trajectory': fig_ee_trajectory,
+}

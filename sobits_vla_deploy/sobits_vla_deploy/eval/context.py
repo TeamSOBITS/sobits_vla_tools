@@ -25,40 +25,42 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+"""Run-scoped config threaded through eval/, replacing the old module-level global."""
 
-from glob import glob
+from __future__ import annotations
 
-from setuptools import find_packages, setup
+from dataclasses import dataclass, field
+from typing import Optional, Set
 
-package_name = 'sobits_vla_deploy'
+# Group names excluded from the arm tracking-error metric. Hands/grippers and
+# the head are not what the policy is judged on and skew the mean.
+NON_ARM_GROUP_HINTS = ('hand', 'gripper', 'finger', 'head', 'end_effector')
 
-setup(
-    name=package_name,
-    version='0.1.0',
-    packages=find_packages(exclude=['test']),
-    data_files=[
-        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/config', glob('config/*.yaml')),
-        ('share/' + package_name + '/launch', glob('launch/*.py')),
-        ('share/' + package_name + '/scripts', glob('scripts/*.sh')),
-    ],
-    install_requires=['setuptools'],
-    zip_safe=True,
-    maintainer='VALENTIN Keith',
-    maintainer_email='kvalentincardenas@gmail.com',
-    description='ROS packages for SOBITS VLA Deploy.',
-    license='BSD-3-Clause',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
-    entry_points={
-        'console_scripts': [
-            'sobits_vla_deploy = sobits_vla_deploy.sobits_vla_deploy:main',
-            'vla_experiment_runner = sobits_vla_deploy.experiment_runner:main',
-            'vla_eval = sobits_vla_deploy.eval.cli:main',
-        ],
-    },
-)
+
+@dataclass
+class EvalContext:
+    """
+    Per-run config, replacing the old ARM_GROUPS module global.
+
+    arm_groups: explicit --arm-groups selection; None = derive per episode
+    from its own joint_groups meta (see resolve_arm_groups).
+    """
+
+    arm_groups: Optional[Set[str]] = field(default=None)
+
+    def resolve_arm_groups(self, joint_groups) -> Optional[Set[str]]:
+        """
+        Pick the groups whose tracking error represents the arm.
+
+        An explicit --arm-groups wins. Otherwise every group is counted
+        except hands/grippers/head, matching the intent of the old prefix
+        filter but driven by the descriptor's own group names.
+        """
+        if self.arm_groups is not None:
+            return set(self.arm_groups)
+        if not joint_groups:
+            return None
+        return {
+            g for g in joint_groups
+            if not any(h in g.lower() for h in NON_ARM_GROUP_HINTS)
+        } or None

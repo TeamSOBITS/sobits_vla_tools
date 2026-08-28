@@ -25,40 +25,30 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+"""Figure: mean +/- std of a step column vs time, one band per task."""
 
-from glob import glob
+from __future__ import annotations
 
-from setuptools import find_packages, setup
+import matplotlib.pyplot as plt
 
-package_name = 'sobits_vla_deploy'
+from sobits_vla_deploy.eval.figures._common import plot_band
 
-setup(
-    name=package_name,
-    version='0.1.0',
-    packages=find_packages(exclude=['test']),
-    data_files=[
-        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/config', glob('config/*.yaml')),
-        ('share/' + package_name + '/launch', glob('launch/*.py')),
-        ('share/' + package_name + '/scripts', glob('scripts/*.sh')),
-    ],
-    install_requires=['setuptools'],
-    zip_safe=True,
-    maintainer='VALENTIN Keith',
-    maintainer_email='kvalentincardenas@gmail.com',
-    description='ROS packages for SOBITS VLA Deploy.',
-    license='BSD-3-Clause',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
-    entry_points={
-        'console_scripts': [
-            'sobits_vla_deploy = sobits_vla_deploy.sobits_vla_deploy:main',
-            'vla_experiment_runner = sobits_vla_deploy.experiment_runner:main',
-            'vla_eval = sobits_vla_deploy.eval.cli:main',
-        ],
-    },
-)
+
+def fig_timeseries(models, column, ylabel, title, smooth_s: float = 0.0):
+    """Mean +/- std of ``column`` vs time, one band per task."""
+    fig, ax = plt.subplots(figsize=(7, 3.8))
+    plot_band(ax, models, column, smooth_s=smooth_s)
+    if not ax.lines:
+        plt.close(fig)
+        return None
+    ax.set_xlabel('time (s)')
+    ax.set_ylabel(ylabel)
+    if smooth_s:
+        title += '  ({:.0f} s rolling mean, band = ±1 std)'.format(smooth_s)
+    ax.set_title(title)
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend()
+    ax.grid(True, alpha=0.6)
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+    return fig

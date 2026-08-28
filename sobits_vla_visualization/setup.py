@@ -49,9 +49,4 @@ setup(
             'pytest',
         ],
     },
-    entry_points={
-        'console_scripts': [
-            'vla_eval = sobits_vla_visualization.vla_eval:main',
-        ],
-    },
 )

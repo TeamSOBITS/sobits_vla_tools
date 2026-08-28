@@ -6,8 +6,9 @@
   <name>sobits_vla_visualization</name>
   <version>0.1.0</version>
   <description>
-    Research-grade analysis and plotting for SOBITS VLA evaluation episode logs
-    (SmolVLA vs Pi05 comparison).
+    Empty skeleton reserved for future online VLA debug/visualization nodes.
+    Offline episode-log analysis (formerly vla_eval here) now lives in
+    sobits_vla_deploy/eval.
   </description>
 
   <maintainer email="kvalentincardenas@gmail.com">VALENTIN Keith</maintainer>
@@ -22,13 +23,6 @@
   <author email="kvalentincardenas@gmail.com">VALENTIN Keith</author>
 
   <buildtool_depend>ament_python</buildtool_depend>
-
-  <!--
-    Python (non-ROS) deps — numpy, pandas, matplotlib — are managed by pixi
-    (see pixi.toml, feature.stack), NOT declared as rosdep keys. This package is
-    numpy-2 based; the apt python3-numpy/pandas are numpy-1 builds and would
-    ABI-clash. Run via `pixi run -e cpu ...` (or -e gpu).
-  -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
