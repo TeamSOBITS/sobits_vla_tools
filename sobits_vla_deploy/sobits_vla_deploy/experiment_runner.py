@@ -132,6 +132,23 @@ class ExperimentRunner(Node):
         while rclpy.ok() and time.monotonic() < end:
             time.sleep(min(0.1, max(0.0, end - time.monotonic())))
 
+    def _wait_done_sim_time(self, budget_s: float) -> bool:
+        """
+        Wait for episode_done for budget_s NODE-CLOCK seconds.
+
+        With use_sim_time the node clock is simulation time, matching the
+        deploy node's episode_timeout_s units, so RTF < 1 no longer makes
+        this wait expire before the sim-time timeout can fire.
+        """
+        t0 = self.get_clock().now()
+        while rclpy.ok():
+            if self._done_event.wait(0.2):
+                return True
+            elapsed = (self.get_clock().now() - t0).nanoseconds * 1e-9
+            if elapsed >= budget_s:
+                return False
+        return False
+
     def run(self) -> None:
         self.get_logger().info(
             'Experiment runner: {} episodes, service={}, done-wait={}s.'.format(
@@ -173,7 +190,9 @@ class ExperimentRunner(Node):
                 self.get_logger().error('Aborting: could not start episode.')
                 break
 
-            got = self._done_event.wait(self._done_wait_s)
+            # The deploy timeout counts SIM seconds; a wall-clock wait fires
+            # early whenever RTF < 1, force-stopping before 'timeout' can.
+            got = self._wait_done_sim_time(self._done_wait_s)
             if not got:
                 self.get_logger().warning(
                     'Episode {} did not report done within {}s; forcing STOP.'
