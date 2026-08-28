@@ -14,7 +14,6 @@
       aggregate_fn_name: weighted_average
       async_enabled: true
       single_step_mode: false
-      max_joint_delta_per_step: 0.15
 
     rtc:
       # PI05 does not expose predict_action_chunk — keep disabled to avoid spurious warnings.
