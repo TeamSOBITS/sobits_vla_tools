@@ -29,11 +29,14 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
 from sobits_vla_deploy.sobits_vla_deploy import ActionChunkBuffer  # noqa: E402
+from sobits_vla_deploy.vla_episode_logger import EpisodeLogger  # noqa: E402
 
 
 # --- ActionChunkBuffer tests ---
@@ -247,3 +250,252 @@ class TestApplyManualDelta:
         steps = [{'j0': 0.1}]
         engine._apply_manual_delta(steps, state_vector={'j0': 1.0})
         assert steps[0]['j0'] == 0.1
+
+
+# --- ActionChunkBuffer: push/pop order + replace() ---
+
+
+class TestActionChunkBufferOrder:
+
+    def test_pop_returns_fifo_order(self):
+        buf = ActionChunkBuffer('weighted_average')
+        chunk = [_make_step(float(i)) for i in range(4)]
+        buf.merge(chunk, overlap=0)
+        popped = [buf.pop()['j0'] for _ in range(4)]
+        assert popped == [0.0, 1.0, 2.0, 3.0]
+
+    def test_replace_discards_delay_steps(self):
+        import torch
+        buf = ActionChunkBuffer('weighted_average')
+        original = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+        processed = [_make_step(float(i)) for i in range(4)]
+        buf.replace(original, processed, delay=2)
+        assert buf.size() == 2
+        assert buf.pop()['j0'] == 2.0
+
+    def test_replace_empty_inputs_is_noop(self):
+        buf = ActionChunkBuffer('weighted_average')
+        buf.merge([_make_step(1.0)], overlap=0)
+        buf.replace(None, [], delay=0)
+        assert buf.size() == 1
+
+
+# --- ActionInterpolator ---
+
+
+class TestActionInterpolator:
+
+    def test_multiplier_one_is_passthrough(self):
+        interp = ActionInterpolator(1)
+        assert not interp.enabled
+        assert interp.needs_new_action()
+        interp.add({'j0': 1.0})
+        assert interp.get() == {'j0': 1.0}
+        assert interp.needs_new_action()
+        assert interp.get() is None
+
+    def test_multiplier_greater_than_one_interpolates(self):
+        interp = ActionInterpolator(4)
+        assert interp.enabled
+        interp.add({'j0': 0.0})  # first step: no prev, base-rate passthrough
+        assert interp.get() == {'j0': 0.0}
+        assert interp.needs_new_action()
+
+        interp.add({'j0': 4.0})
+        values = [interp.get()['j0'] for _ in range(4)]
+        assert values == [1.0, 2.0, 3.0, 4.0]
+        assert interp.needs_new_action()
+        assert interp.get() is None
+
+    def test_reset_clears_buffer_and_prev(self):
+        interp = ActionInterpolator(3)
+        interp.add({'j0': 0.0})
+        interp.add({'j0': 3.0})
+        interp.reset()
+        assert interp.needs_new_action()
+        interp.add({'j0': 9.0})
+        # No prev after reset -> base-rate passthrough, not interpolated.
+        assert interp.get() == {'j0': 9.0}
+
+    def test_new_key_defaults_prev_to_its_own_value(self):
+        interp = ActionInterpolator(2)
+        interp.add({'j0': 0.0})
+        interp.add({'j0': 0.0, 'j1': 10.0})
+        first = interp.get()
+        assert first['j1'] == 10.0  # prev.get('j1', v) == v -> no jump
+
+    def test_invalid_multiplier_raises(self):
+        with pytest.raises(ValueError):
+            ActionInterpolator(0)
+
+
+# --- EpisodeLogger.evaluate_termination ---
+
+
+def _make_logger(tmp_path, **kwargs):
+    """sim_enabled=False skips the gz poller thread and blocking begin_episode reads."""
+    defaults = {
+        'log_dir': str(tmp_path),
+        'world_name': 'test_world',
+        'robot_name': 'robot',
+        'block_name': 'block',
+        'spawn_z': 0.0,
+        'block_z': 0.5,
+        'tilt_threshold_deg': 30.0,
+        'episode_timeout_s': 60.0,
+        'lift_success_m': 0.05,
+        'fall_z_drop_m': 0.15,
+        'success_settle_s': 2.0,
+        'sim_enabled': False,
+    }
+    defaults.update(kwargs)
+    logger = EpisodeLogger(**defaults)
+    logger.begin_episode()
+    return logger
+
+
+def _set_poses(logger, block=None, robot=None):
+    with logger._pose_lock:
+        if block is not None:
+            logger._cached_block_pose = block
+        if robot is not None:
+            logger._cached_robot_pose = robot
+
+
+def _pose(x=0.0, y=0.0, z=0.0, roll=0.0, pitch=0.0, yaw=0.0):
+    return {'x': x, 'y': y, 'z': z, 'roll': roll, 'pitch': pitch, 'yaw': yaw}
+
+
+class TestEvaluateTerminationPick:
+
+    def test_lift_success_after_settle(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        _set_poses(logger, block=_pose(z=0.5 + 0.10))
+        outcome = logger.evaluate_termination(elapsed_sim_s=3.0)
+        assert outcome == 'success_lift'
+
+    def test_lift_ignored_during_settle(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        _set_poses(logger, block=_pose(z=0.5 + 0.10))
+        outcome = logger.evaluate_termination(elapsed_sim_s=0.5)
+        assert outcome is None
+        # Still tracked for the end-of-episode summary.
+        assert logger._max_block_lift > 0.05
+
+    def test_lift_below_threshold_no_success(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        _set_poses(logger, block=_pose(z=0.5 + 0.01))
+        outcome = logger.evaluate_termination(elapsed_sim_s=3.0)
+        assert outcome is None
+
+    def test_timeout(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        _set_poses(logger, block=_pose(z=0.5), robot=_pose(z=0.0))
+        outcome = logger.evaluate_termination(elapsed_sim_s=60.0)
+        assert outcome == 'timeout'
+
+    def test_fallen_by_tilt(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        _set_poses(logger, robot=_pose(z=0.0, roll=0.7))  # > 30 deg (0.524 rad)
+        outcome = logger.evaluate_termination(elapsed_sim_s=1.0)
+        assert outcome == 'fallen'
+
+    def test_fallen_by_z_drop(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        _set_poses(logger, robot=_pose(z=-0.20))  # drop 0.20 > fall_z_drop_m 0.15
+        outcome = logger.evaluate_termination(elapsed_sim_s=1.0)
+        assert outcome == 'fallen'
+
+    def test_no_cached_poses_no_crash(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        outcome = logger.evaluate_termination(elapsed_sim_s=1.0)
+        assert outcome is None
+
+    def test_inactive_logger_returns_none(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.end_episode('manual_stop')
+        _set_poses(logger, block=_pose(z=10.0))
+        assert logger.evaluate_termination(elapsed_sim_s=3.0) is None
+
+
+class TestEvaluateTerminationPlace:
+
+    def _place_logger(self, tmp_path, monkeypatch, goal_xy=(1.0, 1.0), **kwargs):
+        kwargs.setdefault('place_z_max_m', 0.0)
+        logger = _make_logger(
+            tmp_path,
+            goal_name='goal_bin',
+            place_radius_m=0.12,
+            place_settle_s=1.0,
+            **kwargs,
+        )
+        monkeypatch.setattr(
+            'sobits_vla_deploy.vla_episode_logger.gz_get_pose',
+            lambda world, name, timeout=None: {
+                'x': goal_xy[0], 'y': goal_xy[1], 'z': 0.0,
+                'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0,
+            },
+        )
+        return logger
+
+    def test_goal_radius_and_z_condition_then_settle(self, tmp_path, monkeypatch):
+        logger = self._place_logger(tmp_path, monkeypatch)
+        # First tick: lift crosses threshold and settled -> sets _lifted,
+        # but block isn't at the goal yet, so no success returned.
+        _set_poses(logger, block=_pose(x=5.0, y=5.0, z=0.5 + 0.10))
+        assert logger.evaluate_termination(elapsed_sim_s=3.0) is None
+        assert logger._lifted is True
+
+        # Now at the goal, radius+z satisfied, but settle timer hasn't elapsed.
+        _set_poses(logger, block=_pose(x=1.0, y=1.0, z=0.0))
+        assert logger.evaluate_termination(elapsed_sim_s=3.5) is None
+
+        # Settle timer elapsed (>= place_settle_s after goal_reached_at).
+        outcome = logger.evaluate_termination(elapsed_sim_s=4.5)
+        assert outcome == 'success_place'
+
+    def test_leaving_goal_resets_settle_timer(self, tmp_path, monkeypatch):
+        logger = self._place_logger(tmp_path, monkeypatch)
+        _set_poses(logger, block=_pose(x=5.0, y=5.0, z=0.5 + 0.10))
+        logger.evaluate_termination(elapsed_sim_s=3.0)
+
+        _set_poses(logger, block=_pose(x=1.0, y=1.0, z=0.0))
+        logger.evaluate_termination(elapsed_sim_s=3.5)  # goal_reached_at = 3.5
+
+        _set_poses(logger, block=_pose(x=5.0, y=5.0, z=0.0))  # leaves goal
+        logger.evaluate_termination(elapsed_sim_s=4.0)
+
+        _set_poses(logger, block=_pose(x=1.0, y=1.0, z=0.0))  # back at goal
+        assert logger.evaluate_termination(elapsed_sim_s=4.6) is None  # only 0.6s since re-entry
+
+    def test_z_max_condition_blocks_success(self, tmp_path, monkeypatch):
+        logger = self._place_logger(tmp_path, monkeypatch, place_z_max_m=0.05)
+        _set_poses(logger, block=_pose(x=5.0, y=5.0, z=0.5 + 0.10))
+        logger.evaluate_termination(elapsed_sim_s=3.0)
+
+        _set_poses(logger, block=_pose(x=1.0, y=1.0, z=0.20))  # in radius, too high
+        outcome = logger.evaluate_termination(elapsed_sim_s=5.0)
+        assert outcome is None
+
+    def test_drop_abort_fires_after_dwell(self, tmp_path, monkeypatch):
+        logger = self._place_logger(
+            tmp_path, monkeypatch, drop_abort_s=1.0, drop_abort_z_max_m=0.05,
+        )
+        _set_poses(logger, block=_pose(x=5.0, y=5.0, z=0.5 + 0.10))
+        logger.evaluate_termination(elapsed_sim_s=3.0)  # sets _lifted
+
+        # Object at rest, low, far from goal -> dwell clock starts.
+        _set_poses(logger, block=_pose(x=9.0, y=9.0, z=0.0))
+        assert logger.evaluate_termination(elapsed_sim_s=3.5) is None
+        assert logger.evaluate_termination(elapsed_sim_s=4.0) is None
+        outcome = logger.evaluate_termination(elapsed_sim_s=4.6)  # >= 1.0s dwell
+        assert outcome == 'dropped'
+
+    def test_drop_abort_disabled_by_default(self, tmp_path, monkeypatch):
+        logger = self._place_logger(tmp_path, monkeypatch)  # drop_abort_s=0.0
+        _set_poses(logger, block=_pose(x=5.0, y=5.0, z=0.5 + 0.10))
+        logger.evaluate_termination(elapsed_sim_s=3.0)
+
+        _set_poses(logger, block=_pose(x=9.0, y=9.0, z=0.0))
+        outcome = logger.evaluate_termination(elapsed_sim_s=50.0)  # under the 60s timeout
+        assert outcome is None
