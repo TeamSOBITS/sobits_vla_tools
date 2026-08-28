@@ -45,14 +45,129 @@ import signal
 import threading
 from typing import Any
 
+from rcl_interfaces.msg import ParameterDescriptor
 import rclpy
 from rclpy.node import Node
 
 from sobits_vla_common import runtime_deps
 from sobits_vla_common.lerobot_compat import apply_training_patches
+from sobits_vla_common.param_schema import declare_from_schema, P, read_flat
 from sobits_vla_training.preflight import run_preflight_checks
 
 logger = logging.getLogger(__name__)
+
+
+def _pd(desc: str) -> ParameterDescriptor:
+    return ParameterDescriptor(description=desc)
+
+
+# Static-name declares only. peft.full_training_modules (dynamic_typing) and
+# policy_overrides' undeclared-key discovery stay hand-written below.
+_SCHEMA = {
+    'policy': P('smolvla', descriptor=_pd(
+        'Policy type: smolvla|pi0|pi05|pi0_fast|act|groot|vla_jepa|molmoact2')),
+    'dataset': {
+        'repo_id': P('', descriptor=_pd('HF Hub repo_id or local path to LeRobotDataset')),
+        'num_workers': P(4, descriptor=_pd('DataLoader worker count')),
+        'rename_map': P([], descriptor=_pd('Feature rename map {old: new}')),
+        'eval_split': P(0.0, descriptor=_pd(
+            'Fraction of episodes per task held out for eval')),
+    },
+    'checkpoint': {
+        'output_dir': P('', descriptor=_pd(
+            'Checkpoint dir; relative -> lerobotmodel/, absolute -> verbatim')),
+        'resume': P(False, descriptor=_pd('Resume from last checkpoint in output_dir')),
+        'overwrite': P(False, descriptor=_pd(
+            'Delete output_dir before training if it exists')),
+        'pretrained_path': P('', descriptor=_pd(
+            'Local path or HF repo_id for init weights')),
+        'save_freq': P(20000, descriptor=_pd('Save checkpoint every N steps')),
+        'save_checkpoint': P(True, descriptor=_pd('Whether to save checkpoints')),
+    },
+    'training': {
+        'steps': P(100000, descriptor=_pd('Total gradient update steps')),
+        'batch_size': P(32, descriptor=_pd('Per-GPU batch size')),
+        'seed': P(1000, descriptor=_pd('Random seed')),
+        'use_policy_training_preset': P(True, descriptor=_pd(
+            'Use policy built-in optimizer preset')),
+        'log_freq': P(200, descriptor=_pd('Log metrics every N steps')),
+        'eval_freq': P(20000, descriptor=_pd('Evaluate every N steps (0=disable)')),
+        'optimizer_type': P('', descriptor=_pd(
+            "Override optimizer algorithm (empty=preset, 'sgd'=SGDConfig)")),
+        'optimizer_sgd': {
+            'lr': P(1e-3, descriptor=_pd('SGD learning rate')),
+            'momentum': P(0.0, descriptor=_pd('SGD momentum')),
+            'dampening': P(0.0, descriptor=_pd('SGD dampening')),
+            'nesterov': P(False, descriptor=_pd('SGD Nesterov momentum')),
+            'weight_decay': P(0.0, descriptor=_pd('SGD weight decay')),
+            'grad_clip_norm': P(10.0, descriptor=_pd('SGD gradient clip norm')),
+        },
+        'scheduler_warmup_steps_override': P(1000, descriptor=_pd(
+            'Warmup steps for the override scheduler (optimizer_type set)')),
+    },
+    'num_gpus': P(1, descriptor=_pd('Number of GPUs (0=CPU, 1=single, >1=DDP)')),
+    'wandb': {
+        'enable': P(True, descriptor=_pd('Enable Weights & Biases logging')),
+        'project': P('sobits_vla_training', descriptor=_pd('W&B project name')),
+        'entity': P('', descriptor=_pd('W&B entity (team/user)')),
+        'run_name': P('', descriptor=_pd('W&B run name (auto-generated if empty)')),
+        'notes': P('', descriptor=_pd('W&B run notes')),
+    },
+    'hub': {
+        'push_to_hub': P(True, descriptor=_pd('Push final model to HF Hub after training')),
+        'repo_id': P('', descriptor=_pd('HF Hub target repo_id for push')),
+        'private': P(False, descriptor=_pd('Make Hub repo private')),
+        'save_checkpoints': P(False, descriptor=_pd(
+            'Push each saved checkpoint to Hub, not just final')),
+    },
+    # No ParameterDescriptor in the original code -- left plain to match.
+    'policy_overrides': {
+        'max_state_dim': P(32),
+        'max_action_dim': P(32),
+        'chunk_size': P(50),
+        'n_action_steps': P(50),
+        'n_obs_steps': P(1),
+        'paligemma_variant': P('gemma_2b'),
+        'action_expert_variant': P('gemma_300m'),
+        'dtype': P('bfloat16'),
+        'num_inference_steps': P(10),
+        'image_resolution': P([224, 224]),
+        'empty_cameras': P(0),
+        'freeze_vision_encoder': P(False),
+        'gradient_checkpointing': P(True),
+        'train_expert_only': P(False),
+        'use_peft': P(False),  # True = load existing adapter; keep False
+        'tokenizer_max_length': P(200),
+        'use_relative_actions': P(False),
+        'relative_exclude_joints': P([]),
+        'optimizer_lr': P(2.5e-5),
+        'optimizer_weight_decay': P(0.01),
+        'optimizer_grad_clip_norm': P(1.0),
+        'scheduler_warmup_steps': P(1000),
+        'scheduler_decay_steps': P(30000),
+        'scheduler_decay_lr': P(2.5e-6),
+        'compile_model': P(False),
+    },
+    'peft': {
+        'method_type': P('', descriptor=_pd('PEFT method: LORA or empty to disable')),
+        'r': P(16, descriptor=_pd('LoRA rank')),
+        'lora_alpha': P(32, descriptor=_pd('LoRA alpha (scaling = alpha/r)')),
+        'lora_dropout': P(0.05, descriptor=_pd('LoRA dropout probability')),
+        'target_modules': P('', descriptor=_pd(
+            'LoRA target modules (empty = policy default)')),
+    },
+    'robot': {
+        'descriptor_id': P('', descriptor=_pd('Robot descriptor ID')),
+        # Trim the shared descriptor to this config's subset; unknown names
+        # raise so a typo fails loudly instead of training a wrong morphology.
+        'exclude': {
+            'groups': P(['']),
+            'cameras': P(['']),
+            'ee_poses': P(['']),
+            'mobile_base': P(False, descriptor=_pd('Exclude the mobile base')),
+        },
+    },
+}
 
 
 class TrainNode(Node):
@@ -76,202 +191,27 @@ class TrainNode(Node):
         self.get_logger().info('sobits_vla_training node initialised.')
 
     def _declare_parameters(self) -> None:
-        from rcl_interfaces.msg import ParameterDescriptor
+        declare_from_schema(self, _SCHEMA)
 
-        def _p(desc: str) -> ParameterDescriptor:
-            d = ParameterDescriptor()
-            d.description = desc
-            return d
-
-        self.declare_parameter(
-            'policy', 'smolvla',
-            _p('Policy type: smolvla|pi0|pi05|pi0_fast|act|groot|vla_jepa|molmoact2'))
-
-        self.declare_parameter(
-            'dataset.repo_id', '', _p('HF Hub repo_id or local path to LeRobotDataset'))
-        self.declare_parameter(
-            'dataset.num_workers', 4, _p('DataLoader worker count'))
-        self.declare_parameter(
-            'dataset.rename_map', [], _p('Feature rename map {old: new}'))
-        self.declare_parameter(
-            'dataset.eval_split', 0.0, _p('Fraction of episodes per task held out for eval'))
-
-        self.declare_parameter(
-            'checkpoint.output_dir', '',
-            _p('Checkpoint dir; relative -> lerobotmodel/, absolute -> verbatim'))
-        self.declare_parameter(
-            'checkpoint.resume', False, _p('Resume from last checkpoint in output_dir'))
-        self.declare_parameter(
-            'checkpoint.overwrite', False, _p('Delete output_dir before training if it exists'))
-        self.declare_parameter(
-            'checkpoint.pretrained_path', '', _p('Local path or HF repo_id for init weights'))
-        self.declare_parameter(
-            'checkpoint.save_freq', 20000, _p('Save checkpoint every N steps'))
-        self.declare_parameter(
-            'checkpoint.save_checkpoint', True, _p('Whether to save checkpoints'))
-
-        self.declare_parameter(
-            'training.steps', 100000, _p('Total gradient update steps'))
-        self.declare_parameter(
-            'training.batch_size', 32, _p('Per-GPU batch size'))
-        self.declare_parameter(
-            'training.seed', 1000, _p('Random seed'))
-        self.declare_parameter(
-            'training.use_policy_training_preset', True,
-            _p('Use policy built-in optimizer preset'))
-        self.declare_parameter(
-            'training.log_freq', 200, _p('Log metrics every N steps'))
-        self.declare_parameter(
-            'training.eval_freq', 20000, _p('Evaluate every N steps (0=disable)'))
-
-        self.declare_parameter(
-            'training.optimizer_type', '',
-            _p("Override optimizer algorithm (empty=preset, 'sgd'=SGDConfig)"))
-        self.declare_parameter(
-            'training.optimizer_sgd.lr', 1e-3, _p('SGD learning rate'))
-        self.declare_parameter(
-            'training.optimizer_sgd.momentum', 0.0, _p('SGD momentum'))
-        self.declare_parameter(
-            'training.optimizer_sgd.dampening', 0.0, _p('SGD dampening'))
-        self.declare_parameter(
-            'training.optimizer_sgd.nesterov', False, _p('SGD Nesterov momentum'))
-        self.declare_parameter(
-            'training.optimizer_sgd.weight_decay', 0.0, _p('SGD weight decay'))
-        self.declare_parameter(
-            'training.optimizer_sgd.grad_clip_norm', 10.0, _p('SGD gradient clip norm'))
-        self.declare_parameter(
-            'training.scheduler_warmup_steps_override', 1000,
-            _p('Warmup steps for the override scheduler (optimizer_type set)'))
-
-        self.declare_parameter(
-            'num_gpus', 1, _p('Number of GPUs (0=CPU, 1=single, >1=DDP)'))
-
-        self.declare_parameter(
-            'wandb.enable', True, _p('Enable Weights & Biases logging'))
-        self.declare_parameter(
-            'wandb.project', 'sobits_vla_training', _p('W&B project name'))
-        self.declare_parameter(
-            'wandb.entity', '', _p('W&B entity (team/user)'))
-        self.declare_parameter(
-            'wandb.run_name', '', _p('W&B run name (auto-generated if empty)'))
-        self.declare_parameter(
-            'wandb.notes', '', _p('W&B run notes'))
-
-        self.declare_parameter(
-            'hub.push_to_hub', True, _p('Push final model to HF Hub after training'))
-        self.declare_parameter(
-            'hub.repo_id', '', _p('HF Hub target repo_id for push'))
-        self.declare_parameter(
-            'hub.private', False, _p('Make Hub repo private'))
-        self.declare_parameter(
-            'hub.save_checkpoints', False, _p('Push each saved checkpoint to Hub, not just final'))
-
-        # Policy override sub-parameters
-        _po = 'policy_overrides.'
-        self.declare_parameter(_po + 'max_state_dim', 32)
-        self.declare_parameter(_po + 'max_action_dim', 32)
-        self.declare_parameter(_po + 'chunk_size', 50)
-        self.declare_parameter(_po + 'n_action_steps', 50)
-        self.declare_parameter(_po + 'n_obs_steps', 1)
-        self.declare_parameter(_po + 'paligemma_variant', 'gemma_2b')
-        self.declare_parameter(_po + 'action_expert_variant', 'gemma_300m')
-        self.declare_parameter(_po + 'dtype', 'bfloat16')
-        self.declare_parameter(_po + 'num_inference_steps', 10)
-        self.declare_parameter(_po + 'image_resolution', [224, 224])
-        self.declare_parameter(_po + 'empty_cameras', 0)
-        self.declare_parameter(_po + 'freeze_vision_encoder', False)
-        self.declare_parameter(_po + 'gradient_checkpointing', True)
-        self.declare_parameter(_po + 'train_expert_only', False)
-        self.declare_parameter(_po + 'use_peft', False)  # True = load existing adapter; keep False
-        self.declare_parameter(_po + 'tokenizer_max_length', 200)
-        self.declare_parameter(_po + 'use_relative_actions', False)
-        self.declare_parameter(_po + 'relative_exclude_joints', [])
-        self.declare_parameter(_po + 'optimizer_lr', 2.5e-5)
-        self.declare_parameter(_po + 'optimizer_weight_decay', 0.01)
-        self.declare_parameter(_po + 'optimizer_grad_clip_norm', 1.0)
-        self.declare_parameter(_po + 'scheduler_warmup_steps', 1000)
-        self.declare_parameter(_po + 'scheduler_decay_steps', 30000)
-        self.declare_parameter(_po + 'scheduler_decay_lr', 2.5e-6)
-        self.declare_parameter(_po + 'compile_model', False)
-
-        self.declare_parameter(
-            'peft.method_type', '', _p('PEFT method: LORA or empty to disable'))
-        self.declare_parameter(
-            'peft.r', 16, _p('LoRA rank'))
-        self.declare_parameter(
-            'peft.lora_alpha', 32, _p('LoRA alpha (scaling = alpha/r)'))
-        self.declare_parameter(
-            'peft.lora_dropout', 0.05, _p('LoRA dropout probability'))
-        self.declare_parameter(
-            'peft.target_modules', '', _p('LoRA target modules (empty = policy default)'))
         # dynamic_typing: an empty [] default infers BYTE_ARRAY, clashing with YAML
         # STRING_ARRAY overrides; values are normalized to list[str] in _collect_params.
-        _ftm_desc = _p('Modules to fully fine-tune alongside LoRA')
+        _ftm_desc = _pd('Modules to fully fine-tune alongside LoRA')
         _ftm_desc.dynamic_typing = True
         self.declare_parameter('peft.full_training_modules', [], _ftm_desc)
 
-        self.declare_parameter('robot.descriptor_id', '', _p('Robot descriptor ID'))
-        # Trim the shared descriptor to this config's subset; unknown names raise so a
-        # typo fails loudly instead of training a wrong morphology.
-        self.declare_parameter('robot.exclude.groups', [''])
-        self.declare_parameter('robot.exclude.cameras', [''])
-        self.declare_parameter('robot.exclude.ee_poses', [''])
-        self.declare_parameter(
-            'robot.exclude.mobile_base', False, _p('Exclude the mobile base')
-        )
-
-    def _str_list(self, name: str) -> list[str]:
-        """Read a string-array parameter, dropping the empty-default sentinel."""
-        raw = self.get_parameter(name).get_parameter_value().string_array_value
-        return [s for s in raw if s]
-
     def _collect_params(self) -> dict[str, Any]:
         """Read all declared parameters into a flat dict keyed by dotted name."""
-        names = [
-            'policy',
-            'dataset.repo_id', 'dataset.num_workers',
-            'dataset.rename_map', 'dataset.eval_split',
-            'checkpoint.output_dir', 'checkpoint.resume', 'checkpoint.overwrite',
-            'checkpoint.pretrained_path', 'checkpoint.save_freq',
-            'checkpoint.save_checkpoint',
-            'training.steps', 'training.batch_size',
-            'training.seed', 'training.use_policy_training_preset',
-            'training.log_freq', 'training.eval_freq',
-            'training.optimizer_type', 'training.optimizer_sgd.lr',
-            'training.optimizer_sgd.momentum', 'training.optimizer_sgd.dampening',
-            'training.optimizer_sgd.nesterov', 'training.optimizer_sgd.weight_decay',
-            'training.optimizer_sgd.grad_clip_norm',
-            'training.scheduler_warmup_steps_override',
-            'num_gpus',
-            'wandb.enable', 'wandb.project', 'wandb.entity',
-            'wandb.run_name', 'wandb.notes',
-            'hub.push_to_hub', 'hub.repo_id', 'hub.private', 'hub.save_checkpoints',
-            'peft.method_type', 'peft.r', 'peft.lora_alpha', 'peft.lora_dropout',
-            'peft.target_modules', 'peft.full_training_modules',
-            'robot.descriptor_id', 'robot.exclude.groups',
-            'robot.exclude.cameras', 'robot.exclude.ee_poses',
-            'robot.exclude.mobile_base',
-        ]
+        # policy_overrides.* is declared via the schema but read separately below
+        # (nested dict, plus undeclared keys) -- exclude it here or it would also
+        # land as flat 'policy_overrides.foo' keys nothing consumes.
+        _flat_schema = {k: v for k, v in _SCHEMA.items() if k != 'policy_overrides'}
+        params: dict[str, Any] = read_flat(self, _flat_schema)
 
-        params: dict[str, Any] = {}
-        for name in names:
-            try:
-                params[name] = self.get_parameter(name).value
-            except Exception:
-                pass
-
-        # dynamic_typing param: YAML may deliver bytes/None; normalize to
-        # list[str] so build_peft_config always sees a string list.
-        ftm = params.get('peft.full_training_modules')
-        params['peft.full_training_modules'] = (
-            [str(m) for m in ftm] if ftm else []
-        )
-
-        # Strip the [''] empty-default sentinel so config_builder/preflight
-        # never see it as a literal exclude name.
-        params['robot.exclude.groups'] = self._str_list('robot.exclude.groups')
-        params['robot.exclude.cameras'] = self._str_list('robot.exclude.cameras')
-        params['robot.exclude.ee_poses'] = self._str_list('robot.exclude.ee_poses')
+        # dynamic_typing param, hand-read: not schema-expressible (see declare above).
+        # YAML may deliver bytes/None; normalize to list[str] so
+        # build_peft_config always sees a string list.
+        ftm = self.get_parameter('peft.full_training_modules').value
+        params['peft.full_training_modules'] = [str(m) for m in ftm] if ftm else []
 
         # Collect policy_overrides
         po: dict[str, Any] = {}
