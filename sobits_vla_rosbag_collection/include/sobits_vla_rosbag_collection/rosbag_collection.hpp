@@ -50,6 +50,7 @@
 #include <sobits_interfaces/srv/vla_update_task.hpp>
 
 #include "rosbag2_storage/storage_options.hpp"
+#include "sobits_vla_rosbag_collection/episode_lifecycle.hpp"
 #include "rosbag2_transport/record_options.hpp"
 #include "rosbag2_transport/recorder.hpp"
 
@@ -57,6 +58,7 @@ namespace sobits_vla
 {
 class RecordingMonitor;
 class BagMetadataManager;
+class EpisodeLifecycle;
 
 class RobotInfo
 {
@@ -145,6 +147,10 @@ public:
   std::string getTimestampString();
 
 private:
+  // Implemented in rosbag_collection_params.cpp: pure move of the 41
+  // declare_parameter/get_parameter calls out of the constructor.
+  void declareAndReadParameters();
+
   void taskUpdateCallback(
     const std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Request> request,
     std::shared_ptr<sobits_interfaces::srv::VlaUpdateTask::Response> response);
@@ -174,6 +180,7 @@ private:
 
   std::unique_ptr<RecordingMonitor> recording_monitor_;
   std::unique_ptr<BagMetadataManager> bag_metadata_manager_;
+  std::unique_ptr<EpisodeLifecycle> episode_lifecycle_;
 
   std::shared_ptr<rosbag2_transport::Recorder> recorder_node_;
   std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> recorder_executor_;
@@ -205,6 +212,9 @@ private:
   UserInfo user_info_;
   RosbagInfo rosbag_info_;
   std::string gamepad_name_;
+  // Read alongside gamepad_name_ but used later in the constructor, after
+  // declareAndReadParameters() returns -- kept as a member for that reason.
+  std::string command_service_name_;
 
   // State management
   uint8_t current_state_;
