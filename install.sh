@@ -14,8 +14,10 @@ echo "╔══╣ Install: SOBITS VLA TOOLS (STARTING) ╠══╗"
 #     does not run rosdep.
 #
 #   * Python (non-ROS) dependencies are managed by pixi (see pixi.toml). This
-#     script installs pixi if missing and materializes the environments from
-#     pixi.lock. No global pip, no --break-system-packages.
+#     script installs pixi if missing and materializes ONE environment from
+#     pixi.lock: `gpu` if an NVIDIA GPU with a working driver is visible,
+#     otherwise `cpu`. No global pip, no --break-system-packages.
+#     Force a choice with SOBITS_VLA_PIXI_ENV=cpu|gpu bash install.sh
 #
 #   * Non-ROS source packages this workspace needs (e.g. sobits_interfaces)
 #     are cloned so colcon/rosdep can build them.
@@ -66,13 +68,37 @@ fi
 echo "Using pixi: $(command -v pixi) ($(pixi --version))"
 
 # -----------------------------------------------------------------------------
-# 3. Materialize the pixi environments from pixi.toml / pixi.lock.
-#    Install every environment so both CPU and GPU machines are covered; on a
-#    CPU-only host you may instead install just the -cpu envs, e.g.:
-#      pixi install -e viz -e training-cpu -e deploy-cpu -e conversion-cpu
+# 3. Pick the accelerator environment.
+#    Only ONE of `cpu` / `gpu` is installed: they differ solely in the torch
+#    wheel index, and each is ~8 GB, so installing both duplicates the whole
+#    ML stack. `nvidia-smi -L` is the probe -- it lists devices only when a
+#    driver is actually loaded and reachable (true inside a container started
+#    with --gpus), so a machine with a card but no usable driver correctly
+#    falls back to cpu instead of getting an unusable cu128 env.
+# -----------------------------------------------------------------------------
+PIXI_ENV="${SOBITS_VLA_PIXI_ENV:-}"
+
+if [ -n "${PIXI_ENV}" ]; then
+    case "${PIXI_ENV}" in
+        cpu|gpu) echo "Using pixi environment: ${PIXI_ENV} (forced via SOBITS_VLA_PIXI_ENV)." ;;
+        *) echo "SOBITS_VLA_PIXI_ENV must be 'cpu' or 'gpu' (got '${PIXI_ENV}')." >&2; exit 1 ;;
+    esac
+elif command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q '^GPU'; then
+    PIXI_ENV="gpu"
+    echo "NVIDIA GPU detected:"
+    nvidia-smi -L 2>/dev/null | sed 's/^/  /'
+    echo "Using pixi environment: gpu (CUDA 12.8 torch wheels)."
+else
+    PIXI_ENV="cpu"
+    echo "No usable NVIDIA GPU found (nvidia-smi absent or lists no device)."
+    echo "Using pixi environment: cpu (CPU-only torch wheels)."
+fi
+
+# -----------------------------------------------------------------------------
+# 4. Materialize that environment from pixi.toml / pixi.lock.
 # -----------------------------------------------------------------------------
 cd "${SCRIPT_DIR}"
-pixi install --all
+pixi install -e "${PIXI_ENV}"
 cd "${DIR}"
 
 echo "╚══╣ Install: SOBITS VLA TOOLS (FINISHED) ╠══╝"
@@ -81,4 +107,4 @@ echo "Next:"
 echo "  1. Source ROS:   source /opt/ros/\${ROS_DISTRO}/setup.bash"
 echo "  2. rosdep:       rosdep install --from-paths . --ignore-src -r -y"
 echo "  3. Build:        colcon build"
-echo "  4. Run a node:   pixi run -e training-gpu ros2 run sobits_vla_training train_node"
+echo "  4. Run a node:   pixi run -e ${PIXI_ENV} ros2 run sobits_vla_training train_node"

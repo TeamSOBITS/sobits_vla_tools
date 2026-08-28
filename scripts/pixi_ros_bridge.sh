@@ -7,13 +7,11 @@
 #
 # Requires ROS_DISTRO to be set (export it or source /opt/ros/setup.sh before
 # `pixi run`/`pixi shell`).
-
-# Disable the per-user site (~/.local/lib/pythonX/site-packages). The container
-# has an apt/pip user-site numpy 1.26 there; Python puts ~/.local AHEAD of the
-# pixi env site, so without this the pixi numpy 2.x is shadowed and lerobot/
-# pandas crash with "numpy.dtype size changed" ABI errors. This is the single
-# most important line in the bridge.
-export PYTHONNOUSERSITE=1
+#
+# Static env vars (PYTHONNOUSERSITE) live in pixi.toml [activation.env]; this
+# script keeps only what needs runtime values (ROS_DISTRO, CONDA_PREFIX).
+# Pure-python deps of apt ROS (lark, ...) are pixi deps, NOT bridged from
+# /usr/lib/python3/dist-packages — add them to pixi.toml when one is missing.
 
 if [ -z "${ROS_DISTRO:-}" ]; then
     echo "[pixi_ros_bridge] ROS_DISTRO not set — source /opt/ros/<distro>/setup.sh first." >&2

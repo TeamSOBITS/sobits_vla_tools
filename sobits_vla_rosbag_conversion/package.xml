@@ -9,7 +9,7 @@
 
   <maintainer email="kvalentincardenas@gmail.com">VALENTIN Keith</maintainer>
 
-  <license>BSD</license>
+  <license>BSD-3-Clause</license>
 
   <url type="website">https://home.soka.ac.jp/~choi/index.html</url>
   <url type="repository">https://github.com/TeamSOBITS/sobits_vla_tools</url>
@@ -24,7 +24,6 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>python3-opencv</exec_depend>
 
   <!--
     Python (non-ROS) deps — numpy, pandas, scipy, pyarrow, pyyaml, matplotlib,
@@ -32,8 +31,9 @@
     Declaring python3-numpy/pandas/scipy here pulls apt builds pinned to
     numpy 1.x, which crash lerobot/pandas at import ("numpy.dtype size
     changed" ABI error). Those packages are managed by pixi (see pixi.toml,
-    feature.conversion) and run via `pixi run -e conversion-{cpu,gpu} ...`.
-    python3-opencv is kept as apt to stay ABI-matched with cv_bridge.
+    feature.stack) and run via `pixi run -e {cpu,gpu} ...`.
+    Image decoding lives in sobits_vla_common (image_codec), which owns the
+    python3-opencv dependency; it reaches this package via sobits_vla_common.
   -->
 
   <test_depend>ament_copyright</test_depend>

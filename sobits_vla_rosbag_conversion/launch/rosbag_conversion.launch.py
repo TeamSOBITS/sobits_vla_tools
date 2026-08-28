@@ -33,10 +33,19 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-from sobits_vla_common.launch.utils import default_pixi_manifest, pixi_prefix
+from sobits_vla_common.launch.utils import default_pixi_manifest, pixi_env_for, pixi_prefix
 
-# Conversion imports pandas/scipy/matplotlib/rosbags/torch -> conversion env.
-_DEFAULT_PIXI_ENV = 'conversion-gpu'
+
+def _resolve_pixi_env(context) -> str:
+    """pixi_env wins when set; 'none' disables the prefix; else enable_gpu."""
+    explicit = LaunchConfiguration('pixi_env').perform(context).strip()
+    if explicit:
+        return '' if explicit.lower() == 'none' else explicit
+    return pixi_env_for(LaunchConfiguration('enable_gpu').perform(context))
+
+
+# Conversion imports pandas/scipy/matplotlib/rosbags/torch -> shared pixi env;
+# only the accelerator varies, GPU by default. Override with enable_gpu:=false
 _DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
@@ -88,18 +97,13 @@ def generate_launch_description_impl(context, *args, **kwargs):
         LaunchConfiguration('overwrite').perform(context).lower() == 'true'
     )
 
-    # Whether the caller passed these on the command line. Anything the CLI
-    # did not set must not be added to override_params below: override_params
-    # is appended after the config file, so a computed default would silently
-    # win over the value the config file declares.
+    # Track CLI-passed values; only CLI-set ones may enter override_params below,
+    # since it's appended after config_file and would silently override config values.
     rosbag_directory_from_cli = bool(rosbag_directory)
     meta_file_from_cli = bool(recorded_bags_meta_file)
 
-    # Default rosbag_directory: src-tree sobits_vla_rosbag_collection/rosbags/
-    # With --symlink-install, realpath resolves the installed launch file back
-    # into the source tree and the sibling check finds it directly. With
-    # regular copy installs realpath stays in the install space, so also look
-    # for the package under the workspace's src/ while walking up.
+    # Default: src-tree sobits_vla_rosbag_collection/rosbags/. --symlink-install resolves
+    # realpath into the source tree; copy installs don't, so also walk up looking for src/.
     if not rosbag_directory:
         src_file = os.path.realpath(__file__)
         candidate = os.path.dirname(src_file)
@@ -133,11 +137,8 @@ def generate_launch_description_impl(context, *args, **kwargs):
 
     parameters = [config_file]
 
-    # Override from launch arguments if explicitly provided.
-    # override_params is appended AFTER the config file, so anything placed
-    # here wins over the config. Only pass the computed rosbag_directory
-    # default when the config file does not declare one itself, otherwise a
-    # config pointing at an external dataset tree is silently ignored.
+    # override_params is appended AFTER config_file, so it wins over the config.
+    # Only pass the computed rosbag_directory default if config doesn't declare one.
     config_declares_rosbag_dir = _config_declares(config_file, 'rosbag_directory')
     config_declares_meta_file = _config_declares(
         config_file, 'recorded_bags_meta_file'
@@ -163,7 +164,7 @@ def generate_launch_description_impl(context, *args, **kwargs):
         parameters.append(override_params)
 
     prefix = pixi_prefix(
-        LaunchConfiguration('pixi_env').perform(context),
+        _resolve_pixi_env(context),
         LaunchConfiguration('pixi_manifest').perform(context),
     )
 
@@ -228,11 +229,21 @@ def generate_launch_description():
                 description='Delete existing output dataset before converting.',
             ),
             DeclareLaunchArgument(
-                'pixi_env',
-                default_value=_DEFAULT_PIXI_ENV,
+                'enable_gpu',
+                default_value='true',
                 description=(
-                    'pixi environment (Python deps) to run conversion in. '
-                    'Use conversion-cpu without a GPU, or "" to disable the prefix.'
+                    'true -> run the node in the `gpu` pixi env (CUDA torch); '
+                    'false -> the `cpu` env. Set pixi_env:="" to skip the pixi '
+                    'prefix entirely and use the ambient interpreter.'
+                ),
+            ),
+            DeclareLaunchArgument(
+                'pixi_env',
+                default_value='',
+                description=(
+                    'Explicit pixi environment name, overriding enable_gpu. '
+                    'Empty (default) derives it from enable_gpu; "none" '
+                    'disables the pixi prefix.'
                 ),
             ),
             DeclareLaunchArgument(

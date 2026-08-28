@@ -1,3 +1,31 @@
+# Copyright (c) 2026, Team SOBITS
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from this
+#   software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
 """
 Shared launch helpers for sobits_vla_tools.
 
@@ -9,6 +37,10 @@ The spawned ros2 process (and the node) inherits that env's PATH/PYTHONPATH.
 
 This is what lets a bringup launch in package A start package B's node in B's
 own env instead of leaking A's env down the process tree.
+
+There are exactly two environments, `cpu` and `gpu` (see pixi.toml) — one shared
+stack, differing only in the torch wheel. Launch files expose an ``enable_gpu``
+boolean and map it through :func:`pixi_env_for`.
 """
 
 import os
@@ -55,9 +87,8 @@ def default_pixi_manifest() -> str:
     if up:
         return up
 
-    # 2) Non-symlink install: derive the workspace from colcon and look at the
-    #    known source subpath <ws>/src/sobits_vla_tools/pixi.toml. Also probe the
-    #    CWD subtree (ros2 launch usually runs from the workspace root).
+    # 2) Non-symlink install: derive <ws> from colcon, then probe the known
+    #    source subpath and the CWD subtree (ros2 launch runs from the ws root).
     candidates = []
     for prefix in os.environ.get('COLCON_PREFIX_PATH', '').split(os.pathsep):
         if not prefix:
@@ -105,12 +136,26 @@ def default_package_root(package_name: str, subdir: str, start_file: str) -> str
     return os.path.join(get_package_share_directory(package_name), subdir)
 
 
+def pixi_env_for(enable_gpu) -> str:
+    """
+    Map an ``enable_gpu`` launch argument to a pixi environment name.
+
+    pixi.toml defines only `cpu` and `gpu`, so this is the single place launch
+    files translate the boolean. Accepts a bool or the string a
+    ``LaunchConfiguration.perform()`` yields ('true'/'1'/'yes' -> gpu).
+    """
+    if isinstance(enable_gpu, str):
+        enable_gpu = enable_gpu.strip().lower() in ('1', 'true', 'yes', 'on')
+    return 'gpu' if enable_gpu else 'cpu'
+
+
 def pixi_prefix(pixi_env: str, manifest: str = '') -> str:
     """
     Return a Node `prefix=` string that runs the node inside a pixi env.
 
-    Empty ``pixi_env`` -> empty string (no prefix; node runs in the ambient
-    interpreter). Pass the result as ``Node(prefix=pixi_prefix(...) or None)``.
+    ``pixi_env`` is 'cpu' or 'gpu' — usually from :func:`pixi_env_for`. Empty
+    -> empty string (no prefix; node runs in the ambient interpreter). Pass the
+    result as ``Node(prefix=pixi_prefix(...) or None)``.
 
     The prefix ends in ``python`` on purpose. launch prepends the prefix to the
     node executable, which is a colcon-generated console-script whose shebang is

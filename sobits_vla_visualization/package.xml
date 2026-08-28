@@ -12,7 +12,7 @@
 
   <maintainer email="kvalentincardenas@gmail.com">VALENTIN Keith</maintainer>
 
-  <license>BSD</license>
+  <license>BSD-3-Clause</license>
 
   <url type="website">https://home.soka.ac.jp/~choi/index.html</url>
   <url type="repository">https://github.com/TeamSOBITS/sobits_vla_tools</url>
@@ -25,9 +25,9 @@
 
   <!--
     Python (non-ROS) deps — numpy, pandas, matplotlib — are managed by pixi
-    (see pixi.toml, feature.viz), NOT declared as rosdep keys. This package is
+    (see pixi.toml, feature.stack), NOT declared as rosdep keys. This package is
     numpy-2 based; the apt python3-numpy/pandas are numpy-1 builds and would
-    ABI-clash. Run via `pixi run -e viz ...`.
+    ABI-clash. Run via `pixi run -e cpu ...` (or -e gpu).
   -->
 
   <test_depend>ament_copyright</test_depend>

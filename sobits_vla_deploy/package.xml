@@ -33,9 +33,15 @@
   <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>python3-opencv</exec_depend>
   <exec_depend>sobits_interfaces</exec_depend>
 
+  <!--
+    Python (non-ROS) deps — numpy, torch, lerobot, huggingface_hub, accelerate,
+    peft, scipy — are NOT declared as rosdep keys on purpose: the apt builds are
+    pinned to numpy 1.x and crash lerobot at import ("numpy.dtype size changed"
+    ABI error). They are managed by pixi (see pixi.toml, feature.stack) and run
+    via `pixi run -e {cpu,gpu} ...`.
+  -->
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
