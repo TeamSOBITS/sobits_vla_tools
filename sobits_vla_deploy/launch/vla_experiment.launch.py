@@ -180,15 +180,16 @@ def _setup(context, *args, **kwargs):
         package='sobits_vla_deploy',
         executable='vla_experiment_runner',
         name='vla_experiment_runner',
-        # Grouping only: all runner I/O is the absolute /vla/* bus.
+        # Grouping only: all runner I/O is the relative vla/* bus, resolved
+        # under this namespace.
         namespace=robot_name,
         output='screen',
         prefix=prefix or None,
         parameters=[{
             'use_sim_time': use_sim_time,
             'num_episodes': num_episodes,
-            'command_service': '/vla/deploy_command',
-            'episode_done_topic': '/vla/episode_done',
+            'command_service': 'vla/deploy_command',
+            'episode_done_topic': 'vla/episode_done',
             'episode_timeout_s': episode_timeout_s,
             'done_wait_margin_s': done_wait_margin_s,
         }],
@@ -210,7 +211,7 @@ def _setup(context, *args, **kwargs):
     )
     actions += world_reset_actions(
         world_reset_config, enable_world_reset, use_sim_time, prefix,
-        'episode resets will not teleport the scene.',
+        'episode resets will not teleport the scene.', robot_name,
     )
     actions += controller_and_teleop_actions(
         context, robot_name, gamepad_config, use_sim_time,

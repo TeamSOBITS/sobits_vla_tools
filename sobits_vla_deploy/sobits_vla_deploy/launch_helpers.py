@@ -63,12 +63,15 @@ def world_reset_actions(
     use_sim_time: bool,
     prefix: str,
     missing_scene_msg: str,
+    robot_name: str,
 ) -> list:
     """
     Bring up the shared world_reset_node, or log why it was skipped.
 
     ``missing_scene_msg`` lets each caller keep its own wording for what
     won't happen without the scene (e.g. "STOP/RESET" vs "episode resets").
+    Namespaced under ``robot_name`` so its relative service name resolves
+    alongside the other VLA-bus nodes in the same namespace.
     """
     if not enable_world_reset:
         return []
@@ -77,6 +80,7 @@ def world_reset_actions(
             package='sobits_vla_common',
             executable='world_reset_node',
             name='world_reset_node',
+            namespace=robot_name,
             output='screen',
             prefix=prefix or None,
             parameters=[

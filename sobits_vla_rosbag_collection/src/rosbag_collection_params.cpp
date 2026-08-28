@@ -192,13 +192,13 @@ void RosbagCollection::declareAndReadParameters()
 
   // (4) Gamepad parameters
   this->declare_parameter<std::string>("gamepad.controller", "dualshock4");
-  this->declare_parameter<std::string>("gamepad.command_service", "/vla/collect_command");
+  this->declare_parameter<std::string>("gamepad.command_service", "vla/collect_command");
   gamepad_name_ = this->get_parameter("gamepad.controller").as_string();
   command_service_name_ = this->get_parameter("gamepad.command_service").as_string();
 
   // (4b) World reset client -- RESET forwards to the shared world_reset_node.
   this->declare_parameter<std::string>(
-    "rosbag_config.world_reset_service", "/world_reset_node/reset_world");
+    "rosbag_config.world_reset_service", "world_reset_node/reset_world");
   world_reset_service_ = this->get_parameter("rosbag_config.world_reset_service").as_string();
   // Empty defers to the reset node's world_reset.active_preset; set this only
   // to override which scene the RESET button restores.

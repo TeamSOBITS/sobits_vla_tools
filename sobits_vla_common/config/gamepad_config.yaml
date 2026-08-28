@@ -7,12 +7,12 @@
     gamepad:
       # Service the GamepadClient calls; each stage advertises its own, and
       # the name also selects which button_mapping block below is read.
-      # Collection launches override this with /vla/collect_command.
+      # Collection launches override this with vla/collect_command.
       #   collection: record/pause/save/delete, plus reset while stopped
       #               (ignored mid-recording so no teleport lands in the bag).
       #   deploy:     play toggles PLAY/STOP; reset always sends STOP (abort
       #               the episode + reset model state + reset the scene).
-      command_service: "/vla/deploy_command"
+      command_service: "vla/deploy_command"
       # Substring that marks a command_service as the deploy stage.
       deploy_service_match: "deploy"
       # Active controller profile (selects which button_mapping block is used).

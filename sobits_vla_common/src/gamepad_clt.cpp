@@ -44,11 +44,11 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
       std::bind(&GamepadClient::joyCallback, this, std::placeholders::_1));
 
   // Set values from parameters in the "gamepad" namespace.
-  this->declare_parameter<std::string>("gamepad.command_service", "/vla/collect_command");
+  this->declare_parameter<std::string>("gamepad.command_service", "vla/collect_command");
   this->declare_parameter<std::string>("gamepad.controller", "dualshock4");
   this->declare_parameter<double>("gamepad.button_cooldown_duration", 0.5);
-  // Service name selects the stage (deploy: /vla/deploy_command, collection:
-  // /vla/collect_command); the matching button_mapping.<stage> block is read below.
+  // Service name selects the stage (deploy: vla/deploy_command, collection:
+  // vla/collect_command); the matching button_mapping.<stage> block is read below.
   this->declare_parameter<std::string>("gamepad.deploy_service_match", "deploy");
 
   command_service_name_ = this->get_parameter("gamepad.command_service").as_string();

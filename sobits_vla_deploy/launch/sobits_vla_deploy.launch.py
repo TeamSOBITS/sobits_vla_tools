@@ -119,7 +119,7 @@ def _create_deploy_node(context, *args, **kwargs):
     )
     actions += world_reset_actions(
         world_reset_config, enable_world_reset, use_sim_time, prefix,
-        'STOP/RESET will not reset the scene.',
+        'STOP/RESET will not reset the scene.', robot_name,
     )
     actions += controller_and_teleop_actions(
         context, robot_name, gamepad_config, use_sim_time,

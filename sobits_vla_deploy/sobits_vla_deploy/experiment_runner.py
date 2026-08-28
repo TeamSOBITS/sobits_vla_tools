@@ -60,8 +60,8 @@ class ExperimentRunner(Node):
         super().__init__('vla_experiment_runner')
 
         self.declare_parameter('num_episodes', 20)
-        self.declare_parameter('command_service', '/vla/deploy_command')
-        self.declare_parameter('episode_done_topic', '/vla/episode_done')
+        self.declare_parameter('command_service', 'vla/deploy_command')
+        self.declare_parameter('episode_done_topic', 'vla/episode_done')
         # Pause between settle and the next PLAY.
         self.declare_parameter('inter_episode_pause_s', 1.0)
         # Safety: how long to wait for an episode_done before forcing a STOP.

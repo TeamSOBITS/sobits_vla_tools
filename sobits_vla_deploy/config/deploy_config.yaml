@@ -78,7 +78,7 @@
     gamepad:
       # Service the shared GamepadClient calls for this stage; the button
       # mapping itself lives in sobits_vla_common/config/gamepad_config.yaml.
-      command_service: "/vla/deploy_command"
+      command_service: "vla/deploy_command"
       controller: quest
       quest:
         button_mapping:

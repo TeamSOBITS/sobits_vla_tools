@@ -97,7 +97,7 @@ _SCHEMA = {
     'gamepad': {
         # Gamepad input arrives via the shared GamepadClient node, which
         # calls the VlaCommand service below; no direct /joy subscription.
-        'command_service': P('/vla/deploy_command'),
+        'command_service': P('vla/deploy_command'),
         # Deadman trigger (real robot): actions commanded only while held.
         'controller': P('quest'),
         '<item>': Template('gamepad.controller', {
@@ -144,7 +144,7 @@ _SCHEMA = {
         },
     },
     'reset': {
-        'world_service': P('/world_reset_node/reset_world'),
+        'world_service': P('world_reset_node/reset_world'),
         # Scene preset to request. Empty defers to the reset node's
         # world_reset.active_preset; set this only to override it here.
         'preset': P(''),
@@ -299,14 +299,14 @@ class LeRobotDeployNode(Node):
 
         self._play_sub = self.create_subscription(
             Bool,
-            '/vla/play',
+            'vla/play',
             self._on_play,
             qos,
             callback_group=self._cb_group,
         )
         self._task_sub = self.create_subscription(
             String,
-            '/vla/task',
+            'vla/task',
             self._on_task,
             qos,
             callback_group=self._cb_group,
@@ -373,7 +373,7 @@ class LeRobotDeployNode(Node):
 
         self._update_task_srv = self.create_service(
             VlaUpdateTask,
-            '/vla/update_task',
+            'vla/update_task',
             self._on_update_task,
             callback_group=self._cb_group,
         )
@@ -478,7 +478,7 @@ class LeRobotDeployNode(Node):
         # runner listens on to know when an episode has auto-terminated.
         self._episode_t0 = None
         self._episode_done_pub = self.create_publisher(
-            String, '/vla/episode_done', QoSProfile(depth=10)
+            String, 'vla/episode_done', QoSProfile(depth=10)
         )
 
     def destroy_node(self) -> None:

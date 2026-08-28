@@ -31,4 +31,4 @@
       compression_format: "zstd"
       rmw_serialization_format: "cdr"
       # Scene reset is manual only: the gamepad RESET button forwards here.
-      world_reset_service: "/world_reset_node/reset_world"
+      world_reset_service: "world_reset_node/reset_world"
