@@ -124,8 +124,8 @@ if(BUILD_TESTING)
       )
     endif()
 
-    # world_reset / gz_utils unit tests -- pure Python, only need pytest and
-    # PyYAML (no lerobot, no rclpy). Reuse any pixi env that has them.
+    # world_reset / gz_utils / param_schema unit tests -- pure Python, only
+    # need pytest and PyYAML (no lerobot, no rclpy). Reuse any pixi env with them.
     set(_wr_probe_py
       "import importlib.util as u, sys; sys.exit(int(not (u.find_spec('pytest') and u.find_spec('yaml'))))")
     set(_wr_python "")
@@ -148,10 +148,10 @@ if(BUILD_TESTING)
       endforeach()
     endif()
     if(_wr_python STREQUAL "")
-      message(STATUS "world_reset/gz_utils tests: no pixi env with pytest+yaml"
+      message(STATUS "world_reset/gz_utils/param_schema tests: no pixi env with pytest+yaml"
         " - test skipped (run 'pixi install' in sobits_vla_tools)")
     else()
-      message(STATUS "world_reset/gz_utils tests: using ${_wr_python}")
+      message(STATUS "world_reset/gz_utils/param_schema tests: using ${_wr_python}")
       ament_add_pytest_test(test_world_reset test/test_world_reset.py
         PYTHON_EXECUTABLE "${_wr_python}"
         APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
@@ -159,6 +159,12 @@ if(BUILD_TESTING)
         TIMEOUT 60
       )
       ament_add_pytest_test(test_gz_utils test/test_gz_utils.py
+        PYTHON_EXECUTABLE "${_wr_python}"
+        APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+        TIMEOUT 60
+      )
+      ament_add_pytest_test(test_param_schema test/test_param_schema.py
         PYTHON_EXECUTABLE "${_wr_python}"
         APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
           PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
