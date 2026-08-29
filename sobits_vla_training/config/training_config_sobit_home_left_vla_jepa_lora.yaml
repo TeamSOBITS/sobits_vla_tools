@@ -26,7 +26,7 @@
       # Unknown names raise.
       exclude:
         groups: ["arm_right", "hand_right"]
-        cameras: ["hand_right_camera", "head_camera_depth"]
+        cameras: ["hand_right_camera"]
         mobile_base: false
 
     dataset:
