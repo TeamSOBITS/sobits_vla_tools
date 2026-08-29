@@ -139,7 +139,15 @@ def read_schema(node: Any, schema: Dict[str, Any], ns: str = '') -> types.Simple
 
 
 def _read_leaf(node: Any, name: str, leaf: P) -> Any:
-    value = node.get_parameter(name).value
+    try:
+        value = node.get_parameter(name).value
+    except Exception as exc:
+        # rcl parses a literal [] in YAML as NOT_SET, clobbering the declared
+        # default and leaving the param uninitialized; recover the empty list.
+        if isinstance(leaf.default, list) \
+                and type(exc).__name__ == 'ParameterUninitializedException':
+            return []
+        raise
     # Empty-string sentinel: str[] params can't be declared with no default
     # type, so [''] stands for "empty list" and is filtered back out on read.
     if _is_str_list_default(leaf.default) and isinstance(value, list):

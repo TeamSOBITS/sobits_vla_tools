@@ -69,7 +69,7 @@ _SCHEMA = {
     'dataset': {
         'repo_id': P('', descriptor=_pd('HF Hub repo_id or local path to LeRobotDataset')),
         'num_workers': P(4, descriptor=_pd('DataLoader worker count')),
-        'rename_map': P([], descriptor=_pd('Feature rename map {old: new}')),
+        'rename_map': P([''], descriptor=_pd('Feature renames, one "old:new" per entry')),
         'eval_split': P(0.0, descriptor=_pd(
             'Fraction of episodes per task held out for eval')),
     },
@@ -142,7 +142,7 @@ _SCHEMA = {
         'use_peft': P(False),  # True = load existing adapter; keep False
         'tokenizer_max_length': P(200),
         'use_relative_actions': P(False),
-        'relative_exclude_joints': P([]),
+        'relative_exclude_joints': P(['']),
         'optimizer_lr': P(2.5e-5),
         'optimizer_weight_decay': P(0.01),
         'optimizer_grad_clip_norm': P(1.0),
@@ -238,7 +238,12 @@ class TrainNode(Node):
                             pass
             except Exception as exc:
                 self.get_logger().warning(f'policy_overrides discovery failed: {exc}')
-        params['policy_overrides'] = po
+        # Strip the [''] empty-list sentinel (see param_schema._read_leaf) --
+        # this hand-written path bypasses the schema reader's filtering.
+        params['policy_overrides'] = {
+            k: [x for x in v if x != ''] if isinstance(v, list) else v
+            for k, v in po.items()
+        }
 
         return params
 

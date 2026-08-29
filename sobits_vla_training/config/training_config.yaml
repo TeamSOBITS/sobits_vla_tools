@@ -14,7 +14,7 @@
       repo_id: ""
       # Parallel DataLoader workers (0 = main thread only).
       num_workers: 12
-      # Feature rename map {"old_key": "new_key"}, for when dataset keys
+      # Feature renames, one "old:new" entry per item, for when dataset keys
       # differ from what the policy expects.
       rename_map: []
       # Fraction of episodes per task held out for eval (0.0 = off).

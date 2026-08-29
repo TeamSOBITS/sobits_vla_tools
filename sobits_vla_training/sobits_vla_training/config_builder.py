@@ -241,7 +241,19 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
     # run_id stays unset so each run starts a fresh W&B run.
     job_name = params.get('wandb.run_name', '') or None
 
-    rename_map: dict = params.get('dataset.rename_map', {}) or {}
+    # ROS delivers rename_map as list[str] ("old:new" entries); lerobot's
+    # TrainPipelineConfig.rename_map wants dict[str, str].
+    raw_renames = params.get('dataset.rename_map', []) or []
+    if isinstance(raw_renames, dict):
+        rename_map: dict = dict(raw_renames)
+    else:
+        rename_map = {}
+        for entry in raw_renames:
+            old, sep, new = str(entry).partition(':')
+            if not (sep and old and new):
+                raise ValueError(
+                    f'dataset.rename_map entry {entry!r} must be "old:new"')
+            rename_map[old.strip()] = new.strip()
 
     peft_cfg, peft_extra = build_peft_config(params)
 
