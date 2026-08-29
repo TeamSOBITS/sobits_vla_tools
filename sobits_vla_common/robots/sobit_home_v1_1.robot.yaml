@@ -1,7 +1,10 @@
 schema_version: 1
-# Current SOBIT HOME hardware. Older arm-link revision: sobit_home_v1_1.
-robot_id: sobit_home
-version: "2.0.0"
+# SOBIT HOME hardware v1.1.0 — the OLDER arm-link revision whose parallel
+# linkage publishes passive mimic sub_joints in /joint_states. Derived from
+# the current descriptor's toggle history; entries marked TODO(v1.1) need
+# confirmation against that robot before real use.
+robot_id: sobit_home_v1_1
+version: "1.1.0"
 
 joint_states_topic: /sobit_home/joint_states
 
@@ -175,12 +178,13 @@ ee_poses:
 excluded_joints:
   # Passive mimic joints of the arm parallel linkage (present in
   # joint_states, not commanded by any controller)
-  # - arm_left_upper_roll_sub_joint
-  # - arm_left_upper_flex_sub_joint
-  # - arm_left_elbow_sub_joint
-  # - arm_right_upper_roll_sub_joint
-  # - arm_right_upper_flex_sub_joint
-  # - arm_right_elbow_sub_joint
+  # v1.1 parallel-linkage arms publish these passive mimics in joint_states.
+  - arm_left_upper_roll_sub_joint
+  - arm_left_upper_flex_sub_joint
+  - arm_left_elbow_sub_joint
+  - arm_right_upper_roll_sub_joint
+  - arm_right_upper_flex_sub_joint
+  - arm_right_elbow_sub_joint
   - wheel_steer_f_l_joint
   - wheel_steer_f_r_joint
   - wheel_steer_b_l_joint
