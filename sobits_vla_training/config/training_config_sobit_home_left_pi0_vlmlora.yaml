@@ -60,6 +60,8 @@
       entity: ""
       run_name: "sobit_home_left_sim-pu_block-abs-332ep-pi0_vlmlora-openpi-recipe"
       notes: "PI0 VLM-LoRA, openpi-aligned recipe: attn(q,k,v,o)+MLP adapters on VLM+expert, r=32 alpha=32, preset LR 2.5e-5"
+      # Checkpoints already reach the HF repo; skip the duplicate W&B upload.
+      disable_artifact: true
 
     hub:
       push_to_hub: true

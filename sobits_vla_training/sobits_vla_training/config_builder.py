@@ -232,6 +232,7 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
 
     wandb_cfg = WandBConfig(
         enable=params.get('wandb.enable', True),
+        disable_artifact=bool(params.get('wandb.disable_artifact', False)),
         project=params.get('wandb.project', 'sobits_vla_training'),
         entity=params.get('wandb.entity', None) or None,
         notes=notes,

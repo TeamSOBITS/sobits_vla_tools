@@ -112,6 +112,8 @@ _SCHEMA = {
         'entity': P('', descriptor=_pd('W&B entity (team/user)')),
         'run_name': P('', descriptor=_pd('W&B run name (auto-generated if empty)')),
         'notes': P('', descriptor=_pd('W&B run notes')),
+        'disable_artifact': P(False, descriptor=_pd(
+            'Skip uploading checkpoint artifacts to W&B (HF hub still gets them)')),
     },
     'hub': {
         'push_to_hub': P(True, descriptor=_pd('Push final model to HF Hub after training')),
