@@ -53,6 +53,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from sobits_interfaces.srv import VlaCommand
 from std_msgs.msg import String
+from tqdm import tqdm
 
 
 class ExperimentRunner(Node):
@@ -180,6 +181,8 @@ class ExperimentRunner(Node):
         self._sleep(self._inter_episode_pause_s)
 
         outcomes: Counter = Counter()
+        progress = tqdm(total=self._num_episodes, desc='episodes', unit='ep',
+                        disable=None)
         for ep in range(1, self._num_episodes + 1):
             if not rclpy.ok():
                 break
@@ -206,6 +209,8 @@ class ExperimentRunner(Node):
             else:
                 outcome = self._last_outcome
             outcomes[outcome] += 1
+            progress.set_postfix_str(outcome)
+            progress.update(1)
             self.get_logger().info(
                 'Episode {}/{} outcome: {}'.format(ep, self._num_episodes, outcome)
             )
@@ -213,6 +218,7 @@ class ExperimentRunner(Node):
             # episode_done already confirmed the reset completed; brief pause.
             self._sleep(self._inter_episode_pause_s)
 
+        progress.close()
         self.get_logger().info(
             'Experiment complete. Outcomes: {}'.format(dict(outcomes))
         )

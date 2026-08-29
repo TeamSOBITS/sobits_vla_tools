@@ -107,6 +107,7 @@ from sobits_vla_deploy.eval.metrics import (  # noqa: E402
     aggregate_table, per_episode_table, PICK_ONLY_STAGES,
 )
 from sobits_vla_deploy.eval.style import apply_style  # noqa: E402
+from tqdm import tqdm  # noqa: E402
 
 
 def _parse_args():
@@ -231,18 +232,23 @@ def _aggregate_note(models, n_scored) -> str:
 
 
 def _render_figures(args, models, per_ep, fmts):
-    figs = [
-        ('operator_scores', FIGURES['operator_scores'](per_ep)),
-        ('stage_funnel', FIGURES['stage_funnel'](per_ep)),
-        ('outcomes', FIGURES['outcomes'](per_ep)),
-        ('duration', FIGURES['duration'](per_ep)),
-        ('tracking_error', FIGURES['tracking_error'](
+    # Lazy specs so the bar advances per figure actually rendered.
+    specs = [
+        ('operator_scores', lambda: FIGURES['operator_scores'](per_ep)),
+        ('stage_funnel', lambda: FIGURES['stage_funnel'](per_ep)),
+        ('outcomes', lambda: FIGURES['outcomes'](per_ep)),
+        ('duration', lambda: FIGURES['duration'](per_ep)),
+        ('tracking_error', lambda: FIGURES['tracking_error'](
             models, 'track_arm_abs_mean',
             'mean |commanded - measured| (rad)',
             'Arm joint tracking error over time', smooth_s=2.0)),
-        ('joint_jerk', FIGURES['joint_jerk'](models)),
-        ('motion_economy', FIGURES['motion_economy'](per_ep)),
-        ('ee_trajectory', FIGURES['ee_trajectory'](models, per_ep)),
+        ('joint_jerk', lambda: FIGURES['joint_jerk'](models)),
+        ('motion_economy', lambda: FIGURES['motion_economy'](per_ep)),
+        ('ee_trajectory', lambda: FIGURES['ee_trajectory'](models, per_ep)),
+    ]
+    figs = [
+        (name, build())
+        for name, build in tqdm(specs, desc='figures', unit='fig', disable=None)
     ]
 
     for name, fig in figs:

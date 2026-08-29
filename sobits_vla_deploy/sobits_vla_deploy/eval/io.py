@@ -42,6 +42,7 @@ import numpy as np
 import pandas as pd
 
 from sobits_vla_deploy.eval.context import EvalContext
+from tqdm import tqdm
 
 # Displacement (m) marking stage-2 "moved but not lifted" from sim ground
 # truth. Sits clear of contact noise: jostling <= 0.006 m, real lift >= 0.076 m.
@@ -161,7 +162,8 @@ def load_model(label: str, directory: str, ctx: EvalContext, pick_only: bool = F
     """Load all episodes for one task/model directory."""
     files = sorted(glob.glob(os.path.join(directory, 'episode_*.jsonl')))
     episodes: List[Dict] = []
-    for path in files:
+    for path in tqdm(files, desc='loading {}'.format(label), unit='ep',
+                     disable=None, leave=False):
         ep = load_episode_file(path, ctx)
         if ep is not None:
             episodes.append(ep)
