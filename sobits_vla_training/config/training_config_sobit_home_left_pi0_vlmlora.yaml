@@ -19,12 +19,14 @@
     policy: pi0
 
     robot:
-      descriptor_id: sobit_home_frozen
-      # sobit_home_frozen is already left-arm-only, so nothing to trim.
-      # Naming a group/camera it lacks (e.g. arm_right) would raise.
+      descriptor_id: sobit_home
+      # Trims the shared descriptor to the left-arm-only 19-dim subset that
+      # sobit_home_frozen used to hardcode (now retired).
       exclude:
-        groups: []
-        cameras: []
+        groups: [arm_right, hand_right]
+        cameras: [hand_right_camera]
+        ee_poses: [right]
+        joints: [arm_left_lower_flex_joint]
         mobile_base: false
 
     dataset:

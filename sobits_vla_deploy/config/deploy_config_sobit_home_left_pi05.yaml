@@ -69,13 +69,15 @@
 
 
     robot:
-      # sobit_home_frozen is the only 19-dim descriptor (head 2 + body 1 +
-      # arm_left 6 + hand_left 7 + base 3), matching this model's 19-entry
-      # action_feature_names. Plain sobit_home carries an extra
-      # arm_left_lower_flex_joint and would be 20-dim.
-      descriptor_id: sobit_home_frozen
+      # Trims the shared sobit_home descriptor to the left-arm 19-dim subset
+      # matching this model's 19-entry action_feature_names (head 2 + body 1 +
+      # arm_left 6 + hand_left 7 + base 3): exclude arm_right/hand_right
+      # wholesale and drop arm_left_lower_flex_joint, which the deployed
+      # checkpoint's 19-dim action/state space does not include.
+      descriptor_id: sobit_home
       exclude:
-        groups: []
-        cameras: []
-        ee_poses: []
+        groups: [arm_right, hand_right]
+        cameras: [hand_right_camera]
+        ee_poses: [right]
+        joints: [arm_left_lower_flex_joint]
         mobile_base: false

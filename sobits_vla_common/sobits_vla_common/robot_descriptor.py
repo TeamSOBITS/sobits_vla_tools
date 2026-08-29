@@ -161,32 +161,39 @@ class RobotDescriptor:
         exclude_groups: Optional[List[str]] = None,
         exclude_cameras: Optional[List[str]] = None,
         exclude_ee_poses: Optional[List[str]] = None,
+        exclude_joints: Optional[List[str]] = None,
     ) -> 'RobotDescriptor':
         """
-        Return a copy with the named components deactivated.
+        Return a copy with the named components deactivated/removed.
 
         Lets one descriptor describe the full robot while a consumer config
         trims it to the subset it uses (e.g. left-arm-only conversion).
         Excluded groups/cameras are marked inactive rather than dropped, so
         their joints still surface via ``all_excluded_ros_names`` and get
-        filtered out of joint_states. Unknown names raise ValueError so a
-        typo fails loudly instead of silently converting a wrong morphology.
+        filtered out of joint_states. Excluded joints (matched by feature
+        name) are removed from their group's joint list outright, and their
+        ros_names fold into ``excluded_joints`` the same way; a group left
+        with no joints is dropped entirely. Unknown names raise ValueError so
+        a typo fails loudly instead of silently converting a wrong morphology.
         """
         ex_g = list(exclude_groups or [])
         ex_c = list(exclude_cameras or [])
         ex_e = list(exclude_ee_poses or [])
-        if not (ex_g or ex_c or ex_e):
+        ex_j = list(exclude_joints or [])
+        if not (ex_g or ex_c or ex_e or ex_j):
             return self
 
         cameras = self.sensors.get('cameras', [])
         known_g = {g.name for g in self.groups}
         known_c = {c.name for c in cameras}
         known_e = {e.name for e in (self.ee_poses or [])}
+        known_j = {j.feature for g in self.groups for j in g.joints}
 
         for names, known, kind in (
             (ex_g, known_g, 'group'),
             (ex_c, known_c, 'camera'),
             (ex_e, known_e, 'ee_pose'),
+            (ex_j, known_j, 'joint'),
         ):
             unknown = [n for n in names if n not in known]
             if unknown:
@@ -199,6 +206,20 @@ class RobotDescriptor:
             replace(g, active=False) if g.name in ex_g else g
             for g in self.groups
         ]
+
+        removed_ros_names = []
+        if ex_j:
+            trimmed = []
+            for g in groups:
+                kept = [j for j in g.joints if j.feature not in ex_j]
+                removed_ros_names.extend(
+                    j.ros_name for j in g.joints if j.feature in ex_j
+                )
+                if not kept:
+                    continue
+                trimmed.append(replace(g, joints=kept) if len(kept) != len(g.joints) else g)
+            groups = trimmed
+
         if not any(g.active for g in groups):
             raise ValueError(
                 'exclude.groups would deactivate every joint group; '
@@ -215,8 +236,10 @@ class RobotDescriptor:
             if self.ee_poses is not None
             else None
         )
+        excluded_joints = list(self.excluded_joints) + removed_ros_names
         return replace(
-            self, groups=groups, sensors=sensors, ee_poses=ee_poses
+            self, groups=groups, sensors=sensors, ee_poses=ee_poses,
+            excluded_joints=excluded_joints,
         )
 
     # Maps mobile_base feature keys (x.vel/...) to dataset action feature names.

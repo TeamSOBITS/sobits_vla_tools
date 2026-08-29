@@ -26,7 +26,7 @@
       async_enabled: true
       single_step_mode: false
       # NOTE: per-group joint rate limiting (max_joint_delta) comes from the
-      # robot descriptor (sobits_vla_common/robots/sobit_home_frozen.robot.yaml).
+      # robot descriptor (sobits_vla_common/robots/sobit_home.robot.yaml).
 
     rtc:
       # pi0 exposes predict_action_chunk + rtc_config (registry supports_rtc).
@@ -64,15 +64,15 @@
 
 
     robot:
-      # sobit_home_frozen: the left-arm subset descriptor. Its joint set matches
-      # the model's 19-dim action_feature_names exactly (head 2 + body 1 +
-      # arm_left 6 + hand_left 7 + base 3) -- the plain sobit_home descriptor
-      # carries an extra arm_left_lower_flex_joint and would be 20-dim.
-      # Body and base are no longer clamped in that file, so both execute the
-      # policy's predictions.
-      descriptor_id: sobit_home_frozen
+      # Trims the shared sobit_home descriptor to the left-arm 19-dim subset
+      # matching the model's action_feature_names (head 2 + body 1 +
+      # arm_left 6 + hand_left 7 + base 3): exclude arm_right/hand_right
+      # wholesale and drop arm_left_lower_flex_joint, which the deployed
+      # checkpoint's 19-dim action/state space does not include.
+      descriptor_id: sobit_home
       exclude:
-        groups: []
-        cameras: []
-        ee_poses: []
+        groups: [arm_right, hand_right]
+        cameras: [hand_right_camera]
+        ee_poses: [right]
+        joints: [arm_left_lower_flex_joint]
         mobile_base: false

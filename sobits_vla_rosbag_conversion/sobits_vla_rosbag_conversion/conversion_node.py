@@ -95,6 +95,7 @@ _SCHEMA = {
         'groups': P(['']),
         'cameras': P(['']),
         'ee_poses': P(['']),
+        'joints': P(['']),
     },
     'cameras': {
         'primary': P(''),
@@ -185,6 +186,7 @@ class RosbagConversionNode(Node):
             exclude_groups=params.exclude.groups,
             exclude_cameras=params.exclude.cameras,
             exclude_ee_poses=params.exclude.ee_poses,
+            exclude_joints=params.exclude.joints,
         )
 
         # Excluded joints (mimics/inactive groups still listed with active: false)

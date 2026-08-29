@@ -594,12 +594,14 @@ class LeRobotDeployNode(Node):
         self.declare_parameter('robot.exclude.groups', [''])
         self.declare_parameter('robot.exclude.cameras', [''])
         self.declare_parameter('robot.exclude.ee_poses', [''])
+        self.declare_parameter('robot.exclude.joints', [''])
         self.declare_parameter('robot.exclude.mobile_base', False)
 
         desc = desc.filtered(
             exclude_groups=self._str_list('robot.exclude.groups'),
             exclude_cameras=self._str_list('robot.exclude.cameras'),
             exclude_ee_poses=self._str_list('robot.exclude.ee_poses'),
+            exclude_joints=self._str_list('robot.exclude.joints'),
         )
         active_groups_list = [g.name for g in desc.active_groups]
         active_cameras_list = [c.name for c in desc.active_cameras]

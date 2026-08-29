@@ -62,13 +62,15 @@
 
 
     robot:
-      # sobit_home_frozen is the only 19-dim descriptor (head 2 + body 1 +
-      # arm_left 6 + hand_left 7 + base 3), matching this model's action dim.
-      # Plain sobit_home carries an extra arm_left_lower_flex_joint (20-dim),
-      # which would shift every index under positional mapping.
-      descriptor_id: sobit_home_frozen
+      # Trims the shared sobit_home descriptor to the left-arm 19-dim subset
+      # matching this model's action dim (head 2 + body 1 + arm_left 6 +
+      # hand_left 7 + base 3): exclude arm_right/hand_right wholesale and drop
+      # arm_left_lower_flex_joint (positional mapping -- an extra joint here
+      # would shift every downstream index).
+      descriptor_id: sobit_home
       exclude:
-        groups: []
-        cameras: []
-        ee_poses: []
+        groups: [arm_right, hand_right]
+        cameras: [hand_right_camera]
+        ee_poses: [right]
+        joints: [arm_left_lower_flex_joint]
         mobile_base: false

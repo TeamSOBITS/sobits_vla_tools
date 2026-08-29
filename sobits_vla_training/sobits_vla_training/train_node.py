@@ -164,6 +164,7 @@ _SCHEMA = {
             'groups': P(['']),
             'cameras': P(['']),
             'ee_poses': P(['']),
+            'joints': P(['']),
             'mobile_base': P(False, descriptor=_pd('Exclude the mobile base')),
         },
     },

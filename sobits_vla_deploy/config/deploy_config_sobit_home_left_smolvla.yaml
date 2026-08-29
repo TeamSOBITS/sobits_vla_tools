@@ -77,7 +77,6 @@
       #   sobits_vla_common/robots/sobit_home.robot.yaml
       # exclude trims it to the subset this task uses (left-arm pickup)
       # without re-listing joints/topics. Unknown names raise.
-      # sobit_home_frozen == sobit_home with body + mobile_base immobilized.
       # body and the mobile base MUST NOT be excluded: this model has no
       # action_feature_names, so actions map positionally over
       # joint_features + mobile_base_features. Excluding body (-1) or the base

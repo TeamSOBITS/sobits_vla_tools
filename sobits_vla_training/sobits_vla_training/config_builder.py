@@ -167,6 +167,7 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
             exclude_groups=params.get('robot.exclude.groups', []),
             exclude_cameras=params.get('robot.exclude.cameras', []),
             exclude_ee_poses=params.get('robot.exclude.ee_poses', []),
+            exclude_joints=params.get('robot.exclude.joints', []),
         )
         active_groups = [g.name for g in desc.active_groups]
         active_mobile_base = not params.get('robot.exclude.mobile_base', False)
