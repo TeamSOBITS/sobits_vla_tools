@@ -31,6 +31,8 @@
     dataset:
       repo_id: "team-sobits/sobit_home_left_sim-pu_block-abs-332ep"
       num_workers: 12
+      # ~16 of 332 episodes held out: the overfitting detector the failed run lacked.
+      eval_split: 0.05
       rename_map: []
 
     checkpoint:
@@ -49,8 +51,7 @@
       seed: 1000
       use_policy_training_preset: true
       log_freq: 100
-      # No effect without a gym env — kept for parity with the other pi0 configs.
-      eval_freq: 5000
+      eval_steps: 1000
 
     num_gpus: 1
 

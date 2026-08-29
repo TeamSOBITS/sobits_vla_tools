@@ -91,7 +91,8 @@ _SCHEMA = {
         'use_policy_training_preset': P(True, descriptor=_pd(
             'Use policy built-in optimizer preset')),
         'log_freq': P(200, descriptor=_pd('Log metrics every N steps')),
-        'eval_freq': P(20000, descriptor=_pd('Evaluate every N steps (0=disable)')),
+        'eval_steps': P(0, descriptor=_pd(
+            'Held-out eval-loss every N steps; needs dataset.eval_split > 0. 0=off')),
         'optimizer_type': P('', descriptor=_pd(
             "Override optimizer algorithm (empty=preset, 'sgd'=SGDConfig)")),
         'optimizer_sgd': {

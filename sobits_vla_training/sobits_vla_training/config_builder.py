@@ -256,7 +256,7 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
         'batch_size': params.get('training.batch_size', 32),
         'steps': params.get('training.steps', 100000),
         'log_freq': params.get('training.log_freq', 200),
-        'env_eval_freq': params.get('training.eval_freq', 20000),
+        'eval_steps': params.get('training.eval_steps', 0),
         'save_checkpoint': params.get('checkpoint.save_checkpoint', True),
         'save_freq': params.get('checkpoint.save_freq', 20000),
         'use_policy_training_preset': params.get('training.use_policy_training_preset', True),

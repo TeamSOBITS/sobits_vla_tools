@@ -47,7 +47,7 @@
       # ACT preset: AdamW lr=1e-5 (constant, no scheduler), weight_decay=1e-4.
       use_policy_training_preset: true
       log_freq: 200
-      eval_freq: 5000
+      eval_steps: 0
 
     num_gpus: 1
 

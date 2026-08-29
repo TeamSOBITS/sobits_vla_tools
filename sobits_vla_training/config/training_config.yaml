@@ -50,7 +50,7 @@
       use_policy_training_preset: true
       log_freq: 200
       # Validation interval; 0 disables.
-      eval_freq: 20000
+      eval_steps: 0
       # Set "sgd" to bypass the policy preset with the SGDConfig below.
       optimizer_type: ""
       optimizer_sgd:
