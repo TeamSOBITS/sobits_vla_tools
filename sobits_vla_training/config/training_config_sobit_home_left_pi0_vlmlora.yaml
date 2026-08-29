@@ -43,9 +43,9 @@
 
     training:
       steps: 30000
-      # RTX 5090 32 GB: wider adapters cost VRAM — start 24, drop to 16 on OOM.
-      # lerobot has NO gradient accumulation — effective batch = batch_size.
-      batch_size: 24
+      # openpi's reference pairing is batch 32 @ lr 2.5e-5; drop 24 -> 16 on
+      # OOM (RTX 5090 32 GB). NO gradient accumulation — effective = batch_size.
+      batch_size: 32
       seed: 1000
       use_policy_training_preset: true
       log_freq: 100
