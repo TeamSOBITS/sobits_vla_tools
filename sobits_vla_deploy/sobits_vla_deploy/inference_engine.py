@@ -118,6 +118,10 @@ class InferenceEngine:
         else:
             print(f'[INFO] {msg}')
 
+    def log_debug(self, msg: str):
+        if self.logger:
+            self.logger.debug(msg)
+
     def log_warn(self, msg: str):
         if self.logger:
             self.logger.warning(msg)
@@ -455,8 +459,8 @@ class InferenceEngine:
                 names[i]: round(action_out[i], 4)
                 for i in range(min(len(names), len(action_out)))
             }
-            self.log_info('VLA DBG: state_in={}'.format(state_dict))
-            self.log_info('VLA DBG: action_out={}'.format(action_dict))
+            self.log_debug('VLA DBG: state_in={}'.format(state_dict))
+            self.log_debug('VLA DBG: action_out={}'.format(action_dict))
         except Exception:
             pass
 

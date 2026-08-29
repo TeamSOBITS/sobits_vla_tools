@@ -1184,7 +1184,7 @@ class LeRobotDeployNode(Node):
         if self._logging_enabled:
             self._log_step(step, joint_log, base_log)
 
-        self.get_logger().info('CMD -> {}{}'.format(joint_log, base_log))
+        self.get_logger().debug('CMD -> {}{}'.format(joint_log, base_log))
 
     def _log_step(self, step, joint_log, base_log) -> None:
         # Episode logging: commanded + measured joints, base vel, EE pose
