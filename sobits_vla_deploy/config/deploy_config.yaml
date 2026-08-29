@@ -60,7 +60,6 @@
       prefix_attention_schedule: EXP
       # Measured inference latency in control steps (used to align new chunk to queue).
       inference_delay: 4
-      # Enable RTC debug logging.
       debug: false
 
     robot:

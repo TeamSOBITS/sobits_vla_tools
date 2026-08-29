@@ -37,7 +37,6 @@ std::vector<std::string> TopicBuilder::buildTopicList(
 {
   std::vector<std::string> all_topics;
 
-  // Sensor topics: base + optional compressed + optional cam_info variants
   for (const auto & sensor_type : robot_info.sensor_types) {
     auto it_topics = robot_info.sensor_topics.find(sensor_type);
     if (it_topics != robot_info.sensor_topics.end()) {
@@ -47,7 +46,6 @@ std::vector<std::string> TopicBuilder::buildTopicList(
         }
       }
     }
-    // Compressed topics from the explicit compressed_topics list
     auto it_comp = robot_info.sensor_compressed_topics.find(sensor_type);
     if (it_comp != robot_info.sensor_compressed_topics.end()) {
       for (const auto & compressed_topic : it_comp->second) {
@@ -56,7 +54,6 @@ std::vector<std::string> TopicBuilder::buildTopicList(
         }
       }
     }
-    // Camera info topics from the explicit info_topics list
     auto it_info = robot_info.sensor_info_topics.find(sensor_type);
     if (it_info != robot_info.sensor_info_topics.end()) {
       for (const auto & info_topic : it_info->second) {
@@ -67,7 +64,6 @@ std::vector<std::string> TopicBuilder::buildTopicList(
     }
   }
 
-  // Morphology: joint_states, cmd_vel, odom, and per-part explicit topics
   if (!robot_info.joint_states_topic.empty()) {
     all_topics.push_back(robot_info.joint_states_topic);
   }
@@ -90,7 +86,6 @@ std::vector<std::string> TopicBuilder::buildTopicList(
     }
   }
 
-  // Additional explicit topics from config
   for (const auto & topic : rosbag_info.additional_topics) {
     if (!topic.empty()) {
       all_topics.push_back(topic);
@@ -114,7 +109,6 @@ bool TopicBuilder::validateTopics(
   const std::vector<std::string> & topics_to_record,
   const RobotInfo & robot_info)
 {
-  // Query the live ROS graph for currently published topics
   auto graph_topics = node->get_topic_names_and_types();
   std::set<std::string> active_topics;
   for (const auto & [name, types] : graph_topics) {
@@ -134,7 +128,6 @@ bool TopicBuilder::validateTopics(
       critical.insert(it_cmd_vel->second);
     }
   }
-  // Primary camera topics
   for (const auto & sensor_type : robot_info.sensor_types) {
     auto it_topics = robot_info.sensor_topics.find(sensor_type);
     if (it_topics != robot_info.sensor_topics.end()) {
@@ -154,7 +147,6 @@ bool TopicBuilder::validateTopics(
     }
   }
 
-  // Check all topics to record against the graph
   bool all_ok = true;
   std::vector<std::string> missing_critical;
   std::vector<std::string> missing_other;

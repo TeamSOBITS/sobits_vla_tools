@@ -213,7 +213,6 @@ class TrainNode(Node):
         ftm = self.get_parameter('peft.full_training_modules').value
         params['peft.full_training_modules'] = [str(m) for m in ftm] if ftm else []
 
-        # Collect policy_overrides
         po: dict[str, Any] = {}
         try:
             overrides = getattr(self, '_parameter_overrides', None) or {}

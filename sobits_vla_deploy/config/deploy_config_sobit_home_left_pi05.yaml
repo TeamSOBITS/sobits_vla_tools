@@ -48,7 +48,6 @@
       debug: false
 
     logging:
-      # Where episodes are recorded.
       enabled: false
       log_dir: ""
 
@@ -56,7 +55,6 @@
       # Selects which block below defines success.
       mode: pick
 
-      # Applies to every mode.
       common:
         robot_model_name: sobit_home
         tracked_model_name: box_to_pick

@@ -38,12 +38,10 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
 
   rclcpp::QoS qos_profile(rclcpp::KeepLast(10));
 
-  // Create subscriber for Joy messages
   joy_subscriber_ = this->create_subscription<sensor_msgs::msg::Joy>(
       "joy", qos_profile,
       std::bind(&GamepadClient::joyCallback, this, std::placeholders::_1));
 
-  // Set values from parameters in the "gamepad" namespace.
   this->declare_parameter<std::string>(
     "gamepad.command_service", "vla_rosbag_collection/command");
   this->declare_parameter<std::string>("gamepad.controller", "dualshock4");
@@ -79,7 +77,6 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
   play_button_ = this->get_parameter(base + "play").as_int();
   reset_button_ = this->get_parameter(base + "reset").as_int();
 
-  // Log params
   RCLCPP_INFO(this->get_logger(), "Command Service Name: %s", command_service_name_.c_str());
   RCLCPP_INFO(this->get_logger(), "Stage: %s", deploy_mode_ ? "deploy" : "collection");
   RCLCPP_INFO(this->get_logger(), "Gamepad name: %s", gamepad_name_.c_str());
@@ -90,15 +87,12 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "Reset button: %d", reset_button_);
   RCLCPP_INFO(this->get_logger(), "Cooldown duration: %.2f s", button_cooldown_duration_);
 
-  // Create service client for VlaCommand
   service_client_ = this->create_client<sobits_interfaces::srv::VlaCommand>(command_service_name_);
 
-  // Create wall timer to periodically check the joy messages
   timer_ = this->create_wall_timer(
       std::chrono::milliseconds(250),
       std::bind(&GamepadClient::timerCallback, this));
 
-  // Init values
   current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
   previous_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
 
@@ -118,27 +112,23 @@ GamepadClient::~GamepadClient()
 
 void GamepadClient::timerCallback()
 {
-  // Check if we have received a Joy message
   if (!last_joy_msg_) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
         "No Joy message received yet");
     return;
   }
 
-  // Check if the service server is available
   if (!service_client_->wait_for_service(std::chrono::seconds(1))) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
         "Service server not available, cannot process commands");
     return;
   }
 
-  // Terminate node if the current state is STATE_ERROR
   if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR) {
     RCLCPP_ERROR(this->get_logger(), "Current state is STATE_ERROR, cannot process commands");
     return;
   }
 
-  // Check the last joy message for button presses
   rclcpp::Time now = this->now();
   if ((now - last_button_press_time_).seconds() < button_cooldown_duration_) {
     return;
@@ -178,7 +168,6 @@ void GamepadClient::timerCallback()
     return;
   }
 
-  // Toggle Record/Pause/Resume
   if (record_button_ != -1 && pressed(record_button_)) {
     if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
       callService(sobits_interfaces::srv::VlaCommand::Request::RECORD);
@@ -192,7 +181,7 @@ void GamepadClient::timerCallback()
     }
   }
 
-  // Toggle Pause/Resume separately (if mapped to a different button)
+  // Separate button, in case Pause/Resume is mapped differently from Record.
   if (!button_pressed && pause_button_ != -1 && pressed(pause_button_)) {
     if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING) {
       callService(sobits_interfaces::srv::VlaCommand::Request::PAUSE);
@@ -214,7 +203,6 @@ void GamepadClient::timerCallback()
     }
   }
 
-  // Save / Delete toggle (same button)
   if (!button_pressed && save_button_ != -1 && pressed(save_button_)) {
     const bool is_rec =
       (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING);
@@ -258,7 +246,6 @@ void GamepadClient::callService(const uint8_t & command)
       command == sobits_interfaces::srv::VlaCommand::Request::PLAY ? "PLAY" :
       command == sobits_interfaces::srv::VlaCommand::Request::STOP ? "STOP" : "UNKNOWN");
 
-  // Call the service asynchronously
   auto result_future = service_client_->async_send_request(
       request,
     [this](rclcpp::Client<sobits_interfaces::srv::VlaCommand>::SharedFuture future) {

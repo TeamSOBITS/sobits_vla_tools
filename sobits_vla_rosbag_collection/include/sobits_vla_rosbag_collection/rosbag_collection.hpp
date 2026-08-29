@@ -84,9 +84,7 @@ public:
   std::map<std::string, std::vector<std::string>> sensor_names;
   std::map<std::string, std::vector<std::string>> sensor_models;
   std::map<std::string, std::vector<std::string>> sensor_topics;
-  // Explicit camera_info topics
   std::map<std::string, std::vector<std::string>> sensor_info_topics;
-  // Explicit compressed image topics
   std::map<std::string, std::vector<std::string>> sensor_compressed_topics;
 };
 
@@ -207,7 +205,6 @@ private:
   // Max drift between ROS clock and wall clock per check
   double timestamp_jump_threshold_sec_{1.0};
 
-  // Parameters
   RobotInfo robot_info_;
   UserInfo user_info_;
   RosbagInfo rosbag_info_;
@@ -216,7 +213,6 @@ private:
   // declareAndReadParameters() returns -- kept as a member for that reason.
   std::string command_service_name_;
 
-  // State management
   uint8_t current_state_;
   uint8_t previous_state_;
 

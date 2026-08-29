@@ -64,7 +64,6 @@ if [[ ! -f "$META_FILE" ]]; then
 fi
 
 # ── ROS environment ───────────────────────────────────────────────────────────
-# Source ROS 2 if not already sourced
 if [[ -z "${ROS_DISTRO:-}" ]]; then
     for candidate in /opt/ros/*/setup.bash; do
         # shellcheck disable=SC1090

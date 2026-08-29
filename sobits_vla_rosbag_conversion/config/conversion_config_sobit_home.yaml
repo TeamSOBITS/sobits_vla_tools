@@ -1,18 +1,15 @@
 /**:
   ros__parameters:
-    # Directory where the rosbags are stored.
     # Empty = defaults to sobits_vla_rosbag_collection/rosbags/
     rosbag_directory: ""
 
     # HuggingFace repo ID for the output dataset.
     dataset_name: "MyDataset"
 
-    # Local directory where the LeRobot dataset is written.
     # The dataset is written to <output_directory>/<dataset_name>.
     # Empty = <package_src>/lerobotdataset/<dataset_name>
     output_directory: ""
 
-    # Target fps for the LeRobot dataset.
     fps: 10
 
     # Video codec used by LeRobotDataset writer. Use "auto" for portable defaults.

@@ -75,7 +75,6 @@ RobotDescriptorCpp loadRobotDescriptor(const std::string & robot_id)
     desc.morphology = config["morphology"].as<std::string>();
   }
 
-  // Parse groups
   if (config["groups"]) {
     for (const auto & g_node : config["groups"]) {
       GroupSpecCpp g;
@@ -98,7 +97,6 @@ RobotDescriptorCpp loadRobotDescriptor(const std::string & robot_id)
     }
   }
 
-  // Parse mobile_base
   if (config["mobile_base"]) {
     desc.has_mobile_base = true;
     auto mb_node = config["mobile_base"];
@@ -125,7 +123,6 @@ RobotDescriptorCpp loadRobotDescriptor(const std::string & robot_id)
     }
   }
 
-  // Parse sensors
   if (config["sensors"] && config["sensors"]["cameras"]) {
     for (const auto & c_node : config["sensors"]["cameras"]) {
       CameraSpecCpp c;
@@ -142,7 +139,6 @@ RobotDescriptorCpp loadRobotDescriptor(const std::string & robot_id)
     }
   }
 
-  // Parse excluded_joints
   if (config["excluded_joints"]) {
     for (const auto & ej : config["excluded_joints"]) {
       desc.excluded_joints.push_back(ej.as<std::string>());

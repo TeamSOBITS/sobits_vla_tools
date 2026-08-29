@@ -1,6 +1,5 @@
 /**:
   ros__parameters:
-    # Directory where the rosbags are stored.
     # Empty = defaults to sobits_vla_rosbag_collection/rosbags/, which now also
     # holds the pnp_real_tea_trash_2 bind-mount, so point at it explicitly.
     rosbag_directory: "/home/rg-station-04-keith/colcon_ws/src/sobits_vla_tools/sobits_vla_rosbag_collection/rosbags/pnp_real_tea_trash_2"
@@ -13,12 +12,10 @@
     # HuggingFace repo ID for the output dataset.
     dataset_name: "team-sobits/sobit_home_left_real-pnp_tea_trash_2-abs"
 
-    # Local directory where the LeRobot dataset is written.
     # The dataset is written to <output_directory>/<dataset_name>.
     # Empty = <package_src>/lerobotdataset/<dataset_name>
     output_directory: ""
 
-    # Target fps for the LeRobot dataset.
     fps: 10
 
     # Video codec used by LeRobotDataset writer. Use "auto" for portable defaults.

@@ -253,7 +253,6 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
     with open(path) as f:
         data = yaml.safe_load(f)
 
-    # Build Groups
     groups = []
     for g in (data.get('groups') or []):
         joints = [
@@ -271,7 +270,6 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
             relative_exclude=bool(g.get('relative_exclude', False)),
         ))
 
-    # Build Mobile Base
     mb = data.get('mobile_base')
     mobile_base = None
     if mb:
@@ -291,7 +289,6 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
             linear_deadband=float(mb.get('linear_deadband', 0.0)),
             angular_deadband=float(mb.get('angular_deadband', 0.0)),
         )
-    # Build Sensors
     sensors = {}
     s_dict = data.get('sensors') or {}
     for s_type, s_list in s_dict.items():
@@ -312,7 +309,6 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
         else:
             sensors[s_type] = s_list
 
-    # Build ee_poses
     ee_poses = None
     ee_list = data.get('ee_poses')
     if ee_list:

@@ -55,7 +55,6 @@ class ObsBuilder:
         self.state_vector: Dict[str, float] = {
             feature: 0.0 for feature in self.joint_features
         }
-        # Include base features if present
         for feat in self.mobile_base_features:
             self.state_vector[feat] = 0.0
 

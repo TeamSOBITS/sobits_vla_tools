@@ -45,8 +45,8 @@
       debug: false
 
     logging:
-      # Where episodes are recorded. vla_experiment.launch.py overrides
-      # enabled/log_dir per model run; these are the plain-deploy defaults.
+      # vla_experiment.launch.py overrides enabled/log_dir per model run;
+      # these are the plain-deploy defaults.
       enabled: false
       log_dir: ""
 

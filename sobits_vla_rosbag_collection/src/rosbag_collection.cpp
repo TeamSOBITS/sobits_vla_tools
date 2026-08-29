@@ -52,23 +52,20 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 {
   RCLCPP_INFO(this->get_logger(), "Initializing RosbagCollection Node...");
 
-  // Initialize Service Server for Tasks. ~/ resolves under this node's own
-  // name, same result as get_name()+"/..." but robust to a future rename.
+  // ~/ resolves under this node's own name, same result as get_name()+"/..."
+  // but robust to a future rename.
   task_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
     "~/vla_task_update",
     std::bind(&RosbagCollection::taskUpdateCallback, this, std::placeholders::_1,
       std::placeholders::_2));
 
-  // Initialize Service Server for Subtasks (long-horizon)
   subtask_update_service_ = this->create_service<sobits_interfaces::srv::VlaUpdateTask>(
     "~/vla_subtask_update",
     std::bind(&RosbagCollection::subtaskUpdateCallback, this, std::placeholders::_1,
       std::placeholders::_2));
 
-  // Declare and get parameters (moved to rosbag_collection_params.cpp)
   declareAndReadParameters();
 
-  // Subscribe to info_topics per sensor type to obtain camera dimension
   for (const auto & sensor_type : robot_info_.sensor_types) {
     const auto & info_topics = robot_info_.sensor_info_topics[sensor_type];
     for (const auto & cam_info_topic : info_topics) {
@@ -85,7 +82,6 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     }
   }
 
-  // Init values (PAUSED, RECORDING, STOPPED, ERROR)
   current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
   previous_state_ = current_state_;
 
@@ -105,13 +101,11 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
   current_bag_path_ = EpisodeLifecycle::makeBagPath(current_task_path_, current_bag_name_);
   previous_bag_path_ = current_bag_path_;
 
-  // (5) Internal State
   current_subtask_name_ = "";
   current_episode_subtasks_.clear();
 
   rosbag_info_.rosbag_options = "";
 
-  // Prepare the rosbag configuration (for record options)
   if (rosbag_info_.conversion_format.empty()) {
     RCLCPP_WARN(this->get_logger(), "No conversion format specified, using default 'sqlite3'");
     rosbag_info_.conversion_format = "sqlite3";
@@ -143,13 +137,10 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(this->get_logger(), "No additional actions to record specified.");
   }
 
-  // Build the topic list once and cache it
   buildTopicList();
 
-  // Validate that declared topics exist on the ROS graph
   validateTopics();
 
-  // Create the recording directory if it does not exist
   if (!std::filesystem::exists(rosbag_info_.recording_dir)) {
     try {
       std::filesystem::create_directories(rosbag_info_.recording_dir);
@@ -161,7 +152,6 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     }
   }
 
-  // Startup disk space check
   if (min_disk_space_mb_ > 0) {
     try {
       auto space = std::filesystem::space(rosbag_info_.recording_dir);
@@ -177,7 +167,6 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     }
   }
 
-  // Initialize Metadata Manager and Recording Monitor helpers
   bag_metadata_manager_ = std::make_unique<BagMetadataManager>(
     this,
     rosbag_info_.recording_dir,
@@ -207,13 +196,11 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
       });
     });
 
-  // Initialize VlaCommand Service Server
   command_service_ = this->create_service<sobits_interfaces::srv::VlaCommand>(
     command_service_name_,
     std::bind(&RosbagCollection::handleVlaCommand, this, std::placeholders::_1,
       std::placeholders::_2));
 
-  // Create (or verify + append to) the rosbag YAML file
   createRosbagYaml();
 
   RCLCPP_INFO(this->get_logger(), "RosbagCollection initialized");
@@ -270,7 +257,6 @@ void RosbagCollection::createRosbag()
 {
   RCLCPP_INFO(this->get_logger(), "Starting recording...");
 
-  // Pre-recording topic health check
   if (!validateTopics()) {
     RCLCPP_WARN(this->get_logger(),
       "Some critical topics are missing. Recording will proceed, but the bag may not be "
@@ -292,7 +278,6 @@ void RosbagCollection::createRosbag()
   previous_bag_path_ = current_bag_path_;
   current_bag_path_ = EpisodeLifecycle::makeBagPath(current_task_path_, current_bag_name_);
 
-  // Create the directory for the current bag
   if (!std::filesystem::exists(current_task_path_)) {
     try {
       std::filesystem::create_directories(current_task_path_);
@@ -303,17 +288,14 @@ void RosbagCollection::createRosbag()
     }
   }
 
-  // Clear subtasks
   current_subtask_name_ = "";
   current_episode_subtasks_.clear();
 
-  // Set the current state to RECORDING
   recording_start_time_ = std::chrono::steady_clock::now();
   max_duration_triggered_ = false;
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
 
-  // Configure rosbag2 transport options
   rosbag2_storage::StorageOptions storage_options;
   storage_options.uri = current_bag_path_;
   storage_options.storage_id = rosbag_info_.conversion_format;
@@ -333,10 +315,8 @@ void RosbagCollection::createRosbag()
     record_options.compression_format = rosbag_info_.compression_format;
   }
 
-  // Create a writer instance
   auto writer = std::make_shared<rosbag2_cpp::Writer>();
 
-  // Create the recorder node and run it in a separate thread
   recorder_node_ = std::make_shared<rosbag2_transport::Recorder>(
     writer,
     storage_options,
@@ -632,7 +612,6 @@ void RosbagCollection::taskUpdateCallback(
 {
   RCLCPP_INFO(this->get_logger(), "Received task update request: %s", request->label.c_str());
 
-  // Update the task name
   if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
     RCLCPP_WARN(this->get_logger(), "Cannot update task name while recording is in progress");
     response->success = false;
@@ -659,7 +638,6 @@ void RosbagCollection::taskUpdateCallback(
     previous_bag_path_ = current_bag_path_;
     current_bag_path_ = EpisodeLifecycle::makeBagPath(current_task_path_, current_bag_name_);
 
-    // Update the rosbag YAML file
     updateRosbagYaml();
   } else {
     RCLCPP_WARN(this->get_logger(), "Task name '%s' is already the current task name",
@@ -691,7 +669,6 @@ void RosbagCollection::subtaskUpdateCallback(
 
   double current_time_sec = this->now().seconds();
 
-  // Close the previous subtask if one exists
   if (!current_episode_subtasks_.empty()) {
     current_episode_subtasks_.back().end_timestamp = current_time_sec;
   }
@@ -744,7 +721,6 @@ void RosbagCollection::cameraInfoCallback(
     camera_dimensions_[topic_name] = {msg->width, msg->height};
     RCLCPP_INFO(this->get_logger(), "Captured dimensions for %s: %dx%d", topic_name.c_str(),
         msg->width, msg->height);
-    // Unsubscribe after getting the info once
     camera_info_subs_.erase(topic_name);
   }
 }

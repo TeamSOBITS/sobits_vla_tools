@@ -204,7 +204,7 @@ class RosbagConversionNode(Node):
             self.ee_pose_enabled = False
             self.ee_configs = []
 
-        # Cameras. Exclude every camera name for a state/action-only dataset.
+        # Exclude every camera name for a state/action-only dataset.
         self.skip_cameras = False
         active_cams = desc.active_cameras
         if active_cams:
@@ -225,7 +225,6 @@ class RosbagConversionNode(Node):
         self.depth_cameras_names = [c.name for c in active_depth_cams]
         self.depth_cameras_compressed = [c.compressed for c in active_depth_cams]
 
-        # Configuration attributes (populated from YAML)
         self.camera_topics = {}
         self.camera_info_topics = {}
         self.topic_to_cam = {}
@@ -244,7 +243,6 @@ class RosbagConversionNode(Node):
         self.subtask_label_to_idx = {}
         self.has_subtasks = False
 
-        # Conversion tracking
         self.episode_stats = []
         self.skipped_bags = []  # [(bag_path, [missing_topics])]
         self.fps_warnings = []  # Episodes saved, but FPS was below the configured target.

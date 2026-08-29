@@ -272,7 +272,6 @@ def make_policy_config(
 
     valid_fields = {f.name for f in fields(ConfigClass)}
 
-    # Process and clean overrides (filter by valid fields, warning on unknown ones)
     clean_overrides = {}
     if overrides:
         for k, v in overrides.items():
@@ -284,13 +283,9 @@ def make_policy_config(
                 continue
             clean_overrides[k] = v
 
-    # Merge yaml defaults and overrides
     merged = {**yaml_defaults, **clean_overrides}
-
-    # Filter by valid fields
     filtered = {k: v for k, v in merged.items() if k in valid_fields}
 
-    # Coerce lists to tuples in defaults/merged dict
     for k, v in list(filtered.items()):
         if isinstance(v, list):
             ft = {f.name: f for f in fields(ConfigClass)}[k].type

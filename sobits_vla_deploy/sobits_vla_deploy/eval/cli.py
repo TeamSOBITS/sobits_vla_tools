@@ -290,7 +290,6 @@ def main() -> None:
 
     models = _load_models(args, ctx)
 
-    # ---- Tables -------------------------------------------------------------
     per_ep = _build_per_episode_table(args, models)
     per_ep.to_csv(os.path.join(args.out, 'per_episode.csv'), index=False)
     _write_scoring_sheet(args, per_ep)
@@ -303,7 +302,6 @@ def main() -> None:
     write_markdown(agg, os.path.join(args.out, 'aggregate.md'), note)
     write_latex(agg, os.path.join(args.out, 'aggregate.tex'))
 
-    # ---- Figures ------------------------------------------------------------
     _render_figures(args, models, per_ep, fmts)
 
     print('\nAggregate comparison ({}/{} episodes scored):\n'.format(

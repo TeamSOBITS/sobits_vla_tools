@@ -150,10 +150,8 @@ class BagReader:
                     cam_name = topic_to_cam[topic]
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-                    # Keep rawdata, connection, t_sec, msg
                     cam_series[cam_name].append((t_sec, msg, rawdata, connection))
 
-        # Sort all buffers by timestamp
         joint_states_series.sort(key=lambda x: x[0])
         cmd_vel_series.sort(key=lambda x: x[0])
         odom_series.sort(key=lambda x: x[0])

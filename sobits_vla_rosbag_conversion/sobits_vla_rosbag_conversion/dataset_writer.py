@@ -348,7 +348,6 @@ class DatasetWriter:
             self.dataset.push_to_hub(private=self.hub_private, dataset_description=description)
             self.log_info('Push to Hub completed!')
 
-        # Build stats report
         stats_report = {
             'dataset_name': self.dataset_name,
             **conversion_params,

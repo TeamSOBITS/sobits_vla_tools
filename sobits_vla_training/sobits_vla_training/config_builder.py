@@ -49,29 +49,24 @@ logger = logging.getLogger(__name__)
 def find_package_src_dir() -> Path:
     current_file = Path(__file__).resolve()
 
-    # Check if 'build' or 'install' or 'site-packages' or 'dist-packages' is in the path parts
     in_workspace_build_or_install = any(
         part in current_file.parts
         for part in ('build', 'install', 'site-packages', 'dist-packages')
     )
 
     if not in_workspace_build_or_install:
-        # We might be running directly from the source tree
         direct_parent = current_file.parent.parent
         if (direct_parent / 'package.xml').exists():
             return direct_parent
 
-    # Try walking up to find a workspace root containing 'src'
     for p in current_file.parents:
         if (p / 'src').is_dir():
             src_dir = p / 'src'
-            # Look for a directory containing package.xml and named 'sobits_vla_training'
             for path in src_dir.rglob('package.xml'):
                 if path.parent.name == 'sobits_vla_training':
                     return path.parent
             break
 
-    # Fallback to get_package_share_directory if available
     try:
         from ament_index_python.packages import get_package_share_directory
         return Path(get_package_share_directory('sobits_vla_training'))

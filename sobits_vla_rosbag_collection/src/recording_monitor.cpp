@@ -161,7 +161,6 @@ void RecordingMonitor::runMonitorTick()
     // must run unlocked — it joins the auto-save thread, which calls stop() and would deadlock.
     std::lock_guard<std::mutex> lock(monitor_mutex_);  // guard maps vs. concurrent stop()/start()
 
-    // FPS checks
     if (expected_sensor_fps_ > 0) {
       if (fps_warmup_) {
         for (auto & [topic, prev_count] : monitor_prev_counts_) {
@@ -195,7 +194,6 @@ void RecordingMonitor::runMonitorTick()
     }
   }
 
-  // Disk space check
   if (min_disk_space_mb_ > 0) {
     try {
       auto space = std::filesystem::space(recording_dir_);
@@ -211,7 +209,6 @@ void RecordingMonitor::runMonitorTick()
     }
   }
 
-  // Timestamp jump detection
   if (timestamp_jump_threshold_sec_ > 0.0) {
     auto now_wall = std::chrono::steady_clock::now();
     rclcpp::Time now_ros = node_->get_clock()->now();
@@ -234,7 +231,6 @@ void RecordingMonitor::runMonitorTick()
     prev_ros_time_ = now_ros;
   }
 
-  // Max duration check
   if (max_episode_duration_sec_ > 0.0 && !max_duration_triggered_) {
     auto elapsed = std::chrono::steady_clock::now() - recording_start_time_;
     double duration_sec = std::chrono::duration<double>(elapsed).count();

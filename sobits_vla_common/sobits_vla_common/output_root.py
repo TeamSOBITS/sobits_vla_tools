@@ -37,7 +37,8 @@ from typing import Callable, Optional
 
 
 def _colcon_ignored(pkg_dir, src_root) -> bool:
-    """True if any ancestor up to src_root carries a COLCON_IGNORE marker.
+    """
+    Return True when any ancestor up to src_root carries a COLCON_IGNORE marker.
 
     Excludes trees colcon itself skips (e.g. a read-only backup copy of the
     repo) so they can never shadow the real package in resolution.

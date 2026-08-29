@@ -137,10 +137,9 @@ def _patch_pi05_action_dim_padding() -> None:
             def _patched_fix(self, state_dict, model_config):
                 fixed = orig_fix(self, state_dict, model_config)
 
-                # Action dimension remapping
                 model_action_dim = self.model.action_in_proj.in_features
 
-                # State dimension remapping (PI0 has state_proj, PI05 does not)
+                # PI0 has state_proj, PI05 does not.
                 model_state_dim = None
                 if hasattr(self.model, 'state_proj'):
                     model_state_dim = self.model.state_proj.in_features
@@ -199,7 +198,6 @@ def _patch_pi05_action_dim_padding() -> None:
                 return fixed
             return _patched_fix
 
-        # Intercept PI05 Policy if available
         try:
             from lerobot.policies.pi05.modeling_pi05 import PI05Policy
             orig_fix_pi05 = PI05Policy._fix_pytorch_state_dict_keys
@@ -211,7 +209,6 @@ def _patch_pi05_action_dim_padding() -> None:
         except ImportError:
             pass
 
-        # Intercept PI0 Policy if available
         try:
             from lerobot.policies.pi0.modeling_pi0 import PI0Policy
             orig_fix_pi = PI0Policy._fix_pytorch_state_dict_keys
@@ -223,7 +220,6 @@ def _patch_pi05_action_dim_padding() -> None:
         except ImportError:
             pass
 
-        # Intercept PI0Fast Policy if available
         try:
             from lerobot.policies.pi0_fast.modeling_pi0_fast import PI0FastPolicy
             orig_fix_pi_fast = PI0FastPolicy._fix_pytorch_state_dict_keys
@@ -352,13 +348,11 @@ def _patch_pi05_from_pretrained() -> None:
 
             torch_dtype = kwargs.get('torch_dtype', None)
 
-            # Build config if not provided
             if config is None:
                 config = PreTrainedConfig.from_pretrained(
                     pretrained_name_or_path=pretrained_name_or_path, **kwargs
                 )
 
-            # Construct skeleton on CPU
             target_device = getattr(config, 'device', 'cpu') or 'cpu'
             config.device = 'cpu'
             model = cls(config, **kwargs)
@@ -367,7 +361,6 @@ def _patch_pi05_from_pretrained() -> None:
             if torch_dtype is not None:
                 model.to(dtype=torch_dtype)
 
-            # Safetensors load
             try:
                 resolved_file = _cached_file(
                     pretrained_name_or_path,
@@ -387,7 +380,6 @@ def _patch_pi05_from_pretrained() -> None:
                 logger.warning('PI05 patch: could not load state dict: %s', exc)
                 return model
 
-            # Key remapping
             state_dict = model._fix_pytorch_state_dict_keys(state_dict, model.config)
             state_dict = {
                 (k if k.startswith('model.') else f'model.{k}'): v
@@ -397,7 +389,6 @@ def _patch_pi05_from_pretrained() -> None:
             del state_dict
             gc.collect()
 
-            # Move model to target device
             if target_device and target_device != 'cpu':
                 model.model.to(target_device)
                 gc.collect()

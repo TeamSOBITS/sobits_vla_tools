@@ -1,13 +1,11 @@
 /**:
   ros__parameters:
-    # Directory where the rosbags are stored
     # If left empty (""), it defaults to the `rosbags` folder of `sobits_vla_rosbag_collection`.
     rosbag_directory: ""
 
     # HuggingFace repository ID for the output dataset (e.g. "my-org/my-dataset").
     dataset_name: "MyDataset"
 
-    # Local directory where the dataset is saved.
     # The dataset is written to <output_directory>/<dataset_name>.
     # Empty = <package_src>/lerobotdataset/<dataset_name>
     output_directory: ""
@@ -30,17 +28,14 @@
     # Requires HF credentials (run: huggingface-cli login).
     push_to_hub: false
 
-    # If true, delete the existing output dataset directory before converting.
-    # Useful when re-running conversion after a failed attempt.
+    # Deletes the existing output dataset directory first; useful after a failed run.
     overwrite: false
 
-    # If true, the HuggingFace Hub repository will be created as private.
     # Only relevant when push_to_hub is true.
     hub_private: false
 
-    # Skip frames where no joint is moving (all velocities below threshold).
-    # Useful for removing idle segments from the dataset.
-    # Set threshold to 0.0 to disable.
+    # Skip frames where no joint is moving (all velocities below this); trims
+    # idle segments from the dataset. 0.0 = disabled.
     skip_static_threshold: 0.0
 
     # Robot morphology, joints, EE frames, and cameras all come from this

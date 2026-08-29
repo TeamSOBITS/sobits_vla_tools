@@ -197,7 +197,6 @@ class InferenceEngine:
     ) -> None:
         import rclpy
 
-        # single_step_mode
         if self.single_step_mode:
             while rclpy.ok() and not self.shutdown_inference:
                 with self.inference_cond:
@@ -243,7 +242,6 @@ class InferenceEngine:
                         self.single_step_result = steps[0]
             return
 
-        # Default chunked mode
         while rclpy.ok() and not self.shutdown_inference:
             with self.inference_cond:
                 play = self.play_enabled

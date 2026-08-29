@@ -206,7 +206,6 @@ class LeRobotDeployNode(Node):
         )
 
     def _init_policy(self) -> None:
-        # Build policy config and load policy
         loader = PolicyLoader(
             model_repo_id=self._model_repo_id,
             policy_class_path=self._policy_class_path,
@@ -250,7 +249,6 @@ class LeRobotDeployNode(Node):
             )
 
     def _init_collaborators(self) -> None:
-        # Initialize ObsBuilder
         self._obs_builder = ObsBuilder(
             joint_features=self._joint_features,
             mobile_base_features=self._mobile_base_features,
@@ -259,7 +257,6 @@ class LeRobotDeployNode(Node):
 
         self._play_enabled = False
 
-        # Action chunk buffer
         self._chunk_buffer = ActionChunkBuffer(self._aggregate_fn_name)
         self._interpolator = ActionInterpolator(self._action_interpolation_multiplier)
 
@@ -269,7 +266,6 @@ class LeRobotDeployNode(Node):
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
         self._cmd_vector: Dict[str, float] = {}
 
-        # Initialize InferenceEngine
         self._inference_engine = InferenceEngine(
             policy=self._policy,
             model_device=self._model_device,
@@ -390,7 +386,6 @@ class LeRobotDeployNode(Node):
             nanosec=int((1.0 / (self._control_hz * self._action_interpolation_multiplier)) * 1e9),
         )
 
-        # Initialize ActionExecutor
         self._action_executor = ActionExecutor(
             joint_groups=self._joint_groups,
             group_publishers=self._group_publishers,
@@ -414,7 +409,6 @@ class LeRobotDeployNode(Node):
 
         self.add_on_set_parameters_callback(self._on_set_parameters)
 
-        # Start InferenceEngine
         self._inference_engine.start(
             obs_builder=self._obs_builder,
             chunk_buffer=self._chunk_buffer,
@@ -1187,7 +1181,6 @@ class LeRobotDeployNode(Node):
         self.get_logger().debug('CMD -> {}{}'.format(joint_log, base_log))
 
     def _log_step(self, step, joint_log, base_log) -> None:
-        # Episode logging: commanded + measured joints, base vel, EE pose
         log_joints: Dict[str, float] = {}
         log_joints_measured: Dict[str, float] = {}
         measured_state = self._obs_builder.state_vector

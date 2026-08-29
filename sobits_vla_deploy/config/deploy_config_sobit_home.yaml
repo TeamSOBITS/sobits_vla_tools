@@ -25,7 +25,6 @@
       debug: false
 
     logging:
-      # Where episodes are recorded.
       enabled: false
       log_dir: ""
 
@@ -33,7 +32,6 @@
       # Selects which block below defines success.
       mode: pick
 
-      # Applies to every mode.
       common:
         robot_model_name: sobit_home
         tracked_model_name: box_to_pick
@@ -49,7 +47,6 @@
     robot:
       # Morphology is loaded from the shared robot descriptor:
       #   sobits_vla_common/robots/sobit_home.robot.yaml
-      # This config activates all groups and cameras (both arms/hands).
       descriptor_id: sobit_home
       exclude:
         groups: ["arm_right", "hand_right"]

@@ -76,7 +76,6 @@ def decode_image_message(msg) -> np.ndarray | None:
         except Exception:
             return None
 
-    # Raw Image message path — decode manually
     encoding = getattr(msg, 'encoding', '')
     data = msg.data
     if isinstance(data, memoryview):
@@ -143,7 +142,7 @@ def decode_depth_message(msg) -> np.ndarray | None:
         except Exception:
             return None
 
-    # Raw Image message path — no bit-shifting, preserve full depth range.
+    # No bit-shifting here, unlike decode_image_message — preserves full depth range.
     encoding = getattr(msg, 'encoding', '')
     data = msg.data
     if isinstance(data, memoryview):

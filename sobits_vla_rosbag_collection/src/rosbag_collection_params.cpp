@@ -39,7 +39,6 @@ namespace sobits_vla
 // same names, defaults, order, and dynamic per-part loop as before.
 void RosbagCollection::declareAndReadParameters()
 {
-  // Declare and get parameters
   this->declare_parameter<std::string>("robot_descriptor_id", "");
   std::string robot_descriptor_id = this->get_parameter("robot_descriptor_id").as_string();
 
@@ -55,7 +54,6 @@ void RosbagCollection::declareAndReadParameters()
   } else {
     RCLCPP_INFO(this->get_logger(),
         "No robot_descriptor_id provided, loading morphology from legacy parameters...");
-    // (1) Robot info parameters
     this->declare_parameter<std::string>("robot_info.name", "sobit_robot");
     this->declare_parameter<std::string>("robot_info.version", "1.0.0");
     this->declare_parameter<std::string>("robot_info.morphology.type", "mobile_manipulator");
@@ -143,7 +141,6 @@ void RosbagCollection::declareAndReadParameters()
     }
   }
 
-  // (2) User info parameters
   this->declare_parameter<std::string>("user_info.name", "default_user");
   this->declare_parameter<std::string>("user_info.email", "default_user@example.com");
   this->declare_parameter<std::string>("user_info.location", "default_location");
@@ -151,7 +148,6 @@ void RosbagCollection::declareAndReadParameters()
   user_info_.email = this->get_parameter("user_info.email").as_string();
   user_info_.location = this->get_parameter("user_info.location").as_string();
 
-  // (3) Rosbag parameters
   this->declare_parameter<std::string>("rosbag_config.record_directory", "");
   this->declare_parameter<double>("rosbag_config.min_episode_duration", 1.0);
   this->declare_parameter<double>("rosbag_config.max_episode_duration", 0.0);
@@ -190,13 +186,12 @@ void RosbagCollection::declareAndReadParameters()
   rosbag_info_.rmw_serialization_format =
     this->get_parameter("rosbag_config.rmw_serialization_format").as_string();
 
-  // (4) Gamepad parameters
   this->declare_parameter<std::string>("gamepad.controller", "dualshock4");
   this->declare_parameter<std::string>("gamepad.command_service", "~/command");
   gamepad_name_ = this->get_parameter("gamepad.controller").as_string();
   command_service_name_ = this->get_parameter("gamepad.command_service").as_string();
 
-  // (4b) World reset client -- RESET forwards to the shared world_reset_node.
+  // World reset client -- RESET forwards to the shared world_reset_node.
   this->declare_parameter<std::string>(
     "rosbag_config.world_reset_service", "world_reset_node/reset_world");
   world_reset_service_ = this->get_parameter("rosbag_config.world_reset_service").as_string();

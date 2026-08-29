@@ -81,5 +81,4 @@ def synthesize_action(
 
 
 def to_relative_action(action, state):
-    # Delta command = commanded action minus current measured state.
     return [act_val - st_val for act_val, st_val in zip(action, state)]
