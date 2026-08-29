@@ -1,6 +1,7 @@
 schema_version: 1
 # SOBIT HOME hardware v1.1.0 — the OLDER arm-link revision whose parallel
-# linkage publishes passive mimic sub_joints in /joint_states. Derived from
+# linkage publishes passive mimic sub_joints in /joint_states and the arms
+# have no lower_flex link (dataset-proven left, symmetric right). Derived from
 # the current descriptor's toggle history; entries marked TODO(v1.1) need
 # confirmation against that robot before real use.
 robot_id: sobit_home_v1_1
@@ -45,8 +46,6 @@ groups:
         feature: arm_left_upper_flex_joint
       - ros_name: arm_left_elbow_joint
         feature: arm_left_elbow_joint
-      - ros_name: arm_left_lower_flex_joint
-        feature: arm_left_lower_flex_joint
       - ros_name: arm_left_wrist_tilt_joint
         feature: arm_left_wrist_tilt_joint
       - ros_name: arm_left_wrist_roll_joint
@@ -66,8 +65,6 @@ groups:
         feature: arm_right_upper_flex_joint
       - ros_name: arm_right_elbow_joint
         feature: arm_right_elbow_joint
-      - ros_name: arm_right_lower_flex_joint
-        feature: arm_right_lower_flex_joint
       - ros_name: arm_right_wrist_tilt_joint
         feature: arm_right_wrist_tilt_joint
       - ros_name: arm_right_wrist_roll_joint

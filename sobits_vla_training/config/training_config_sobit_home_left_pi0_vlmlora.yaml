@@ -19,14 +19,13 @@
     policy: pi0
 
     robot:
-      descriptor_id: sobit_home
+      descriptor_id: sobit_home_v1_1
       # Trims the shared descriptor to the left-arm-only 19-dim subset that
       # sobit_home_frozen used to hardcode (now retired).
       exclude:
         groups: [arm_right, hand_right]
         cameras: [hand_right_camera]
         ee_poses: [right]
-        joints: [arm_left_lower_flex_joint]
         mobile_base: false
 
     dataset:

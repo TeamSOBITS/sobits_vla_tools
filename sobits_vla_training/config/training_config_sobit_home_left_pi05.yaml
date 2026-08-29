@@ -13,7 +13,7 @@
     policy: pi05
 
     robot:
-      descriptor_id: sobit_home
+      descriptor_id: sobit_home_v1_1
       # exclude trims the shared descriptor to this task's subset.
       # Unknown names raise.
       exclude:

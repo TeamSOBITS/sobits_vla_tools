@@ -58,6 +58,9 @@
       descriptor_id: sobit_home
       exclude:
         groups: ["arm_right", "hand_right"]
+        # 19-dim pickup checkpoint (v1.1 data): the current robot has this
+        # joint but the model does not know it.
+        joints: ["arm_left_lower_flex_joint"]
         cameras: ["hand_right_camera"]
         ee_poses: ["right"]
         mobile_base: false
