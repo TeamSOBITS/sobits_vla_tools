@@ -4,7 +4,7 @@
     # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0 (VLM-LoRA)
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi0_vlmlora
-    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Dataset : team-sobits/sobit_home_left_sim-pu_block-abs-332ep (10 fps, absolute actions)
     # Policy  : PI0 (PaliGemma 2B + Gemma 300M action expert, flow matching)
     # Base    : lerobot/pi0_base (per HF pi0 docs)
     # Recipe  : aligned to openpi's pi0_libero_low_mem_finetune (the reference
@@ -29,7 +29,7 @@
         mobile_base: false
 
     dataset:
-      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
+      repo_id: "team-sobits/sobit_home_left_sim-pu_block-abs-332ep"
       num_workers: 12
       rename_map: []
 
@@ -58,13 +58,14 @@
       enable: true
       project: "sobits_vla_training"
       entity: ""
-      run_name: "sobit_home-pickup_block-left-abs-pi0-vlmlora-openpi"
+      run_name: "sobit_home_left_sim-pu_block-abs-332ep-pi0_vlmlora_openpi"
       notes: "PI0 VLM-LoRA, openpi-aligned recipe: attn(q,k,v,o)+MLP adapters on VLM+expert, r=32 alpha=32, preset LR 2.5e-5"
 
     hub:
       push_to_hub: true
-      # Distinct repo from the expert-only pi0 LoRA run (different recipe).
-      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi0_vlmlora"
+      # Org naming rule: <dataset-name>-<policy>_<recipe>-steps<K>-decay<K>;
+      # _openpi distinguishes this recipe from the failed thin-LoRA run.
+      repo_id: "team-sobits/sobit_home_left_sim-pu_block-abs-332ep-pi0_vlmlora_openpi-steps30k-decay30k"
       private: false
 
     # =========================================================================

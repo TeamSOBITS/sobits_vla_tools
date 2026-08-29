@@ -202,14 +202,12 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
 
     hub_repo_id: str = params.get('hub.repo_id', '') or ''
     push_to_hub: bool = bool(params.get('hub.push_to_hub', True))
-    if hub_repo_id and push_to_hub:
+    policy_overrides['push_to_hub'] = bool(hub_repo_id) and push_to_hub
+    if hub_repo_id:
         policy_overrides['repo_id'] = hub_repo_id
-        policy_overrides['push_to_hub'] = True
+        # Always set: save_checkpoint_to_hub pushes even with push_to_hub off,
+        # and private=None would create the repo PUBLIC by HF default.
         policy_overrides['private'] = bool(params.get('hub.private', False))
-    else:
-        policy_overrides['push_to_hub'] = False
-        if hub_repo_id:
-            policy_overrides['repo_id'] = hub_repo_id
 
     policy_cfg = make_policy_config(
         policy_type=policy_type,
