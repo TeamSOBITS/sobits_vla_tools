@@ -68,6 +68,7 @@
       # Overrides the failed thin-LoRA run's repo (old weights stay in its git history).
       repo_id: "team-sobits/sobit_home_left_sim-pu_block-abs-332ep-pi0_vlmlora-steps30k-decay30k"
       private: false
+      save_checkpoints: true
 
     # =========================================================================
     # LoRA / PEFT — openpi-aligned. pi0 and pi05 share the identical
