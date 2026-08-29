@@ -347,19 +347,18 @@ def build_peft_config(params: dict[str, Any]):
 
     full_training_modules = params.get('peft.full_training_modules', None)
 
+    lora_alpha = params.get('peft.lora_alpha', None)
     peft_cfg = PeftConfig(
         method_type=method_type,
         r=int(params.get('peft.r', 16)),
+        lora_alpha=int(lora_alpha) if lora_alpha is not None else None,
         target_modules=target_modules,
         full_training_modules=full_training_modules if full_training_modules is not None else [],
     )
 
-    # lora_alpha and lora_dropout are extra LoRA args not on PeftConfig —
-    # they are injected via peft_cli_overrides in wrap_with_peft.
+    # lora_dropout is the one LoRA arg with no PeftConfig field; it reaches
+    # wrap_with_peft via the ExtendedPeft injection in train_node.
     extra: dict[str, Any] = {}
-    lora_alpha = params.get('peft.lora_alpha', None)
-    if lora_alpha is not None:
-        extra['lora_alpha'] = int(lora_alpha)
     lora_dropout = params.get('peft.lora_dropout', None)
     if lora_dropout is not None:
         extra['lora_dropout'] = float(lora_dropout)

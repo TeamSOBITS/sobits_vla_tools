@@ -304,8 +304,8 @@ class TrainNode(Node):
         accelerator = build_accelerator(num_gpus=num_gpus, use_amp=use_amp)
 
         if train_cfg.peft is not None and peft_extra:
-            # lerobot 0.6.0 upstreamed `lora_alpha` onto PeftConfig, so only `lora_dropout`
-            # needs dynamic injection via make_dataclass (no version gate needed).
+            # lora_dropout has no PeftConfig field; inject it dynamically so
+            # asdict(cfg.peft) carries it into wrap_with_peft.
             import dataclasses as _dc
             from sobits_vla_common.lerobot_adapter import PeftConfig as _PeftConfig
             _known = {f.name for f in _dc.fields(train_cfg.peft)}
@@ -320,13 +320,15 @@ class TrainNode(Node):
                 _base = _dc.asdict(train_cfg.peft)
                 _base.update(peft_extra)
                 train_cfg.peft = _ExtendedPeft(**_base)
+        if train_cfg.peft is not None:
             targets = (
                 'policy default' if not train_cfg.peft.target_modules
                 else train_cfg.peft.target_modules
             )
+            alpha = train_cfg.peft.lora_alpha
             self.get_logger().info(
                 f'LoRA | r={train_cfg.peft.r} '
-                f'alpha={peft_extra.get("lora_alpha", "default")} '
+                f'alpha={alpha if alpha is not None else "default"} '
                 f'dropout={peft_extra.get("lora_dropout", "default")} '
                 f'targets={targets}'
             )
