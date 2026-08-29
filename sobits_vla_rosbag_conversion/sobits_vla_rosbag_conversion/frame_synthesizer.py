@@ -32,6 +32,7 @@ from sobits_vla_rosbag_conversion.sync import joints as sync_joints
 from sobits_vla_rosbag_conversion.sync import poses as sync_poses
 from sobits_vla_rosbag_conversion.sync.core import get_closest_t, should_downsample
 import torch
+from tqdm import tqdm
 
 
 class FrameSynthesizer:
@@ -99,7 +100,13 @@ class FrameSynthesizer:
         prev_ee_poses = {name: None for name, _, _ in self.ee_configs}
         tf_tree = ctx['tf_tree']
 
-        for t_sec, msg_prim, _primary_raw, _primary_conn in ctx['primary_series']:
+        # Inner bar: frames within the current episode; leave=False keeps the
+        # episode-level bar as the only persistent line. Auto-off on non-TTY.
+        frame_iter = tqdm(
+            ctx['primary_series'], desc='  frames', unit='f',
+            disable=None, leave=False,
+        )
+        for t_sec, msg_prim, _primary_raw, _primary_conn in frame_iter:
             if should_downsample(
                 t_sec, last_frame_time, min_frame_interval, self.downsample_tolerance
             ):

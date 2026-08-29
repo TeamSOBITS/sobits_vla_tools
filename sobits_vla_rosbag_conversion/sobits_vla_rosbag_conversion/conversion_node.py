@@ -51,6 +51,7 @@ from sobits_vla_rosbag_conversion.pipeline.stats import episode_stat_dict
 from sobits_vla_rosbag_conversion.pipeline.validator import (
     morphologies_match, resolve_cameras, sensors_match,
 )
+from tqdm import tqdm
 import yaml
 
 
@@ -58,6 +59,7 @@ runtime_deps.ensure({
     'rosbags': 'pip install rosbags',
     'lerobot': 'pip install lerobot[training]~=0.6.0',
     'pandas': 'pip install pandas',
+    'tqdm': 'pip install tqdm',
     'pyarrow': 'pip install pyarrow',
 })
 
@@ -527,6 +529,10 @@ class RosbagConversionNode(Node):
 
         total_episodes = sum(len(d.episode_dirs) for d in dirs)
         current = 0
+        # disable=None: auto-off when stderr is not a TTY (colcon test, logs).
+        progress = tqdm(
+            total=total_episodes, desc='episodes', unit='ep', disable=None
+        )
         for d in dirs:
             episodes_dict = d.task_info.get('episodes', {})
             instruction = d.task_info.get('label', d.task_info.get('instructions', d.task_name))
@@ -544,6 +550,7 @@ class RosbagConversionNode(Node):
                 ep = os.path.basename(ep_path)
                 subtasks = episodes_dict.get(ep, {}).get('subtasks', {})
                 result = pipeline.run(ep_path, bagfile, instruction, subtasks)
+                progress.update(1)
                 if result is None:
                     continue
                 if result.skipped:
@@ -554,6 +561,7 @@ class RosbagConversionNode(Node):
                 if result.fps_warning:
                     self.fps_warnings.append(result.fps_warning)
                 self._episode_results.append(result)
+        progress.close()
 
     def convert(self):
         self.get_logger().info('Starting dataset conversion...')
