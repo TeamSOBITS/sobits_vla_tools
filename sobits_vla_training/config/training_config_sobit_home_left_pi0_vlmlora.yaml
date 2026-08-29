@@ -25,7 +25,7 @@
       exclude:
         groups: [arm_right, hand_right]
         cameras: [hand_right_camera]
-        ee_poses: [right]
+        ee_poses: [left, right]
         mobile_base: false
 
     dataset:
