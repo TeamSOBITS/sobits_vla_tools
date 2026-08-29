@@ -58,14 +58,14 @@
       enable: true
       project: "sobits_vla_training"
       entity: ""
-      run_name: "sobit_home_left_sim-pu_block-abs-332ep-pi0_vlmlora_openpi"
+      run_name: "sobit_home_left_sim-pu_block-abs-332ep-pi0_vlmlora-openpi-recipe"
       notes: "PI0 VLM-LoRA, openpi-aligned recipe: attn(q,k,v,o)+MLP adapters on VLM+expert, r=32 alpha=32, preset LR 2.5e-5"
 
     hub:
       push_to_hub: true
-      # Org naming rule: <dataset-name>-<policy>_<recipe>-steps<K>-decay<K>;
-      # _openpi distinguishes this recipe from the failed thin-LoRA run.
-      repo_id: "team-sobits/sobit_home_left_sim-pu_block-abs-332ep-pi0_vlmlora_openpi-steps30k-decay30k"
+      # Org naming rule: <dataset-name>-<policy>_<recipe>-steps<K>-decay<K>.
+      # Overrides the failed thin-LoRA run's repo (old weights stay in its git history).
+      repo_id: "team-sobits/sobit_home_left_sim-pu_block-abs-332ep-pi0_vlmlora-steps30k-decay30k"
       private: false
 
     # =========================================================================
