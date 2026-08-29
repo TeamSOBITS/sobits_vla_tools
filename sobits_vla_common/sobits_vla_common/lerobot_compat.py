@@ -377,8 +377,11 @@ def _patch_pi05_from_pretrained() -> None:
                 if torch_dtype is not None:
                     state_dict = {k: v.to(dtype=torch_dtype) for k, v in state_dict.items()}
             except Exception as exc:
-                logger.warning('PI05 patch: could not load state dict: %s', exc)
-                return model
+                # Never hand back the randomly-initialized skeleton: on a
+                # robot that would silently command untrained actions.
+                raise RuntimeError(
+                    f'PI05 weights load failed for {pretrained_name_or_path!r}: {exc}'
+                ) from exc
 
             state_dict = model._fix_pytorch_state_dict_keys(state_dict, model.config)
             state_dict = {
