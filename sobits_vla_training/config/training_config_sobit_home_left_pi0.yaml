@@ -56,7 +56,6 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-pi0"
       notes: "PI0 fine-tune on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
-      # Checkpoints live locally + on HF; skip the duplicate W&B upload.
       disable_artifact: true
 
     hub:

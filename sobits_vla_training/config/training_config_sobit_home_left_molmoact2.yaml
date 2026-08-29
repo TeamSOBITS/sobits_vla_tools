@@ -61,7 +61,6 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-molmoact2-vlmlora"
       notes: "MolmoAct2 LoRA-VLM fine-tune from allenai/MolmoAct2 on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
-      # Checkpoints live locally + on HF; skip the duplicate W&B upload.
       disable_artifact: true
 
     hub:
