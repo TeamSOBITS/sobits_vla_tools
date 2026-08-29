@@ -81,6 +81,8 @@
       # Display name; auto-generated from policy + timestamp when empty.
       run_name: ""
       notes: ""
+      # Checkpoints live locally + on HF; skip the duplicate W&B upload.
+      disable_artifact: true
 
     # =========================================================================
     # HuggingFace Hub push

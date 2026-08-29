@@ -63,6 +63,8 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-vla_jepa-vlmlora"
       notes: "VLA-JEPA VLM-LoRA + active world model from lerobot/VLA-JEPA-Pretrain on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions; reinit 19-dim action/state projections; full-training DiT head + video predictor)"
+      # Checkpoints live locally + on HF; skip the duplicate W&B upload.
+      disable_artifact: true
 
     hub:
       push_to_hub: true

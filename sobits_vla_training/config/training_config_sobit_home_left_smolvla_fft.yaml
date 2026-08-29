@@ -58,6 +58,8 @@
       entity: ""
       run_name: "sobit_home-pnp_ball_bowl-left-abs-real-smolvla-fft"
       notes: "SmolVLA full fine-tune (VLM unfrozen) on sobit_home-pnp_ball_bowl-left-abs-real (10 fps, absolute actions, left arm, 102 real-robot episodes)"
+      # Checkpoints live locally + on HF; skip the duplicate W&B upload.
+      disable_artifact: true
 
     hub:
       push_to_hub: true

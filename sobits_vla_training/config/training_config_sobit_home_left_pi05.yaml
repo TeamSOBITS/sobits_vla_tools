@@ -75,6 +75,8 @@
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-pi05-vlmlora"
       notes: "PI0.5 VLM-LoRA on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm, language_model adapters unfrozen)"
+      # Checkpoints live locally + on HF; skip the duplicate W&B upload.
+      disable_artifact: true
 
     # =========================================================================
     # HuggingFace Hub push — FINAL-step model + processors.
