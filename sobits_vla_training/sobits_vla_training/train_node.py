@@ -108,13 +108,12 @@ _SCHEMA = {
     },
     'num_gpus': P(1, descriptor=_pd('Number of GPUs (0=CPU, 1=single, >1=DDP)')),
     'wandb': {
-        'enable': P(True, descriptor=_pd('Enable Weights & Biases logging')),
         'project': P('sobits_vla_training', descriptor=_pd('W&B project name')),
         'entity': P('', descriptor=_pd('W&B entity (team/user)')),
         'run_name': P('', descriptor=_pd('W&B run name (auto-generated if empty)')),
         'run_id': P('', descriptor=_pd(
             'W&B run id to resume (empty = new run; auto-recovered on resume)')),
-        'mode': P('', descriptor=_pd("W&B mode: online|offline|disabled ('' = online)")),
+        'mode': P('', descriptor=_pd("W&B mode: online|offline ('' = disabled)")),
         'notes': P('', descriptor=_pd('W&B run notes')),
         'disable_artifact': P(False, descriptor=_pd(
             'Skip uploading checkpoint artifacts to W&B (HF hub still gets them)')),

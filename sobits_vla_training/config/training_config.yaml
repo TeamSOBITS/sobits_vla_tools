@@ -74,7 +74,6 @@
     # (policy/dataset/seed), so there is no manual tags key.
     # =========================================================================
     wandb:
-      enable: true
       project: "sobits_vla_training"
       # Team or user; empty uses the default from `wandb login`.
       entity: ""
@@ -82,8 +81,8 @@
       run_name: ""
       # "" = new run; set to resume an existing W&B curve on another machine.
       run_id: ""
-      # online (default) | offline (log locally, `wandb sync` later) | disabled.
-      mode: ""
+      # online | offline (log locally, `wandb sync` later) | "" = disabled.
+      mode: "online"
       notes: ""
       disable_artifact: true
 

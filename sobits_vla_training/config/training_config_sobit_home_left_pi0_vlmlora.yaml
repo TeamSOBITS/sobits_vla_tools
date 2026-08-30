@@ -56,12 +56,11 @@
     num_gpus: 1
 
     wandb:
-      enable: true
       project: "sobits_vla_training"
       entity: ""
       run_name: "sobit_home_left_sim-pu_block-abs-332ep-pi0_vlmlora-openpi-recipe"
       run_id: ""
-      mode: ""
+      mode: "online"
       notes: "PI0 VLM-LoRA, openpi-aligned recipe: attn(q,k,v,o)+MLP adapters on VLM+expert, r=32 alpha=32, preset LR 2.5e-5"
       disable_artifact: true
 

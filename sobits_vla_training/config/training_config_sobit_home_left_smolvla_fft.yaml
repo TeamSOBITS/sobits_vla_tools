@@ -53,12 +53,11 @@
     num_gpus: 1
 
     wandb:
-      enable: true
       project: "sobits_vla_training"
       entity: ""
       run_name: "sobit_home-pnp_ball_bowl-left-abs-real-smolvla-fft"
       run_id: ""
-      mode: ""
+      mode: "online"
       notes: "SmolVLA full fine-tune (VLM unfrozen) on sobit_home-pnp_ball_bowl-left-abs-real (10 fps, absolute actions, left arm, 102 real-robot episodes)"
       disable_artifact: true
 

@@ -77,7 +77,7 @@ def _create_train_node(context, *args, **kwargs):
     steps_raw = LaunchConfiguration('steps').perform(context).strip()
     batch_size_raw = LaunchConfiguration('batch_size').perform(context).strip()
     num_gpus_raw = LaunchConfiguration('num_gpus').perform(context).strip()
-    wandb_enable_raw = LaunchConfiguration('wandb_enable').perform(context).strip()
+    wandb_mode = LaunchConfiguration('wandb_mode').perform(context).strip()
     wandb_project = LaunchConfiguration('wandb_project').perform(context).strip()
     hub_repo_id = LaunchConfiguration('hub_repo_id').perform(context).strip()
     resume_raw = LaunchConfiguration('resume').perform(context).strip()
@@ -97,8 +97,8 @@ def _create_train_node(context, *args, **kwargs):
         overrides['training.batch_size'] = int(batch_size_raw)
     if num_gpus_raw:
         overrides['num_gpus'] = int(num_gpus_raw)
-    if wandb_enable_raw:
-        overrides['wandb.enable'] = _str_to_bool(wandb_enable_raw)
+    if wandb_mode:
+        overrides['wandb.mode'] = wandb_mode
     if wandb_project:
         overrides['wandb.project'] = wandb_project
     if hub_repo_id:
@@ -200,9 +200,9 @@ def generate_launch_description() -> LaunchDescription:
                 description='Override num_gpus (0=CPU, 1=single GPU, >1=DDP).',
             ),
             DeclareLaunchArgument(
-                'wandb_enable',
+                'wandb_mode',
                 default_value='',
-                description='Override wandb.enable (true/false).',
+                description='Override wandb.mode (online/offline/disabled).',
             ),
             DeclareLaunchArgument(
                 'wandb_project',

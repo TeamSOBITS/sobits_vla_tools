@@ -52,12 +52,11 @@
     num_gpus: 1
 
     wandb:
-      enable: true
       project: "sobits_vla_training"
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-act"
       run_id: ""
-      mode: ""
+      mode: "online"
       notes: "ACT from-scratch on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
       disable_artifact: true
 

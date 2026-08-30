@@ -68,12 +68,11 @@
     # Weights & Biases
     # =========================================================================
     wandb:
-      enable: true
       project: "sobits_vla_training"
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-pi05-vlmlora"
       run_id: ""
-      mode: ""
+      mode: "online"
       notes: "PI0.5 VLM-LoRA on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm, language_model adapters unfrozen)"
       disable_artifact: true
 
