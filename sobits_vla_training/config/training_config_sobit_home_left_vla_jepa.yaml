@@ -59,6 +59,8 @@
       project: "sobits_vla_training"
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-vla_jepa-headft"
+      run_id: ""
+      mode: ""
       notes: "VLA-JEPA fine-tune from lerobot/VLA-JEPA-Pretrain on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only; reinit action/state projections for 19-dim joints)"
       disable_artifact: true
 

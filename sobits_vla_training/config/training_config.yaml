@@ -80,6 +80,10 @@
       entity: ""
       # Display name; auto-generated from policy + timestamp when empty.
       run_name: ""
+      # "" = new run; set to resume an existing W&B curve on another machine.
+      run_id: ""
+      # online (default) | offline (log locally, `wandb sync` later) | disabled.
+      mode: ""
       notes: ""
       disable_artifact: true
 

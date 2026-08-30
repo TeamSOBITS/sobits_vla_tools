@@ -230,12 +230,18 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
     provenance_note = f'lerobot={lerobot_version_str}'
     notes = f'{user_notes} [{provenance_note}]' if user_notes else f'[{provenance_note}]'
 
+    wandb_mode = params.get('wandb.mode', '') or None
+    if wandb_mode not in (None, 'online', 'offline', 'disabled'):
+        raise ValueError(
+            f'wandb.mode must be online|offline|disabled, got {wandb_mode!r}')
     wandb_cfg = WandBConfig(
         enable=params.get('wandb.enable', True),
         disable_artifact=bool(params.get('wandb.disable_artifact', False)),
         project=params.get('wandb.project', 'sobits_vla_training'),
         entity=params.get('wandb.entity', None) or None,
         notes=notes,
+        run_id=params.get('wandb.run_id', '') or None,
+        mode=wandb_mode,
     )
     # wandb.run_name is the display name (job_name), not a resume id --
     # run_id stays unset so each run starts a fresh W&B run.

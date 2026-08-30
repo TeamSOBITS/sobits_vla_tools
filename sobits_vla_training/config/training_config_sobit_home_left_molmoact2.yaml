@@ -60,6 +60,8 @@
       project: "sobits_vla_training"
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-molmoact2-vlmlora"
+      run_id: ""
+      mode: ""
       notes: "MolmoAct2 LoRA-VLM fine-tune from allenai/MolmoAct2 on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
       disable_artifact: true
 

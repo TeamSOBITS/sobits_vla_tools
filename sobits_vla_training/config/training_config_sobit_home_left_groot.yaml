@@ -60,6 +60,8 @@
       project: "sobits_vla_training"
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-groot"
+      run_id: ""
+      mode: ""
       notes: "GR00T N1.7 post-train (projector+diffusion head) on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)"
       disable_artifact: true
 

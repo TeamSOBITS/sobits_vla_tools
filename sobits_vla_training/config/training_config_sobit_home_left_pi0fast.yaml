@@ -64,6 +64,8 @@
       project: "sobits_vla_training"
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-pi0fast"
+      run_id: ""
+      mode: ""
       notes: "PI0-FAST fine-tune on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, chunk 10)"
       disable_artifact: true
 
