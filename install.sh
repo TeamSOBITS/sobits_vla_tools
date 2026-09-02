@@ -4,129 +4,107 @@ set -e
 
 echo "╔══╣ Install: SOBITS VLA TOOLS (STARTING) ╠══╗"
 
-# Keep track of the current directory
-DIR=`pwd`
+# =============================================================================
+# SCOPE: non-ROS setup only.
+#
+#   * ROS packages (ros-jazzy-desktop, message pkgs, rclpy, cv_bridge, tf2_ros,
+#     launch, ament_*, python3-opencv ...) are NOT installed here. They come
+#     from apt (`apt install ros-jazzy-desktop`) + rosdep, driven by each
+#     package.xml / CMakeLists.txt. This script does not run apt for ROS and
+#     does not run rosdep.
+#
+#   * Python (non-ROS) dependencies are managed by pixi (see pixi.toml). This
+#     script installs pixi if missing and materializes ONE environment from
+#     pixi.lock: `gpu` if an NVIDIA GPU with a working driver is visible,
+#     otherwise `cpu`. No global pip, no --break-system-packages.
+#     Force a choice with SOBITS_VLA_PIXI_ENV=cpu|gpu bash install.sh
+#
+#   * Non-ROS source packages this workspace needs (e.g. sobits_interfaces)
+#     are cloned so colcon/rosdep can build them.
+#
+# Run from the sobits_vla_tools package directory.
+# =============================================================================
 
+# Keep track of the current directory
+DIR=$(pwd)
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+# -----------------------------------------------------------------------------
+# 1. Clone non-ROS source dependencies (built by colcon, resolved by rosdep).
+# -----------------------------------------------------------------------------
 cd ../
 
-# Download required packages
-ros_packages=(
+src_packages=(
     "sobits_interfaces"
 )
 
-# Clone all packages
-for ((i = 0; i < ${#ros_packages[@]}; i++)) {
-    echo "Clonning: ${ros_packages[i]}"
-    git clone --recurse-submodules -b $ROS_DISTRO-devel https://github.com/TeamSOBITS/${ros_packages[i]}
-
-    # Check if install.sh exists in each package
-    if [ -f ${ros_packages[i]}/install.sh ]; then
-        echo "Running install.sh in ${ros_packages[i]}."
-        cd ${ros_packages[i]}
-        bash install.sh
-        cd ..
+for ((i = 0; i < ${#src_packages[@]}; i++)); do
+    if [ -d "${src_packages[i]}" ]; then
+        echo "Skipping clone: ${src_packages[i]} already exists."
+    else
+        echo "Cloning: ${src_packages[i]}"
+        git clone --recurse-submodules -b "$ROS_DISTRO-devel" \
+            "https://github.com/TeamSOBITS/${src_packages[i]}"
     fi
-}
 
-# Go back to previous directory
-cd ${DIR}
+    if [ -f "${src_packages[i]}/install.sh" ]; then
+        echo "Running install.sh in ${src_packages[i]}."
+        (cd "${src_packages[i]}" && bash install.sh)
+    fi
+done
 
+cd "${DIR}"
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-WORKSPACE_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
-
-if [ -x /opt/pytorch/.venv/bin/python3 ]; then
-    PYTHON_BIN=/opt/pytorch/.venv/bin/python3
-else
-    PYTHON_BIN=$(command -v python3)
+# -----------------------------------------------------------------------------
+# 2. pixi — Python dependency manager (non-ROS).
+# -----------------------------------------------------------------------------
+if ! command -v pixi >/dev/null 2>&1; then
+    echo "pixi not found — installing pixi."
+    curl -fsSL https://pixi.sh/install.sh | bash
+    # pixi installs to ~/.pixi/bin; make it available for the rest of this run.
+    export PATH="${HOME}/.pixi/bin:${PATH}"
 fi
 
-# Version specs can be overridden per environment, e.g.:
-LEROBOT_VERSION_SPEC=${LEROBOT_VERSION_SPEC:-"~=0.5.1"}
-NUMPY_VERSION_SPEC=${NUMPY_VERSION_SPEC:-">=2.0.0,<2.3.0"}
-NUMEXPR_VERSION_SPEC=${NUMEXPR_VERSION_SPEC:-">=2.10.2"}
-BOTTLENECK_VERSION_SPEC=${BOTTLENECK_VERSION_SPEC:-">=1.4.2"}
-TORCH_VERSION_SPEC=${TORCH_VERSION_SPEC:-""}
+echo "Using pixi: $(command -v pixi) ($(pixi --version))"
 
-# Ubuntu 24+ can mark system Python as externally managed (PEP 668).
-# Only add the override when not using a virtual environment.
-if ! "${PYTHON_BIN}" -c 'import sys; raise SystemExit(0 if sys.prefix != sys.base_prefix else 1)'; then
-    PIP_ARGS=(--break-system-packages)
-fi
+# -----------------------------------------------------------------------------
+# 3. Pick the accelerator environment.
+#    Only ONE of `cpu` / `gpu` is installed: they differ solely in the torch
+#    wheel index, and each is ~8 GB, so installing both duplicates the whole
+#    ML stack. `nvidia-smi -L` is the probe -- it lists devices only when a
+#    driver is actually loaded and reachable (true inside a container started
+#    with --gpus), so a machine with a card but no usable driver correctly
+#    falls back to cpu instead of getting an unusable cu128 env.
+# -----------------------------------------------------------------------------
+PIXI_ENV="${SOBITS_VLA_PIXI_ENV:-}"
 
-PIP_CMD="${PYTHON_BIN} -m pip"
-
-cd "${WORKSPACE_ROOT}"
-
-if [ -z "${ROS_DISTRO:-}" ]; then
-    echo "ROS_DISTRO is not set. Source your ROS 2 environment first."
-    exit 1
-fi
-
-sudo apt update -y
-sudo apt install -y \
-    ros-${ROS_DISTRO}-cv-bridge \
-    ros-${ROS_DISTRO}-geometry-msgs \
-    ros-${ROS_DISTRO}-nav-msgs \
-    ros-${ROS_DISTRO}-sensor-msgs \
-    ros-${ROS_DISTRO}-trajectory-msgs
-
-rosdep update
-rosdep install --from-paths sobits_vla_tools --ignore-src -r -y
-
-# requirements.txt is the pip source of truth. Version specs on the
-# lerobot/numpy/numexpr/bottleneck lines are templated at install time so
-# the LEROBOT_VERSION_SPEC (etc.) env overrides above keep working — e.g.
-# LEROBOT_VERSION_SPEC="~=0.6.0" ./install.sh installs 0.6.0 even though
-# requirements.txt still pins ~=0.5.1.
-REQUIREMENTS_FILE="${WORKSPACE_ROOT}/sobits_vla_tools/requirements.txt"
-if [ ! -f "${REQUIREMENTS_FILE}" ]; then
-    echo "requirements.txt not found at ${REQUIREMENTS_FILE}"
-    exit 1
-fi
-
-PYTHON_PACKAGES=()
-while IFS= read -r line; do
-    # Skip blank lines and comments.
-    [[ -z "${line}" || "${line}" == \#* ]] && continue
-    case "${line}" in
-        lerobot\[*\]*)
-            base="${line%%~=*}"
-            base="${base%%>=*}"
-            base="${base%%==*}"
-            PYTHON_PACKAGES+=("${base}${LEROBOT_VERSION_SPEC}")
-            ;;
-        numpy*)
-            PYTHON_PACKAGES+=("numpy${NUMPY_VERSION_SPEC}")
-            ;;
-        numexpr*)
-            PYTHON_PACKAGES+=("numexpr${NUMEXPR_VERSION_SPEC}")
-            ;;
-        bottleneck*)
-            PYTHON_PACKAGES+=("bottleneck${BOTTLENECK_VERSION_SPEC}")
-            ;;
-        *)
-            PYTHON_PACKAGES+=("${line}")
-            ;;
+if [ -n "${PIXI_ENV}" ]; then
+    case "${PIXI_ENV}" in
+        cpu|gpu) echo "Using pixi environment: ${PIXI_ENV} (forced via SOBITS_VLA_PIXI_ENV)." ;;
+        *) echo "SOBITS_VLA_PIXI_ENV must be 'cpu' or 'gpu' (got '${PIXI_ENV}')." >&2; exit 1 ;;
     esac
-done < "${REQUIREMENTS_FILE}"
-
-echo "Using Python: ${PYTHON_BIN}"
-echo "Requirements file: ${REQUIREMENTS_FILE}"
-echo "LeRobot spec: ${LEROBOT_VERSION_SPEC}"
-echo "NumPy spec: ${NUMPY_VERSION_SPEC}"
-
-${PIP_CMD} install "${PIP_ARGS[@]}" -U pip
-${PIP_CMD} install "${PIP_ARGS[@]}" "${PYTHON_PACKAGES[@]}"
-
-if ! "${PYTHON_BIN}" -c "import torch" >/dev/null 2>&1; then
-    TORCH_PACKAGE="torch"
-    if [ -n "${TORCH_VERSION_SPEC}" ]; then
-        TORCH_PACKAGE="torch${TORCH_VERSION_SPEC}"
-    fi
-    ${PIP_CMD} install "${PIP_ARGS[@]}" "${TORCH_PACKAGE}"
+elif command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q '^GPU'; then
+    PIXI_ENV="gpu"
+    echo "NVIDIA GPU detected:"
+    nvidia-smi -L 2>/dev/null | sed 's/^/  /'
+    echo "Using pixi environment: gpu (CUDA 12.8 torch wheels)."
+else
+    PIXI_ENV="cpu"
+    echo "No usable NVIDIA GPU found (nvidia-smi absent or lists no device)."
+    echo "Using pixi environment: cpu (CPU-only torch wheels)."
 fi
 
-${PIP_CMD} install "${PIP_ARGS[@]}" "setuptools<80.0.0"
+# -----------------------------------------------------------------------------
+# 4. Materialize that environment from pixi.toml / pixi.lock.
+# -----------------------------------------------------------------------------
+cd "${SCRIPT_DIR}"
+pixi install -e "${PIXI_ENV}"
+cd "${DIR}"
 
 echo "╚══╣ Install: SOBITS VLA TOOLS (FINISHED) ╠══╝"
+echo
+echo "Next:"
+echo "  1. Source ROS:   source /opt/ros/\${ROS_DISTRO}/setup.bash"
+echo "  2. rosdep:       rosdep install --from-paths . --ignore-src -r -y"
+echo "  3. Build:        colcon build"
+echo "  4. Run a node:   pixi run -e ${PIXI_ENV} ros2 run sobits_vla_training train_node"

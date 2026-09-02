@@ -1,0 +1,76 @@
+/**:
+  ros__parameters:
+    model:
+      # VLA-JEPA VLM-LoRA adapter (see training_config_sobit_home_left_
+      # vla_jepa_lora.yaml), merged onto lerobot/VLA-JEPA-Pretrain at load.
+      # Absolute actions, 19-dim action/state projections. The V-JEPA2 world
+      # model is training-only — inference runs Qwen backbone + DiT head.
+      # NOTE: no action_feature_names — actions map positionally over the
+      # robot.groups order below, which matches the dataset. Do not reorder.
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_vla_jepa_vlmlora"
+      policy_class: "lerobot.policies.vla_jepa.modeling_vla_jepa.VLAJEPAPolicy"
+      device: "cuda"
+      use_amp: false
+      use_relative_actions: false
+      default_task_label: "Pick up the block"
+
+    runtime:
+      # Must match dataset fps (10) — actions are positions sampled at 10 Hz.
+      control_hz: 10.0
+      # VLA-JEPA chunk_size is 7 (0.7 s at 10 Hz) — much shorter than the
+      # 50-step pi/smolvla chunks, so inference runs near-continuously.
+      actions_per_chunk: 7
+      # Re-infer early: with only 7 steps per chunk and ~0.5-1 s inference
+      # latency the queue drains fast — trigger at 70% (5 steps left).
+      chunk_size_threshold: 0.7
+      # Non-RTC chunk handling: newest = clean replacement at overlaps.
+      aggregate_fn_name: newest
+      async_enabled: true
+      single_step_mode: false
+
+    rtc:
+      # DISABLED: VLAJEPAPolicy.predict_action_chunk (lerobot 0.6.0) has no
+      # RTC support (no init_rtc_processor, no inference_delay /
+      # prev_chunk_left_over kwargs). The policy registry also gates this
+      # (supports_rtc=false) — keep disabled here to match.
+      enabled: false
+      execution_horizon: 3
+      max_guidance_weight: 10.0
+      prefix_attention_schedule: EXP
+      inference_delay: 2
+      debug: false
+
+    logging:
+      enabled: false
+      log_dir: ""
+
+    task:
+      # Selects which block below defines success.
+      mode: pick
+
+      common:
+        robot_model_name: sobit_home
+        tracked_model_name: box_to_pick
+        episode_timeout_s: 60.0
+        success_settle_s: 2.0
+        tilt_threshold_deg: 30.0
+        fall_z_drop_m: 0.15
+
+      # success_lift once tracked_model rises lift_success_m.
+      pick:
+        lift_success_m: 0.05
+
+
+    robot:
+      # Trims the shared sobit_home descriptor to the left-arm 19-dim subset
+      # matching this model's action dim (head 2 + body 1 + arm_left 6 +
+      # hand_left 7 + base 3): exclude arm_right/hand_right wholesale and drop
+      # arm_left_lower_flex_joint (positional mapping -- an extra joint here
+      # would shift every downstream index).
+      descriptor_id: sobit_home
+      exclude:
+        groups: [arm_right, hand_right]
+        cameras: [hand_right_camera]
+        ee_poses: [right]
+        joints: [arm_left_lower_flex_joint]
+        mobile_base: false

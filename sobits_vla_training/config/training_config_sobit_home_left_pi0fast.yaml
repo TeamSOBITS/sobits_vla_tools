@@ -1,51 +1,46 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0-FAST
+    # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0-FAST
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi0fast
     # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
-    # Policy  : PI0-FAST (PaliGemma 2B, autoregressive FAST action tokens — no
+    # Policy  : PI0-FAST (PaliGemma 2B, autoregressive FAST action tokens, no
     #           action expert; ~5x faster training than flow-matching pi0/pi05)
     # Base    : lerobot/pi0fast-base (hyphen — pi0fast_base does NOT exist)
-    # Recipe  : per HF pi0fast docs LIBERO reproduction: chunk_size=10,
-    #           n_action_steps=10, max_action_tokens=256, bf16 + checkpointing.
+    # Recipe  : HF pi0fast LIBERO reproduction — chunk 10, 256 action tokens,
+    #           bf16 + checkpointing.
     #
-    # DEPLOY CAVEAT: chunk_size=10 at 10 fps = 1 s chunks. The deploy
-    # robot_config must set runtime.actions_per_chunk <= 10 and retune
-    # chunk_size_threshold / RTC execution_horizon accordingly.
+    # DEPLOY CAVEAT: chunk_size=10 at 10 fps = 1 s chunks, so the deploy
+    # robot_config needs runtime.actions_per_chunk <= 10 with chunk_size_threshold
+    # / RTC execution_horizon retuned to match.
     #
-    # TOKENIZER: uses the general-purpose lerobot/fast-action-tokenizer by
-    # default. For best results on this robot, optionally train a custom one:
-    #   lerobot-train-tokenizer \
-    #     --repo_id team-sobits/sobit_home-pickup_the_block-left-abs-gazebo \
-    #     --action_horizon 10 --encoded_dims "0:19" --vocab_size 1024 \
-    #     --normalization_mode QUANTILES --push_to_hub \
-    #     --hub_repo_id k-valentin/sobit_home_fast_tokenizer
-    # then set policy_overrides.action_tokenizer_name to that repo.
+    # TOKENIZER: defaults to the general-purpose lerobot/fast-action-tokenizer.
+    # A robot-specific one usually does better — train with lerobot-train-tokenizer
+    # (--action_horizon 10 --encoded_dims "0:19" --vocab_size 1024
+    # --normalization_mode QUANTILES) and point action_tokenizer_name at it.
     # =========================================================================
 
     policy: pi0_fast
 
     robot:
-      descriptor_id: sobit_home
-      active_groups:
-        - head
-        - body
-        - arm_left
-        - hand_left
-      active_cameras:
-        - head_camera
-        - hand_left_camera
-      active_mobile_base: true
+      descriptor_id: sobit_home_v1_1
+      # exclude trims the shared descriptor to this task's subset.
+      # Unknown names raise.
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        cameras: ["hand_right_camera"]
+        # Dataset carries no EE-pose features.
+        ee_poses: [left, right]
+        mobile_base: false
 
     dataset:
       repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
-      num_workers: 4
+      num_workers: 12
       rename_map: []
 
     checkpoint:
-      output_dir: "sobit_home_pickup_block_pi0fast"
+      output_dir: ""
       resume: false
       overwrite: true
       pretrained_path: "lerobot/pi0fast-base"
@@ -53,14 +48,14 @@
       save_checkpoint: true
 
     training:
-      # Autoregressive training is markedly faster per step than flow matching;
-      # 20k steps is a sensible first run for ~200 episodes.
+      # Autoregressive steps are much faster than flow matching; 20k is a
+      # sensible first run for ~200 episodes.
       steps: 20000
       batch_size: 16
       seed: 1000
       use_policy_training_preset: true
       log_freq: 100
-      eval_freq: 5000
+      eval_steps: 0
 
     num_gpus: 1
 
@@ -69,12 +64,10 @@
       project: "sobits_vla_training"
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-pi0fast"
+      run_id: ""
+      mode: ""
       notes: "PI0-FAST fine-tune on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, chunk 10)"
-      tags:
-        - pi0_fast
-        - sobit_home
-        - pickup_block
-        - gazebo
+      disable_artifact: true
 
     hub:
       push_to_hub: true
@@ -82,7 +75,7 @@
       private: false
 
     peft:
-      # PI0FastPolicy has no built-in PEFT defaults in lerobot 0.5.1 —
+      # PI0FastPolicy has no built-in PEFT defaults in lerobot 0.6.0 —
       # train_node patches in LM attention (q,v)_proj targets.
       method_type: "LORA"
       r: 16
@@ -92,8 +85,7 @@
       full_training_modules: []
 
     policy_overrides:
-      # HF docs LIBERO recipe: chunk 10 / execute 10 ("similar to the original
-      # OpenPI implementation"). At 10 fps this is 1 s of motion per chunk.
+      # HF docs LIBERO recipe: chunk 10 / execute 10, i.e. 1 s at 10 fps.
       chunk_size: 10
       n_action_steps: 10
       max_action_tokens: 256

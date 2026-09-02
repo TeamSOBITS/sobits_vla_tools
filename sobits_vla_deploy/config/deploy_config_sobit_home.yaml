@@ -14,7 +14,6 @@
       aggregate_fn_name: weighted_average
       async_enabled: true
       single_step_mode: false
-      max_joint_delta_per_step: 0.15
 
     rtc:
       # PI05 does not expose predict_action_chunk — keep disabled to avoid spurious warnings.
@@ -26,30 +25,31 @@
       debug: false
 
     logging:
-      # Episode evaluation logging. The vla_experiment.launch.py overrides
-      # enabled/log_dir per model run; these are the defaults for plain deploy.
       enabled: false
-      log_dir: "/tmp/vla_logs"
-      tilt_threshold_deg: 30.0
-      # Automatic episode termination thresholds.
-      episode_timeout_s: 60.0   # stop after 60 sim seconds
-      lift_success_m: 0.05      # block lifted > 5 cm -> success
-      fall_z_drop_m: 0.15       # robot world-z drop > 15 cm -> fallen
+      log_dir: ""
+
+    task:
+      # Selects which block below defines success.
+      mode: pick
+
+      common:
+        robot_model_name: sobit_home
+        tracked_model_name: box_to_pick
+        episode_timeout_s: 60.0
+        tilt_threshold_deg: 30.0
+        fall_z_drop_m: 0.15
+
+      # success_lift once tracked_model rises lift_success_m.
+      pick:
+        lift_success_m: 0.05
+
 
     robot:
       # Morphology is loaded from the shared robot descriptor:
       #   sobits_vla_common/robots/sobit_home.robot.yaml
-      # This config activates all groups and cameras (both arms/hands).
       descriptor_id: sobit_home
-      active_groups:
-        - head
-        - body
-        - arm_left
-        - arm_right
-        - hand_left
-        - hand_right
-      active_cameras:
-        - head_camera
-        - hand_left_camera
-        - hand_right_camera
-      active_mobile_base: true
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        cameras: ["hand_right_camera"]
+        ee_poses: ["right"]
+        mobile_base: false

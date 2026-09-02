@@ -59,9 +59,7 @@ for _pkg_python_dir in (
         sys.path.insert(0, _p)
 
 
-# ---------------------------------------------------------------------------
-# 1. Version detection
-# ---------------------------------------------------------------------------
+# --- 1. Version detection ---
 
 
 def test_version_detected():
@@ -74,9 +72,7 @@ def test_version_detected():
     assert all(isinstance(p, int) for p in LEROBOT_VERSION)
 
 
-# ---------------------------------------------------------------------------
-# 2. Every adapter symbol resolves
-# ---------------------------------------------------------------------------
+# --- 2. Every adapter symbol resolves ---
 
 
 def test_adapter_symbols_resolve():
@@ -89,20 +85,22 @@ def test_adapter_symbols_resolve():
     )
 
 
-# ---------------------------------------------------------------------------
-# 3. Grep gate: no stray `lerobot` imports outside the two seam files
-# ---------------------------------------------------------------------------
+# --- 3. Grep gate: no stray `lerobot` imports outside the two seam files ---
 
-# lerobot_adapter.py / lerobot_compat.py: the seam itself.
-# test_lerobot_seam.py: this file imports lerobot directly in
-# test_compat_patches_apply to assert patch targets still exist — that's
-# verification of the private-API coupling, not a new call site.
+# lerobot_adapter.py/lerobot_compat.py: the seam itself. This file imports
+# lerobot in test_compat_patches_apply only to verify patch targets exist.
 _ALLOWED_SEAM_FILES = {'lerobot_adapter.py', 'lerobot_compat.py', 'test_lerobot_seam.py'}
 _IMPORT_RE = re.compile(r'^\s*(from|import)\s+lerobot\b')
 
 
 def _iter_repo_python_files(repo_root: Path):
-    skip_dirs = {'.git', 'build', 'install', 'log', '__pycache__', 'lerobot_v510', 'lerobot_v600'}
+    skip_dirs = {
+        '.git', 'build', 'install', 'log', '__pycache__',
+        'lerobot_v510', 'lerobot_v600',
+        # pixi materializes entire environments (incl. lerobot's own
+        # sources) inside the repo — not our call sites.
+        '.pixi',
+    }
     for path in repo_root.rglob('*.py'):
         if any(part in skip_dirs for part in path.parts):
             continue
@@ -128,9 +126,7 @@ def test_no_stray_lerobot_imports():
     )
 
 
-# ---------------------------------------------------------------------------
-# 4. Processor registry key (patch-4 assumption)
-# ---------------------------------------------------------------------------
+# --- 4. Processor registry key (patch-4 assumption) ---
 
 
 def test_processor_registry_key():
@@ -150,37 +146,71 @@ def test_processor_registry_key():
         is ProcessorStepRegistry.get('relative_actions_processor')
     )
 
-    # The alias must not change the SERIALIZATION name of the step —
-    # register() stamps _registry_name on the class, and pipelines we push
-    # must keep the native key so stock lerobot can load them.
+    # Alias must not change the step's SERIALIZATION name — pipelines we
+    # push must keep the native key so stock lerobot can load them.
     step_cls = ProcessorStepRegistry.get(expected_native_key)
     assert getattr(step_cls, '_registry_name', expected_native_key) == expected_native_key
 
 
-# ---------------------------------------------------------------------------
-# 5. Compat patches apply cleanly
-# ---------------------------------------------------------------------------
+# --- 5. Compat patches apply cleanly ---
 
 
 def test_compat_patches_apply():
     from sobits_vla_common import lerobot_compat as lc
 
+    # apply_conversion_patches() is a no-op on 0.6.0 (upstream fixed the
+    # uint8-overflow bug) but stays callable so callers skip version checks.
+    assert callable(lc.apply_conversion_patches)
     lc.apply_conversion_patches()
     lc.apply_training_patches()
     lc.apply_deploy_patches()
 
     # Idempotency flags set.
-    assert lc._uint8_quantile_stats_patched
     assert lc._bool_quantile_normalization_patched
     assert lc._pi05_action_dim_padding_patched
     assert lc._processor_registry_patched
     assert lc._pi0fast_peft_targets_patched
     assert lc._pi05_from_pretrained_patched
+    assert lc._vla_jepa_image_resize_patched
 
-    # Patch targets import and are (still) patched in place — hard fail if
-    # the target class/attr is missing outright ("target missing"); a
-    # version-gated no-op ("patch skipped by version gate") is fine once
-    # Phase 2 lands, but on 0.5.1 today every target below must be present.
+    # The VLA-JEPA resize helper must equalize heterogeneous camera
+    # resolutions for both frame and video tensors.
+    import torch
+    batch = {
+        'observation.images.a': torch.zeros(2, 3, 480, 640),
+        'observation.images.b': torch.zeros(2, 8, 3, 1200, 1920),
+        'action': torch.zeros(2, 7, 19),
+    }
+    resized = lc._resize_image_features(
+        batch, ['observation.images.a', 'observation.images.b'], (480, 640)
+    )
+    assert resized['observation.images.a'].shape == (2, 3, 480, 640)
+    assert resized['observation.images.b'].shape == (2, 8, 3, 480, 640)
+    assert resized['action'].shape == (2, 7, 19)
+    # Untouched tensors are passed through, not copied.
+    assert resized['observation.images.a'] is batch['observation.images.a']
+
+    # State-dim introspection must read a per-dim stat, never scalars like
+    # 'count' — that once yielded expected_state_dim=1, truncating state at deploy.
+    sys.path.insert(0, str(_REPO_ROOT / 'sobits_vla_deploy'))
+    from sobits_vla_deploy.policy_loader import _state_dim_from_preprocessor
+
+    class _FakeStep:
+        _tensor_stats = {
+            'observation.state': {
+                'count': torch.ones(1),
+                'mean': torch.zeros(19),
+                'std': torch.ones(19),
+            }
+        }
+
+    class _FakePipeline:
+        steps = [_FakeStep()]
+
+    assert _state_dim_from_preprocessor(_FakePipeline()) == 19
+
+    # Patch targets import and are still patched — hard fail if missing,
+    # since every patch below is unconditionally active on lerobot 0.6.0.
     from lerobot.datasets.compute_stats import RunningQuantileStats
     assert hasattr(RunningQuantileStats, 'update')
 
@@ -197,9 +227,7 @@ def test_compat_patches_apply():
         assert hasattr(cls, '_fix_pytorch_state_dict_keys')
 
 
-# ---------------------------------------------------------------------------
-# 6. policy_registry.make_policy_config for every registry entry
-# ---------------------------------------------------------------------------
+# --- 6. policy_registry.make_policy_config for every registry entry ---
 
 
 def test_policy_config_builds():
@@ -222,16 +250,18 @@ def test_policy_config_builds():
             assert cfg is not None
 
 
-# ---------------------------------------------------------------------------
-# 7. Dataset create -> add_frame -> save_episode -> finalize -> reload
-# ---------------------------------------------------------------------------
+# --- 7. Dataset create -> add_frame -> save_episode -> finalize -> reload ---
 
 
 def test_dataset_roundtrip(tmp_path):
     import numpy as np
 
     from sobits_vla_common.lerobot_adapter import LeRobotDataset
-    from sobits_vla_rosbag_conversion.dataset_writer import _make_create_kwargs
+    from sobits_vla_rosbag_conversion.dataset_writer import (
+        _make_create_kwargs,
+        read_custom_info,
+        write_custom_info,
+    )
 
     features = {
         'action': {'dtype': 'float32', 'shape': (2,), 'names': ['j0', 'j1']},
@@ -251,10 +281,11 @@ def test_dataset_roundtrip(tmp_path):
     )
     dataset = LeRobotDataset.create(**create_kwargs)
 
+    # lerobot 0.6.0's info.json has no robot_info/user_info fields, so the
+    # production writer persists them to a meta/ sidecar JSON instead.
     custom_robot_info = {'name': 'seam_test_robot', 'version': '1'}
-    custom_user_info = {'lerobot_version': '0.5.1', 'sobits_vla_tools_rev': 'testrev'}
-    dataset.meta.info['robot_info'] = custom_robot_info
-    dataset.meta.info['user_info'] = custom_user_info
+    custom_user_info = {'lerobot_version': '0.6.0', 'sobits_vla_tools_rev': 'testrev'}
+    write_custom_info(dataset.root, robot_info=custom_robot_info, user_info=custom_user_info)
 
     for i in range(2):
         dataset.add_frame({
@@ -266,15 +297,14 @@ def test_dataset_roundtrip(tmp_path):
     dataset.finalize()
 
     reloaded = LeRobotDataset(repo_id, root=root)
+    reloaded_custom_info = read_custom_info(reloaded.root)
 
     assert reloaded.meta.total_episodes == 1
-    assert reloaded.meta.info.get('robot_info') == custom_robot_info
-    assert reloaded.meta.info.get('user_info') == custom_user_info
+    assert reloaded_custom_info.get('robot_info') == custom_robot_info
+    assert reloaded_custom_info.get('user_info') == custom_user_info
 
 
-# ---------------------------------------------------------------------------
-# 8. Full network+GPU smoke test (opt-in only)
-# ---------------------------------------------------------------------------
+# --- 8. Full network+GPU smoke test (opt-in only) ---
 
 
 @pytest.mark.skipif(

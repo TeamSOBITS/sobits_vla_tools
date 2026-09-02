@@ -37,6 +37,8 @@ add_library(${PROJECT_NAME} SHARED
   src/recording_monitor.cpp
   src/bag_metadata_manager.cpp
   src/topic_builder.cpp
+  src/episode_lifecycle.cpp
+  src/rosbag_collection_params.cpp
   src/rosbag_collection.cpp
 )
 
@@ -59,32 +61,52 @@ ament_target_dependencies(${PROJECT_NAME}
   "sobits_vla_common"
 )
 
+# yaml-cpp is found above and its headers are included directly; link it
+# explicitly rather than relying on yaml_cpp_vendor to propagate it.
+target_link_libraries(${PROJECT_NAME} yaml-cpp)
+
 install(TARGETS ${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
 
-install(DIRECTORY
-  config
-  launch DESTINATION share/${PROJECT_NAME}
+install(DIRECTORY config launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
-install(
-  DIRECTORY include/${PROJECT_NAME}
-  DESTINATION include
+install(FILES rosbags/.gitignore
+  DESTINATION share/${PROJECT_NAME}/rosbags
 )
+
+# Headers are internal to this package: no downstream package includes them,
+# so they are deliberately not installed or exported.
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
-  set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
-  set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_episode_lifecycle test/test_episode_lifecycle.cpp
+    src/episode_lifecycle.cpp)
+  target_include_directories(test_episode_lifecycle PRIVATE include)
+  ament_target_dependencies(test_episode_lifecycle rosbag2_cpp rosbag2_storage)
+
+  ament_add_gtest(test_topic_builder test/test_topic_builder.cpp
+    src/topic_builder.cpp)
+  target_include_directories(test_topic_builder PRIVATE include)
+  ament_target_dependencies(test_topic_builder
+    rclcpp sensor_msgs rcl_interfaces sobits_interfaces
+    rosbag2_storage rosbag2_transport)
+
+  ament_add_gtest(test_bag_metadata_manager test/test_bag_metadata_manager.cpp
+    src/bag_metadata_manager.cpp)
+  target_include_directories(test_bag_metadata_manager PRIVATE include)
+  ament_target_dependencies(test_bag_metadata_manager
+    rclcpp sensor_msgs rcl_interfaces sobits_interfaces
+    rosbag2_storage rosbag2_transport)
+  target_link_libraries(test_bag_metadata_manager yaml-cpp)
 endif()
 
 ament_package()

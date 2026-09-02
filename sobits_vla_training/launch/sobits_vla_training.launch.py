@@ -28,6 +28,8 @@
 
 """Launch file for the sobits_vla_training ROS 2 node."""
 
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.actions import OpaqueFunction
@@ -37,9 +39,18 @@ from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+from sobits_vla_common.launch.utils import (
+    default_pixi_manifest, pixi_launch_arguments, pixi_prefix, resolve_pixi_env,
+)
+
 
 def _str_to_bool(value: str) -> bool:
     return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+# The node runs in the shared pixi env; only the accelerator varies. GPU is the
+# default -- override at launch time with  enable_gpu:=false
+_DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
 def _create_train_node(context, *args, **kwargs):
@@ -47,7 +58,6 @@ def _create_train_node(context, *args, **kwargs):
     robot = LaunchConfiguration('robot').perform(context).strip()
     if robot:
         from ament_index_python.packages import get_package_share_directory
-        import os
         config_file = os.path.join(
             get_package_share_directory('sobits_vla_training'),
             'config',
@@ -56,6 +66,9 @@ def _create_train_node(context, *args, **kwargs):
     else:
         config_file = LaunchConfiguration('config_file').perform(context)
     node_name = LaunchConfiguration('node_name').perform(context)
+
+    pixi_manifest = LaunchConfiguration('pixi_manifest').perform(context)
+    prefix = pixi_prefix(resolve_pixi_env(context), pixi_manifest)
 
     policy = LaunchConfiguration('policy').perform(context).strip()
     dataset_repo_id = LaunchConfiguration('dataset_repo_id').perform(context).strip()
@@ -99,6 +112,7 @@ def _create_train_node(context, *args, **kwargs):
             executable='train_node',
             name=node_name,
             output='screen',
+            prefix=prefix or None,
             parameters=[
                 config_file,
                 overrides,
@@ -141,6 +155,7 @@ def generate_launch_description() -> LaunchDescription:
                 default_value='sobits_vla_training',
                 description='ROS 2 node name.',
             ),
+            *pixi_launch_arguments(_DEFAULT_PIXI_MANIFEST),
             DeclareLaunchArgument(
                 'policy',
                 default_value='',
@@ -154,7 +169,10 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 'output_dir',
                 default_value='',
-                description='Override checkpoint.output_dir.',
+                description=(
+                    'Override checkpoint.output_dir. Relative paths land under '
+                    '<package>/lerobotmodel/; absolute paths are used verbatim.'
+                ),
             ),
             DeclareLaunchArgument(
                 'pretrained_path',

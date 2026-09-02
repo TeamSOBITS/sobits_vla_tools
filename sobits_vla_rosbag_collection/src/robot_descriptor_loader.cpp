@@ -1,3 +1,30 @@
+// Copyright (c) 2026, Team SOBITS
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// * Redistributions of source code must retain the above copyright notice, this
+//   list of conditions and the following disclaimer.
+//
+// * Redistributions in binary form must reproduce the above copyright notice,
+//   this list of conditions and the following disclaimer in the documentation
+//   and/or other materials provided with the distribution.
+//
+// * Neither the name of the copyright holder nor the names of its
+//   contributors may be used to endorse or promote products derived from this
+//   software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 #include "sobits_vla_rosbag_collection/robot_descriptor_loader.hpp"
 #include <cstdlib>
 #include <sstream>
@@ -41,14 +68,20 @@ RobotDescriptorCpp loadRobotDescriptor(const std::string & robot_id)
   RobotDescriptorCpp desc;
   desc.robot_id = config["robot_id"].as<std::string>();
   desc.joint_states_topic = config["joint_states_topic"].as<std::string>();
+  if (config["version"]) {
+    desc.version = config["version"].as<std::string>();
+  }
+  if (config["morphology"]) {
+    desc.morphology = config["morphology"].as<std::string>();
+  }
 
-  // Parse groups
   if (config["groups"]) {
     for (const auto & g_node : config["groups"]) {
       GroupSpecCpp g;
       g.name = g_node["name"].as<std::string>();
       g.command_topic = g_node["command_topic"].as<std::string>();
       g.command_action = g_node["command_action"] ? g_node["command_action"].as<std::string>() : "";
+      g.state_topic = g_node["state_topic"] ? g_node["state_topic"].as<std::string>() : "";
       g.max_joint_delta = g_node["max_joint_delta"] ? g_node["max_joint_delta"].as<double>() : 0.0;
       g.active = g_node["active"] ? g_node["active"].as<bool>() : true;
 
@@ -64,10 +97,12 @@ RobotDescriptorCpp loadRobotDescriptor(const std::string & robot_id)
     }
   }
 
-  // Parse mobile_base
   if (config["mobile_base"]) {
     desc.has_mobile_base = true;
     auto mb_node = config["mobile_base"];
+    if (mb_node["name"]) {
+      desc.mobile_base_name = mb_node["name"].as<std::string>();
+    }
     desc.mobile_base.command_topic = mb_node["command_topic"].as<std::string>();
     desc.mobile_base.odom_topic = mb_node["odom_topic"].as<std::string>();
     desc.mobile_base.has_vel_x = mb_node["has_vel_x"] ? mb_node["has_vel_x"].as<bool>() : false;
@@ -88,7 +123,6 @@ RobotDescriptorCpp loadRobotDescriptor(const std::string & robot_id)
     }
   }
 
-  // Parse sensors
   if (config["sensors"] && config["sensors"]["cameras"]) {
     for (const auto & c_node : config["sensors"]["cameras"]) {
       CameraSpecCpp c;
@@ -100,11 +134,11 @@ RobotDescriptorCpp loadRobotDescriptor(const std::string & robot_id)
       c.encoding = c_node["encoding"] ? c_node["encoding"].as<std::string>() : "";
       c.compressed = c_node["compressed"] ? c_node["compressed"].as<bool>() : false;
       c.active = c_node["active"] ? c_node["active"].as<bool>() : true;
+      c.is_depth = c_node["is_depth"] ? c_node["is_depth"].as<bool>() : false;
       desc.cameras.push_back(c);
     }
   }
 
-  // Parse excluded_joints
   if (config["excluded_joints"]) {
     for (const auto & ej : config["excluded_joints"]) {
       desc.excluded_joints.push_back(ej.as<std::string>());
@@ -118,8 +152,8 @@ RobotInfo toRobotInfo(const RobotDescriptorCpp & desc)
 {
   RobotInfo info;
   info.name = desc.robot_id;
-  info.version = "1.0.0";
-  info.morphology = "mobile_manipulator";
+  info.version = desc.version;
+  info.morphology = desc.morphology;
   info.joint_states_topic = desc.joint_states_topic;
 
   for (const auto & group : desc.groups) {
@@ -128,13 +162,18 @@ RobotInfo toRobotInfo(const RobotDescriptorCpp & desc)
       info.is_actionable[group.name] = true;
       info.part_command_topic[group.name] = group.command_topic;
 
-      // derive state topic name (replace joint_trajectory with controller_state)
-      std::string state_topic = group.command_topic;
-      size_t pos = state_topic.find("joint_trajectory");
-      if (pos != std::string::npos) {
-        state_topic.replace(pos, std::string("joint_trajectory").length(), "controller_state");
-      } else {
-        state_topic += "/state";
+      // Declared state_topic wins; otherwise fall back to the ros2_control
+      // JointTrajectoryController naming this repo's descriptors all use.
+      std::string state_topic = group.state_topic;
+      if (state_topic.empty()) {
+        state_topic = group.command_topic;
+        const std::string kCmdSuffix = "joint_trajectory";
+        size_t pos = state_topic.find(kCmdSuffix);
+        if (pos != std::string::npos) {
+          state_topic.replace(pos, kCmdSuffix.length(), "controller_state");
+        } else {
+          state_topic += "/state";
+        }
       }
       info.part_state_topic[group.name] = state_topic;
 
@@ -149,12 +188,13 @@ RobotInfo toRobotInfo(const RobotDescriptorCpp & desc)
   }
 
   if (desc.has_mobile_base) {
-    info.parts.push_back("mobile_base");
-    info.is_actionable["mobile_base"] = true;
-    info.part_cmd_vel_topic["mobile_base"] = desc.mobile_base.command_topic;
-    info.part_odom_topic["mobile_base"] = desc.mobile_base.odom_topic;
-    info.part_has_cmd_vel_y["mobile_base"] = desc.mobile_base.has_vel_y;
-    info.part_has_cmd_vel_z["mobile_base"] = desc.mobile_base.has_vel_z;
+    const std::string & base = desc.mobile_base_name;
+    info.parts.push_back(base);
+    info.is_actionable[base] = true;
+    info.part_cmd_vel_topic[base] = desc.mobile_base.command_topic;
+    info.part_odom_topic[base] = desc.mobile_base.odom_topic;
+    info.part_has_cmd_vel_y[base] = desc.mobile_base.has_vel_y;
+    info.part_has_cmd_vel_z[base] = desc.mobile_base.has_vel_z;
   }
 
   if (!desc.cameras.empty()) {
@@ -163,7 +203,9 @@ RobotInfo toRobotInfo(const RobotDescriptorCpp & desc)
       if (cam.active) {
         info.sensor_names["camera"].push_back(cam.name);
         info.sensor_models["camera"].push_back(cam.encoding.empty() ? "rgb8" : cam.encoding);
-        info.sensor_topics["camera"].push_back(cam.raw_topic);
+        if (!cam.raw_topic.empty()) {
+          info.sensor_topics["camera"].push_back(cam.raw_topic);
+        }
         info.sensor_info_topics["camera"].push_back(cam.info_topic);
         info.sensor_compressed_topics["camera"].push_back(cam.compressed_topic);
       }
@@ -173,4 +215,4 @@ RobotInfo toRobotInfo(const RobotDescriptorCpp & desc)
   return info;
 }
 
-} // namespace sobits_vla
+}  // namespace sobits_vla

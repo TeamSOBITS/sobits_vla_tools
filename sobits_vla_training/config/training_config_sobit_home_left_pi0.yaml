@@ -1,7 +1,7 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0
+    # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi0
     # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
@@ -14,24 +14,23 @@
     policy: pi0
 
     robot:
-      descriptor_id: sobit_home
-      active_groups:
-        - head
-        - body
-        - arm_left
-        - hand_left
-      active_cameras:
-        - head_camera
-        - hand_left_camera
-      active_mobile_base: true
+      descriptor_id: sobit_home_v1_1
+      # exclude trims the shared descriptor to this task's subset.
+      # Unknown names raise.
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        cameras: ["hand_right_camera"]
+        # Dataset carries no EE-pose features.
+        ee_poses: [left, right]
+        mobile_base: false
 
     dataset:
       repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
-      num_workers: 4
+      num_workers: 12
       rename_map: []
 
     checkpoint:
-      output_dir: "sobit_home_pickup_block_pi0"
+      output_dir: ""
       resume: false
       overwrite: true
       pretrained_path: "lerobot/pi0_base"
@@ -46,8 +45,7 @@
       seed: 1000
       use_policy_training_preset: true
       log_freq: 100
-      # No effect without a gym env — kept for parity with the pi05 config.
-      eval_freq: 5000
+      eval_steps: 0
 
     num_gpus: 1
 
@@ -56,17 +54,15 @@
       project: "sobits_vla_training"
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-pi0"
+      run_id: ""
+      mode: ""
       notes: "PI0 fine-tune on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
-      tags:
-        - pi0
-        - sobit_home
-        - pickup_block
-        - gazebo
+      disable_artifact: true
 
     hub:
       push_to_hub: true
       # New policy type → its own repo (never mix policies/semantics in one repo).
-      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi0_vlmft"
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi0_lora"
       private: false
 
     peft:
@@ -74,8 +70,8 @@
       r: 16
       lora_alpha: 32
       lora_dropout: 0.05
-      # Empty = PI0's built-in default targets:
-      #   gemma_expert self_attn (q,v)_proj + state/action projection layers.
+      # Empty = PI0's built-in defaults: gemma_expert self_attn (q,v)_proj
+      # plus the state/action projection layers.
       target_modules: ""
       full_training_modules: []
 

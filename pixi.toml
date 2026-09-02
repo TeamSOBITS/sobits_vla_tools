@@ -1,0 +1,106 @@
+# pixi manifest for sobits_vla_tools — Python dependencies ONLY.
+# =============================================================================
+# ROS (ros-jazzy-*, rclpy, message packages, ament_*) comes from apt + rosdep,
+# never pixi — see install.sh. ONE environment covers every package in the repo;
+# the only axis is the accelerator, so exactly two envs exist: `cpu` and `gpu`.
+# install.sh probes for an NVIDIA GPU and materializes just one of them (~8 GB
+# each — installing both duplicated the whole torch/lerobot stack twice).
+# [activation] sources /opt/ros/$ROS_DISTRO so rclpy imports inside the env.
+#
+#   pixi run -e gpu ros2 run sobits_vla_training train_node
+#   pixi run -e cpu ros2 run sobits_vla_deploy  sobits_vla_deploy
+# =============================================================================
+
+[workspace]
+name = "sobits_vla_tools"
+channels = ["conda-forge", "pytorch"]
+platforms = ["linux-64"]
+
+# -----------------------------------------------------------------------------
+# Shared base: pinned to the ROS interpreter. Present in BOTH environments.
+# -----------------------------------------------------------------------------
+[dependencies]
+python = "3.12.*"          # MUST match ros-jazzy rclpy (CPython 3.12)
+pip = "*"
+# Held inside lerobot 0.6.0's caps so the conda solve satisfies the pip solve —
+# conda pulls newer otherwise and pip fails with "pinned by conda solve".
+setuptools = ">=71.0.0,<81.0.0"
+packaging = ">=24.2,<26.0"
+cmake = ">=3.29.0.1,<4.2.0"
+libstdcxx-ng = ">=13"      # avoid GLIBCXX skew vs system ROS libs
+pyyaml = "*"               # rclpy imports yaml; world_reset/gz_utils need it
+# apt ROS keeps its pure-python deps in /usr/lib/python3/dist-packages, which
+# the bridge deliberately does NOT expose; own them here instead.
+lark = ">=1.1.9,<2"        # ros launch frontend parser
+
+[activation]
+# Bridges apt ROS into the env. Export ROS_DISTRO before `pixi run`.
+scripts = ["scripts/pixi_ros_bridge.sh"]
+
+[activation.env]
+# Disable ~/.local user-site: the container has a user-site numpy 1.26 there
+# that would shadow the env's numpy 2.x -> "numpy.dtype size changed" ABI crash.
+PYTHONNOUSERSITE = "1"
+# apt ROS ships pytest plugins (launch_testing*) on PYTHONPATH that are
+# incompatible with the env's pytest 9; the env has no plugins of its own.
+PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
+
+# =============================================================================
+# ACCELERATOR — torch/torchvision from PyPI (not conda), pinned to lerobot
+# 0.6.0's range, cpu vs cu128 wheel index per feature. Matches lerobot's own
+# [tool.uv.sources] and avoids the conda-torch vs pip-torch ABI clash. This is
+# the ONLY difference between the two environments.
+# =============================================================================
+[feature.cpu.pypi-dependencies]
+torch = { version = ">=2.7,<2.12.0", index = "https://download.pytorch.org/whl/cpu" }
+torchvision = { version = ">=0.22.0,<0.27.0", index = "https://download.pytorch.org/whl/cpu" }
+
+[feature.gpu]
+platforms = ["linux-64"]
+
+[feature.gpu.pypi-dependencies]
+torch = { version = ">=2.7,<2.12.0", index = "https://download.pytorch.org/whl/cu128" }
+torchvision = { version = ">=0.22.0,<0.27.0", index = "https://download.pytorch.org/whl/cu128" }
+
+# =============================================================================
+# WORKSPACE STACK — every non-ROS Python dependency of every package in the
+# repo, torch-free (torch comes from cpu|gpu). Previously split per package,
+# but the per-package feature sets were near-identical and each env duplicated
+# the full ~8 GB torch/lerobot tree; one shared stack removes that.
+#
+# lerobot's fast-moving pins (transformers, hf-hub, accelerate ...) are left to
+# pip, whose extras pull exact versions; conda owns only numpy and the native
+# libs those wheels expect. Extras map to the policies imported: pi ->
+# pi0/pi05/pi0_fast, vla_jepa, smolvla, training -> dataset+wandb+accelerate,
+# peft-dep -> LoRA.
+# =============================================================================
+[feature.stack.dependencies]
+numpy = ">=2.0.0,<2.3.0"   # ABI anchor for pandas/scipy/opencv; matches lerobot
+# torchcodec (pip, via lerobot's "dataset" extra) ships libtorchcodec_core{4..8}.so
+# but no FFmpeg — without this every video decode dies in the DataLoader worker.
+ffmpeg = ">=7.1,<9"        # <9 keeps sonames matching a shipped core*.so
+# Do NOT add ros-jazzy-cv-bridge: its NumPy-1.x C extension segfaults under
+# NumPy 2, and the robostack fix drags in a SECOND full ROS stack (108 pkgs) that
+# rebinds apt rclpy. _on_image() in sobits_vla_deploy.py decodes via cv2 instead.
+pytest = ">=7"             # lerobot seam tests (sobits_vla_common) run here
+
+# sobits_vla_visualization — no torch of its own, but it shares this env now.
+# pandas/matplotlib also cover sobits_vla_rosbag_conversion's plotting.
+pandas = ">=2.2.2,<2.4"
+matplotlib = "*"
+# sobits_vla_rosbag_conversion — pandas accelerators; scipy/pyarrow/pillow
+# already arrive through lerobot, so conda pins for those would fight pip.
+numexpr = ">=2.10.2"
+bottleneck = ">=1.4.2"
+
+[feature.stack.pypi-dependencies]
+lerobot = { version = "~=0.6.0", extras = ["training", "transformers-dep", "pi", "smolvla", "peft-dep", "vla_jepa"] }
+rosbags = "*"              # sobits_vla_rosbag_conversion; pip-only
+
+# =============================================================================
+# ENVIRONMENTS — one stack, two accelerator variants. install.sh materializes
+# only the one that matches the host (see its nvidia-smi probe).
+# =============================================================================
+[environments]
+cpu = { features = ["stack", "cpu"] }
+gpu = { features = ["stack", "gpu"] }

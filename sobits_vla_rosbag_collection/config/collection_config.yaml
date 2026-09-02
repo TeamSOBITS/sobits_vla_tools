@@ -1,12 +1,8 @@
 /**:
   ros__parameters:
-    # Robot information
     robot_info:
-      # Name of the robot
       name: "robot_name"
-      # Version of the robot
       version: "1.0.0"
-      # Description of the robot
       morphology:
         # Type of the robot (e.g., "mobile_manipulator", "humanoid", "quadruped", etc.)
         type: "mobile_manipulator"
@@ -32,13 +28,15 @@
           joint_names:
             - "gripper"
         mobile_base:
+          # A part counts as a base only if cmd_vel_topic is set, whatever
+          # the part is named.
+          cmd_vel_topic: "/cmd_vel"
           joint_names:
             - "base_wheel_left"
             - "base_wheel_right"
         # legs:
         #   joint_names:
         #     - ""
-      # List of sensors on the robot
       sensors:
         types:
           - rgbd # color and depth camera
@@ -66,27 +64,22 @@
           names: [""]
           models: [""]
 
-    # User information for contact
     user_info:
-      # Name of the user
       name: ""
-      # Location of the user
       location: ""
-      # Contact email for the user
       email: ""
 
-    # ROS bag recording configuration
     rosbag_config:
-      # Path to the directory where the recorded bag files will be saved
-      record_directory: "/path/to/recorded_bags"
-      # List of topics to record (cameras, joint_states, tf, sensors, etc.)
+      # Where recorded bags land. Empty = the launch file resolves the
+      # package's rosbags/ output root; a set value here always wins.
+      record_directory: ""
       topics_to_record:
         - "/camera/image_raw"
         - "/camera/camera_info"
-      # List of services to record (TODO: not available until ROS 2 Jazzy)
+      # TODO: services not available until ROS 2 Jazzy
       services_to_record:
         - "/camera/get_image"
-      # List of actions to record (TODO: not available until ROS 2 Kilted)
+      # TODO: actions not available until ROS 2 Kilted
       actions_to_record:
         - "/robot/move_base"
       # Format for the recorded bag files (e.g., "mcap", "sqlite3")

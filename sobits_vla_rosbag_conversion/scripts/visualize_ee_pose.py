@@ -77,7 +77,6 @@ def plot_ee(df: pd.DataFrame, ee_key: str, out_path: Path, max_episodes: int = 1
         xyz = ee[mask, :3]
         color = cmap(idx / max(len(unique_eps) - 1, 1))
 
-        # 3D trajectory
         ax3d.plot(xyz[:, 0], xyz[:, 1], xyz[:, 2],
                   color=color, alpha=0.7, linewidth=0.8, label=f'ep {ep}')
         ax3d.scatter(xyz[0, 0], xyz[0, 1], xyz[0, 2],
@@ -85,7 +84,6 @@ def plot_ee(df: pd.DataFrame, ee_key: str, out_path: Path, max_episodes: int = 1
         ax3d.scatter(xyz[-1, 0], xyz[-1, 1], xyz[-1, 2],
                      color=color, s=20, marker='x')       # end
 
-        # Time-series per DOF
         for i, ax in enumerate(axes_ts):
             ax.plot(t, ee[mask, i], color=color, alpha=0.7, linewidth=0.8)
 

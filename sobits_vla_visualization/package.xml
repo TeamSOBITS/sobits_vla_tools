@@ -6,13 +6,14 @@
   <name>sobits_vla_visualization</name>
   <version>0.1.0</version>
   <description>
-    Research-grade analysis and plotting for SOBITS VLA evaluation episode logs
-    (SmolVLA vs Pi05 comparison).
+    Empty skeleton reserved for future online VLA debug/visualization nodes.
+    Offline episode-log analysis (formerly vla_eval here) now lives in
+    sobits_vla_deploy/eval.
   </description>
 
   <maintainer email="kvalentincardenas@gmail.com">VALENTIN Keith</maintainer>
 
-  <license>BSD</license>
+  <license>BSD-3-Clause</license>
 
   <url type="website">https://home.soka.ac.jp/~choi/index.html</url>
   <url type="repository">https://github.com/TeamSOBITS/sobits_vla_tools</url>
@@ -22,10 +23,6 @@
   <author email="kvalentincardenas@gmail.com">VALENTIN Keith</author>
 
   <buildtool_depend>ament_python</buildtool_depend>
-
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-pandas</exec_depend>
-  <exec_depend>python3-matplotlib</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

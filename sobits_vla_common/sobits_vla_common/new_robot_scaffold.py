@@ -102,6 +102,9 @@ def generate_descriptor_yaml(
                 '  max_vel_z: 0.0',
                 '  max_vel_theta: 0.0',
                 '  features: [x.vel, y.vel, theta.vel]',
+                '  # Commands below these are sent as zero (base creep suppression).',
+                '  linear_deadband: 0.015',
+                '  angular_deadband: 0.005',
             ])
         else:  # diff
             yaml_lines.extend([
@@ -114,6 +117,9 @@ def generate_descriptor_yaml(
                 '  max_vel_z: 0.0',
                 '  max_vel_theta: 0.0',
                 '  features: [x.vel, theta.vel]',
+                '  # Commands below these are sent as zero (base creep suppression).',
+                '  linear_deadband: 0.015',
+                '  angular_deadband: 0.005',
             ])
     else:
         yaml_lines.extend([
@@ -266,7 +272,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # If validate_only is selected, run parsing & validation immediately
     if args.validate_only:
         desc = None
         desc_path = None
@@ -313,12 +318,10 @@ def main() -> None:
             print(f"Robot descriptor '{args.robot_id}' is VALID.")
             sys.exit(0)
 
-    # Determine target output directory
     output_dir = None
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        # Walk up file path to find package robots/ directory in source space
         current_file = Path(__file__).resolve()
         for parent in current_file.parents:
             if (
@@ -337,7 +340,6 @@ def main() -> None:
 
     cameras_list = [c.strip() for c in args.cameras.split(',') if c.strip()]
 
-    # Generate descriptor config
     desc_content = generate_descriptor_yaml(
         robot_id=args.robot_id,
         dof=args.dof,
@@ -349,7 +351,6 @@ def main() -> None:
         f.write(desc_content)
     print(f'Generated robot descriptor: {desc_path}')
 
-    # Generate collection config if requested
     if args.gen_collection_config:
         coll_content = generate_collection_config_yaml(args.robot_id)
         coll_path = output_dir / f'collection_config_{args.robot_id}.yaml'
@@ -357,7 +358,6 @@ def main() -> None:
             f.write(coll_content)
         print(f'Generated collection config stub: {coll_path}')
 
-    # Run validation checks on generated config (will warn on TODOs)
     try:
         desc_obj = _parse_descriptor_file(desc_path)
         errors = validate_descriptor(desc_obj)

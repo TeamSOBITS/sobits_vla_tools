@@ -1,0 +1,32 @@
+# VQ-BeT training defaults.
+# All fields map 1-to-1 to VQBeTConfig dataclass fields.
+#
+# VQ-BeT trains FROM SCRATCH (ResNet vision backbone with ImageNet weights,
+# plus a two-stage VQ-VAE codebook + GPT prior) — no pretrained checkpoint.
+#
+# CAVEATS vs the pi-family:
+#  - NO language conditioning: the task instruction is ignored. Fine for a
+#    single-task dataset; useless for multi-task.
+#  - Only ONE camera view is supported (validate_features enforces this).
+#  - Normalization is IDENTITY for images, MIN_MAX for state/action.
+
+policy_type: vqbet
+
+# From scratch — leave empty (ResNet18 ImageNet weights load automatically).
+pretrained_path: ""
+
+# --- Action chunking ---
+n_obs_steps: 5
+n_action_pred_token: 3
+action_chunk_size: 5
+
+# --- Architecture (lerobot defaults) ---
+vision_backbone: "resnet18"
+pretrained_backbone_weights: "ResNet18_Weights.IMAGENET1K_V1"
+vqvae_n_embed: 16
+gpt_n_layer: 8
+
+# --- Optimisation ---
+optimizer_lr: 1.0e-4
+optimizer_vqvae_weight_decay: 1.0e-4
+scheduler_warmup_steps: 500

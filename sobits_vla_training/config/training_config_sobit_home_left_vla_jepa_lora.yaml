@@ -1,0 +1,102 @@
+/**:
+  ros__parameters:
+    # =========================================================================
+    # SOBIT HOME "pickup_the_block" — VLA-JEPA VLM-LoRA
+    #
+    # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_vla_jepa_lora
+    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Policy  : VLA-JEPA — LoRA on the Qwen3-VL backbone + FULL training of the
+    #           DiT action head and the V-JEPA2 world-model predictor.
+    # Base    : lerobot/VLA-JEPA-Pretrain
+    # Recipe  : second iteration after the head-only run stalled at ~0.73 m with
+    #           zero base motion (median-action regression under a frozen
+    #           backbone). LoRA lets gradients reach the VLM while keeping
+    #           optimizer state within 32 GB; freeze_qwen stays false so the
+    #           world-model loss remains ACTIVE.
+    # NOTE    : the final push is a PEFT ADAPTER repo. Deploy-side adapter
+    #           loading for vla_jepa is not wired yet — merge the adapter before
+    #           eval, or extend policy_loader first.
+    # =========================================================================
+
+    policy: vla_jepa
+
+    robot:
+      descriptor_id: sobit_home_v1_1
+      # exclude trims the shared descriptor to this task's subset.
+      # Unknown names raise.
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        cameras: ["hand_right_camera"]
+        # Dataset carries no EE-pose features.
+        ee_poses: [left, right]
+        mobile_base: false
+
+    dataset:
+      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
+      num_workers: 12
+      rename_map: []
+
+    checkpoint:
+      output_dir: ""
+      resume: false
+      overwrite: true
+      pretrained_path: "lerobot/VLA-JEPA-Pretrain"
+      save_freq: 5000
+      save_checkpoint: true
+
+    training:
+      steps: 60000
+      # Backprop now traverses the 2B backbone and the world model loads 8-frame
+      # windows per sample, so batch is activation-bound: measured ~21 GB at
+      # batch 4 on the 32.6 GB 5090. If batch 8 OOMs early, fall back to 4.
+      batch_size: 4
+      seed: 1000
+      use_policy_training_preset: true
+      log_freq: 100
+      eval_steps: 0
+
+    num_gpus: 1
+
+    wandb:
+      enable: true
+      project: "sobits_vla_training"
+      entity: ""
+      run_name: "sobit_home-pickup_block-left-abs-vla_jepa-vlmlora"
+      run_id: ""
+      mode: ""
+      notes: "VLA-JEPA VLM-LoRA + active world model from lerobot/VLA-JEPA-Pretrain on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions; reinit 19-dim action/state projections; full-training DiT head + video predictor)"
+      disable_artifact: true
+
+    hub:
+      push_to_hub: true
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_vla_jepa_vlmlora"
+      private: false
+
+    peft:
+      method_type: "LORA"
+      r: 16
+      lora_alpha: 32
+      lora_dropout: 0.05
+      # LoRA on the Qwen3-VL language-model attention projections. VLAJEPAPolicy
+      # defines no default targets, so this regex is REQUIRED.
+      target_modules: "(.*\\.language_model\\..*\\.self_attn\\.(q|v)_proj)"
+      # Fully train the DiT head (LoRA on the reinit'd 19-dim projections would
+      # be pointless) and the world-model predictor; V-JEPA2 encoder stays frozen.
+      full_training_modules:
+        - "action_model"
+        - "video_predictor"
+
+    policy_overrides:
+      # Cosine decay must span the full run — the preset pins it at 30k and the
+      # second half would idle at the floor LR.
+      scheduler_decay_steps: 60000
+      chunk_size: 7
+      n_action_steps: 7
+      # Gradients reach the backbone through the adapters, so the JEPA
+      # world-model loss stays active (freeze_qwen would auto-disable it).
+      freeze_qwen: false
+      enable_world_model: true
+      reinit_modules:
+        - "model.action_model.action_encoder"
+        - "model.action_model.action_decoder"
+        - "model.action_model.state_encoder"

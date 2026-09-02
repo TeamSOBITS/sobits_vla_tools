@@ -1,3 +1,30 @@
+// Copyright (c) 2026, Team SOBITS
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// * Redistributions of source code must retain the above copyright notice, this
+//   list of conditions and the following disclaimer.
+//
+// * Redistributions in binary form must reproduce the above copyright notice,
+//   this list of conditions and the following disclaimer in the documentation
+//   and/or other materials provided with the distribution.
+//
+// * Neither the name of the copyright holder nor the names of its
+//   contributors may be used to endorse or promote products derived from this
+//   software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 #include "sobits_vla_rosbag_collection/recording_monitor.hpp"
 #include <filesystem>
 #include <cmath>
@@ -45,6 +72,8 @@ void RecordingMonitor::start()
   fps_warmup_ = true;
   timestamp_monitor_initialized_ = false;
   recording_start_time_ = std::chrono::steady_clock::now();
+
+  std::lock_guard<std::mutex> lock(monitor_mutex_);  // guard population vs. a racing stop()/tick
 
   if (need_fps) {
     std::set<std::string> monitor_topics;
@@ -113,6 +142,7 @@ void RecordingMonitor::stop()
     fps_monitor_timer_->cancel();
     fps_monitor_timer_.reset();
   }
+  std::lock_guard<std::mutex> lock(monitor_mutex_);  // serialize against a racing tick
   monitor_subs_.clear();
   monitor_counts_.clear();
   monitor_prev_counts_.clear();
@@ -126,40 +156,44 @@ void RecordingMonitor::runMonitorTick()
     return;
   }
 
-  // FPS checks
-  if (expected_sensor_fps_ > 0) {
-    if (fps_warmup_) {
-      for (auto & [topic, prev_count] : monitor_prev_counts_) {
-        auto it = monitor_counts_.find(topic);
-        if (it != monitor_counts_.end()) {
-          prev_count = it->second->load();
-        }
-      }
-      fps_warmup_ = false;
-    } else {
-      double interval = 2.0;
-      double threshold = expected_sensor_fps_ * 0.8;
-      for (auto & [topic, prev_count] : monitor_prev_counts_) {
-        auto it = monitor_counts_.find(topic);
-        if (it != monitor_counts_.end()) {
-          uint64_t current = it->second->load();
-          double rate = static_cast<double>(current - prev_count) / interval;
-          prev_count = current;
+  {
+    // Scoped: only map-touching checks need monitor_mutex_. Max-duration callback below
+    // must run unlocked — it joins the auto-save thread, which calls stop() and would deadlock.
+    std::lock_guard<std::mutex> lock(monitor_mutex_);  // guard maps vs. concurrent stop()/start()
 
-          if (rate < threshold && rate > 0.0) {
-            RCLCPP_WARN(node_->get_logger(),
-              "FPS DROP: '%s' publishing at %.1f Hz (expected >= %.1f Hz)",
-              topic.c_str(), rate, static_cast<double>(expected_sensor_fps_));
-          } else if (rate == 0.0 && current > 0) {
-            RCLCPP_ERROR(node_->get_logger(),
-              "FPS STALL: '%s' stopped publishing!", topic.c_str());
+    if (expected_sensor_fps_ > 0) {
+      if (fps_warmup_) {
+        for (auto & [topic, prev_count] : monitor_prev_counts_) {
+          auto it = monitor_counts_.find(topic);
+          if (it != monitor_counts_.end()) {
+            prev_count = it->second->load();
+          }
+        }
+        fps_warmup_ = false;
+      } else {
+        double interval = 2.0;
+        double threshold = expected_sensor_fps_ * 0.8;
+        for (auto & [topic, prev_count] : monitor_prev_counts_) {
+          auto it = monitor_counts_.find(topic);
+          if (it != monitor_counts_.end()) {
+            uint64_t current = it->second->load();
+            double rate = static_cast<double>(current - prev_count) / interval;
+            prev_count = current;
+
+            if (rate < threshold && rate > 0.0) {
+              RCLCPP_WARN(node_->get_logger(),
+                "FPS DROP: '%s' publishing at %.1f Hz (expected >= %.1f Hz)",
+                topic.c_str(), rate, static_cast<double>(expected_sensor_fps_));
+            } else if (rate == 0.0 && current > 0) {
+              RCLCPP_ERROR(node_->get_logger(),
+                "FPS STALL: '%s' stopped publishing!", topic.c_str());
+            }
           }
         }
       }
     }
   }
 
-  // Disk space check
   if (min_disk_space_mb_ > 0) {
     try {
       auto space = std::filesystem::space(recording_dir_);
@@ -175,7 +209,6 @@ void RecordingMonitor::runMonitorTick()
     }
   }
 
-  // Timestamp jump detection
   if (timestamp_jump_threshold_sec_ > 0.0) {
     auto now_wall = std::chrono::steady_clock::now();
     rclcpp::Time now_ros = node_->get_clock()->now();
@@ -198,7 +231,6 @@ void RecordingMonitor::runMonitorTick()
     prev_ros_time_ = now_ros;
   }
 
-  // Max duration check
   if (max_episode_duration_sec_ > 0.0 && !max_duration_triggered_) {
     auto elapsed = std::chrono::steady_clock::now() - recording_start_time_;
     double duration_sec = std::chrono::duration<double>(elapsed).count();
@@ -214,4 +246,4 @@ void RecordingMonitor::runMonitorTick()
   }
 }
 
-} // namespace sobits_vla
+}  // namespace sobits_vla

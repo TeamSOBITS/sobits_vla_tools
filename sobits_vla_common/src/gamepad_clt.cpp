@@ -38,78 +38,61 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
 
   rclcpp::QoS qos_profile(rclcpp::KeepLast(10));
 
-  // Create subscriber for Joy messages
   joy_subscriber_ = this->create_subscription<sensor_msgs::msg::Joy>(
       "joy", qos_profile,
       std::bind(&GamepadClient::joyCallback, this, std::placeholders::_1));
 
-  // Set values from parameters, supporting both "gamepad" and legacy "gamepad_config" namespaces
-  this->declare_parameter<std::string>("gamepad.command_service", "/vla/command");
-  this->declare_parameter<std::string>("gamepad_config.name", "");
+  this->declare_parameter<std::string>(
+    "gamepad.command_service", "vla_rosbag_collection/command");
   this->declare_parameter<std::string>("gamepad.controller", "dualshock4");
   this->declare_parameter<double>("gamepad.button_cooldown_duration", 0.5);
-  this->declare_parameter<double>("gamepad_config.button_cooldown_duration", 0.5);
+  // Service name selects the stage (deploy: sobits_vla_deploy/command,
+  // collection: vla_rosbag_collection/command); matched by substring below.
+  this->declare_parameter<std::string>("gamepad.deploy_service_match", "deploy");
 
   command_service_name_ = this->get_parameter("gamepad.command_service").as_string();
+  const std::string deploy_match =
+    this->get_parameter("gamepad.deploy_service_match").as_string();
+  deploy_mode_ = !deploy_match.empty() &&
+    command_service_name_.find(deploy_match) != std::string::npos;
 
-  std::string old_name = this->get_parameter("gamepad_config.name").as_string();
-  std::string new_name = this->get_parameter("gamepad.controller").as_string();
-  std::string ns = "gamepad";
+  gamepad_name_ = this->get_parameter("gamepad.controller").as_string();
+  button_cooldown_duration_ = this->get_parameter("gamepad.button_cooldown_duration").as_double();
 
-  if (!old_name.empty()) {
-    gamepad_name_ = old_name;
-    ns = "gamepad_config";
-    button_cooldown_duration_ =
-      this->get_parameter("gamepad_config.button_cooldown_duration").as_double();
-  } else {
-    gamepad_name_ = new_name;
-    ns = "gamepad";
-    button_cooldown_duration_ = this->get_parameter("gamepad.button_cooldown_duration").as_double();
-  }
-
-  std::string base = ns + "." + gamepad_name_ + ".button_mapping.";
+  std::string base = std::string("gamepad.") + gamepad_name_ + ".button_mapping." +
+    (deploy_mode_ ? "deploy." : "collection.");
   this->declare_parameter<int>(base + "record", -1);
   this->declare_parameter<int>(base + "pause", -1);
   this->declare_parameter<int>(base + "save", -1);
   this->declare_parameter<int>(base + "delete", -1);
   this->declare_parameter<int>(base + "play", -1);
-  this->declare_parameter<int>(base + "stop", -1);
+  this->declare_parameter<int>(base + "reset", -1);
 
   record_button_ = this->get_parameter(base + "record").as_int();
   pause_button_ = this->get_parameter(base + "pause").as_int();
   save_button_ = this->get_parameter(base + "save").as_int();
   delete_button_ = this->get_parameter(base + "delete").as_int();
 
-  // For deploy package (play and stop)
-  int play_button = this->get_parameter(base + "play").as_int();
-  int stop_button = this->get_parameter(base + "stop").as_int();
+  // For deploy mode (play/stop toggle + reset)
+  play_button_ = this->get_parameter(base + "play").as_int();
+  reset_button_ = this->get_parameter(base + "reset").as_int();
 
-  // If record/pause/save/delete are not set, try checking deploy parameters
-  if (record_button_ == -1 && play_button != -1) {
-    record_button_ = play_button;  // Alias record to play
-  }
-  if (pause_button_ == -1 && stop_button != -1) {
-    pause_button_ = stop_button;  // Alias pause to stop
-  }
-
-  // Log params
   RCLCPP_INFO(this->get_logger(), "Command Service Name: %s", command_service_name_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Stage: %s", deploy_mode_ ? "deploy" : "collection");
   RCLCPP_INFO(this->get_logger(), "Gamepad name: %s", gamepad_name_.c_str());
   RCLCPP_INFO(this->get_logger(), "Record button: %d", record_button_);
   RCLCPP_INFO(this->get_logger(), "Pause button: %d", pause_button_);
   RCLCPP_INFO(this->get_logger(), "Save button: %d", save_button_);
   RCLCPP_INFO(this->get_logger(), "Delete button: %d", delete_button_);
+  RCLCPP_INFO(this->get_logger(), "Reset button: %d", reset_button_);
   RCLCPP_INFO(this->get_logger(), "Cooldown duration: %.2f s", button_cooldown_duration_);
 
-  // Create service client for VlaCommand
   service_client_ = this->create_client<sobits_interfaces::srv::VlaCommand>(command_service_name_);
 
-  // Create wall timer to periodically check the joy messages
   timer_ = this->create_wall_timer(
       std::chrono::milliseconds(250),
       std::bind(&GamepadClient::timerCallback, this));
 
-  // Init values
   current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
   previous_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
 
@@ -129,27 +112,23 @@ GamepadClient::~GamepadClient()
 
 void GamepadClient::timerCallback()
 {
-  // Check if we have received a Joy message
   if (!last_joy_msg_) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
         "No Joy message received yet");
     return;
   }
 
-  // Check if the service server is available
   if (!service_client_->wait_for_service(std::chrono::seconds(1))) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
         "Service server not available, cannot process commands");
     return;
   }
 
-  // Terminate node if the current state is STATE_ERROR
   if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR) {
     RCLCPP_ERROR(this->get_logger(), "Current state is STATE_ERROR, cannot process commands");
     return;
   }
 
-  // Check the last joy message for button presses
   rclcpp::Time now = this->now();
   if ((now - last_button_press_time_).seconds() < button_cooldown_duration_) {
     return;
@@ -160,13 +139,35 @@ void GamepadClient::timerCallback()
   // Negative index → axes, non-negative → buttons
   auto pressed = [&](int idx) -> bool {
       if (idx < 0) {
-        return last_joy_msg_->axes[std::abs(idx)] > 0.5f;
+        const size_t ax = static_cast<size_t>(std::abs(idx));
+        return ax < last_joy_msg_->axes.size() && last_joy_msg_->axes[ax] > 0.5f;
       }
       return static_cast<int>(idx) < static_cast<int>(last_joy_msg_->buttons.size()) &&
              last_joy_msg_->buttons[idx] != 0;
     };
 
-  // Toggle Record/Pause/Resume
+  if (deploy_mode_) {
+    // Reset: force a fresh episode — STOP in any state (the deploy node
+    // aborts a running episode, resets model state and re-poses the robot).
+    if (reset_button_ != -1 && pressed(reset_button_)) {
+      callService(sobits_interfaces::srv::VlaCommand::Request::STOP);
+      button_pressed = true;
+    }
+    // Play button: PLAY when stopped, STOP while playing.
+    if (!button_pressed && play_button_ != -1 && pressed(play_button_)) {
+      if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_PLAYING) {
+        callService(sobits_interfaces::srv::VlaCommand::Request::STOP);
+      } else {
+        callService(sobits_interfaces::srv::VlaCommand::Request::PLAY);
+      }
+      button_pressed = true;
+    }
+    if (button_pressed) {
+      last_button_press_time_ = now;
+    }
+    return;
+  }
+
   if (record_button_ != -1 && pressed(record_button_)) {
     if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
       callService(sobits_interfaces::srv::VlaCommand::Request::RECORD);
@@ -180,7 +181,7 @@ void GamepadClient::timerCallback()
     }
   }
 
-  // Toggle Pause/Resume separately (if mapped to a different button)
+  // Separate button, in case Pause/Resume is mapped differently from Record.
   if (!button_pressed && pause_button_ != -1 && pressed(pause_button_)) {
     if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING) {
       callService(sobits_interfaces::srv::VlaCommand::Request::PAUSE);
@@ -191,7 +192,17 @@ void GamepadClient::timerCallback()
     }
   }
 
-  // Save / Delete toggle (same button)
+  // Reset the scene between episodes. Only while stopped: a teleport during
+  // recording would land in the bag as a discontinuity.
+  if (!button_pressed && reset_button_ != -1 && pressed(reset_button_)) {
+    if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
+      callService(sobits_interfaces::srv::VlaCommand::Request::RESET);
+      button_pressed = true;
+    } else {
+      RCLCPP_WARN(this->get_logger(), "Ignoring RESET while recording or paused.");
+    }
+  }
+
   if (!button_pressed && save_button_ != -1 && pressed(save_button_)) {
     const bool is_rec =
       (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING);
@@ -235,17 +246,20 @@ void GamepadClient::callService(const uint8_t & command)
       command == sobits_interfaces::srv::VlaCommand::Request::PLAY ? "PLAY" :
       command == sobits_interfaces::srv::VlaCommand::Request::STOP ? "STOP" : "UNKNOWN");
 
-  // Call the service asynchronously
   auto result_future = service_client_->async_send_request(
       request,
     [this](rclcpp::Client<sobits_interfaces::srv::VlaCommand>::SharedFuture future) {
       auto response = future.get();
       if (response->success) {
         RCLCPP_INFO(this->get_logger(), "Service call succeeded: %s", response->message.c_str());
-        this->previous_state_ = this->current_state_;
-        this->current_state_ = response->status;
       } else {
         RCLCPP_ERROR(this->get_logger(), "Service call failed: %s", response->message.c_str());
+      }
+      // Status authoritative on both paths: a failed SAVE still stops the server when
+      // it discards a too-short episode. Ignoring it strands the client in PAUSED.
+      if (response->status != this->current_state_) {
+        this->previous_state_ = this->current_state_;
+        this->current_state_ = response->status;
       }
     });
 }

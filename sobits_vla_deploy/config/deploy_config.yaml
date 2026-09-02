@@ -1,17 +1,10 @@
-# Generic deploy template (LEGACY inline-morphology format).
+# Generic deploy template.
 #
-# This file documents the full inline robot.* schema for robots that do NOT
-# have a descriptor. For SOBIT robots, prefer the descriptor-based form used by
-# deploy_config_sobit_home*.yaml:
-#
-#     robot:
-#       descriptor_id: <robot_id>      # loads sobits_vla_common/robots/<id>.robot.yaml
-#       active_groups: [...]
-#       active_cameras: [...]
-#       active_mobile_base: true
-#
-# When robot.descriptor_id is empty, the deploy node falls back to the inline
-# robot.* parameters shown below.
+# Morphology comes entirely from the robot descriptor named by
+# robot.descriptor_id. That key is REQUIRED -- the node raises rather than
+# guessing a morphology, and there is no inline robot.* fallback.
+# Generate a descriptor for a new robot with:
+#   ros2 run sobits_vla_common new_robot --robot_id <robot_id>
 /**:
   ros__parameters:
     model:
@@ -67,52 +60,31 @@
       prefix_attention_schedule: EXP
       # Measured inference latency in control steps (used to align new chunk to queue).
       inference_delay: 4
-      # Enable RTC debug logging.
       debug: false
 
     robot:
-      # Robot identifier used for logging and profile lookup.
-      name: robot_name
-      # JointState topic containing current joint positions.
-      joint_states_topic: "/robot_name/joint_states"
-      # Odometry topic for base velocity features; leave empty if unused.
-      odom_topic: ""
-      groups:
-        # Controller groups — each maps ROS joint names to policy feature names.
-        names:
-          - arm
-        arm:
-          command_topic: "/robot_name/arm_controller/joint_trajectory"
-          joints_ros:
-            - joint_1
-            - joint_2
-          # Policy feature names must match training dataset feature keys exactly.
-          features:
-            - joint_1
-            - joint_2
-      mobile_base:
-        # Leave empty for fixed-base robots.
-        command_topic: ""
-        features:
-          - x.vel
-          - theta.vel
-      cameras:
-        names:
-          - head
-        default_encoding: rgb8
-        # Set true to subscribe to sensor_msgs/CompressedImage (image_raw/compressed topics).
-        # Use false for sensor_msgs/Image (image_raw topics).
-        # Must match what was recorded during training data collection.
-        default_compressed: false
-        head:
-          topic: "/robot_name/head_camera/color/image_raw"
+      # REQUIRED. Loads sobits_vla_common/robots/<id>.robot.yaml; every joint,
+      # camera, topic and limit comes from there. The node raises if unset.
+      descriptor_id: ""
+      exclude:
+        # Trim the shared descriptor to the subset this policy drives.
+        # Unknown names raise, so a typo fails loudly.
+        groups: []
+        cameras: []
+        ee_poses: []
+        mobile_base: false
 
     gamepad:
-      topic: "/joy"
-      name: controller_name
-      controllers:
-        - controller_name
-      controller_name:
+      # Service the shared GamepadClient calls for this stage; the button
+      # mapping itself lives in sobits_vla_common/config/gamepad_config.yaml.
+      command_service: "sobits_vla_deploy/command"
+      controller: quest
+      quest:
         button_mapping:
-          play: 0
-          stop: 1
+          deploy:
+            # Deadman: actions are commanded only while this control is held.
+            # Negative = axis index (pressed when > 0.5), else button index.
+            safety:
+              enabled: false
+              trigger_index: -4
+              joy_timeout_s: 0.5

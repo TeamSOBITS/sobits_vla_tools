@@ -33,6 +33,15 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from sobits_vla_common.launch.utils import (
+    config_declares, default_pixi_manifest, pixi_launch_arguments, pixi_prefix,
+    resolve_pixi_env,
+)
+
+# Conversion imports pandas/scipy/matplotlib/rosbags/torch -> shared pixi env;
+# only the accelerator varies, GPU by default. Override with enable_gpu:=false
+_DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
+
 
 def generate_launch_description_impl(context, *args, **kwargs):
     conversion_share = get_package_share_directory('sobits_vla_rosbag_conversion')
@@ -58,21 +67,38 @@ def generate_launch_description_impl(context, *args, **kwargs):
     overwrite = (
         LaunchConfiguration('overwrite').perform(context).lower() == 'true'
     )
+    # Empty = config owns the value; only an explicit arg overrides.
+    push_to_hub_raw = LaunchConfiguration('push_to_hub').perform(context).strip()
 
-    # Default rosbag_directory: src-tree sobits_vla_rosbag_collection/rosbags/
-    # os.path.realpath resolves the --symlink-install symlink back to the src file,
-    # then we walk up to the workspace src root and locate the collection package.
+    # Track CLI-passed values; only CLI-set ones may enter override_params below,
+    # since it's appended after config_file and would silently override config values.
+    rosbag_directory_from_cli = bool(rosbag_directory)
+    meta_file_from_cli = bool(recorded_bags_meta_file)
+
+    # Default: src-tree sobits_vla_rosbag_collection/rosbags/. --symlink-install resolves
+    # realpath into the source tree; copy installs don't, so also walk up looking for src/.
     if not rosbag_directory:
-        src_file = os.path.realpath(__file__)  # resolves symlink → actual src path
-        # Walk up until we find the sobits_vla_rosbag_collection sibling package
+        src_file = os.path.realpath(__file__)
         candidate = os.path.dirname(src_file)
-        for _ in range(6):
+        import glob as _glob
+        for _ in range(8):
             sibling = os.path.join(
                 candidate, 'sobits_vla_rosbag_collection', 'rosbags'
             )
             if os.path.isdir(sibling):
                 rosbag_directory = sibling
                 break
+            src_root = os.path.join(candidate, 'src')
+            if os.path.isdir(src_root):
+                hits = (
+                    _glob.glob(os.path.join(
+                        src_root, 'sobits_vla_rosbag_collection', 'rosbags'))
+                    + _glob.glob(os.path.join(
+                        src_root, '*', 'sobits_vla_rosbag_collection', 'rosbags'))
+                )
+                if hits:
+                    rosbag_directory = hits[0]
+                    break
             candidate = os.path.dirname(candidate)
         if not rosbag_directory:
             rosbag_directory = os.path.join(collection_share, 'rosbags')
@@ -84,26 +110,45 @@ def generate_launch_description_impl(context, *args, **kwargs):
 
     parameters = [config_file]
 
-    # Override from launch arguments if explicitly provided
+    # override_params is appended AFTER config_file, so it wins over the config.
+    # Only pass the computed rosbag_directory default if config doesn't declare one.
+    config_declares_rosbag_dir = config_declares(config_file, 'rosbag_directory')
+    config_declares_meta_file = config_declares(
+        config_file, 'recorded_bags_meta_file'
+    )
+
     override_params = {}
-    if rosbag_directory:
+    if rosbag_directory and (
+        rosbag_directory_from_cli or not config_declares_rosbag_dir
+    ):
         override_params['rosbag_directory'] = rosbag_directory
-    if recorded_bags_meta_file:
+    if recorded_bags_meta_file and (
+        meta_file_from_cli
+        or not (config_declares_meta_file or config_declares_rosbag_dir)
+    ):
         override_params['recorded_bags_meta_file'] = recorded_bags_meta_file
     if dataset_name:
         override_params['dataset_name'] = dataset_name
     if vcodec:
         override_params['vcodec'] = vcodec
     override_params['overwrite'] = overwrite
+    if push_to_hub_raw:
+        override_params['push_to_hub'] = push_to_hub_raw.lower() == 'true'
 
     if override_params:
         parameters.append(override_params)
+
+    prefix = pixi_prefix(
+        resolve_pixi_env(context),
+        LaunchConfiguration('pixi_manifest').perform(context),
+    )
 
     rosbag_conversion_node = Node(
         package='sobits_vla_rosbag_conversion',
         executable='ros2bag_to_lerobotdataset',
         name='rosbag_conversion_node',
         output='screen',
+        prefix=prefix or None,
         parameters=parameters,
     )
 
@@ -154,10 +199,19 @@ def generate_launch_description():
                 ),
             ),
             DeclareLaunchArgument(
+                'push_to_hub',
+                default_value='',
+                description=(
+                    'Override push_to_hub: true/false. Empty (default) uses '
+                    'the config value — set false for scratch conversions.'
+                ),
+            ),
+            DeclareLaunchArgument(
                 'overwrite',
                 default_value='false',
                 description='Delete existing output dataset before converting.',
             ),
+            *pixi_launch_arguments(_DEFAULT_PIXI_MANIFEST),
             OpaqueFunction(function=generate_launch_description_impl),
         ]
     )

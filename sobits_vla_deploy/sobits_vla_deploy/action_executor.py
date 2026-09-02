@@ -43,6 +43,9 @@ class ActionExecutor:
         max_vel_theta: float,
         step_duration: Any,
         logger=None,
+        max_vel_z: float = 0.0,
+        linear_deadband: float = 0.0,
+        angular_deadband: float = 0.0,
     ):
         self.joint_groups = joint_groups
         self.group_publishers = group_publishers
@@ -51,14 +54,11 @@ class ActionExecutor:
         self.max_vel_x = max_vel_x
         self.max_vel_y = max_vel_y
         self.max_vel_theta = max_vel_theta
+        self.max_vel_z = max_vel_z
+        self.linear_deadband = linear_deadband
+        self.angular_deadband = angular_deadband
         self.step_duration = step_duration
         self.logger = logger
-
-    def log_info(self, msg: str):
-        if self.logger:
-            self.logger.info(msg)
-        else:
-            print(f'[INFO] {msg}')
 
     def execute_action(
         self,
@@ -96,7 +96,6 @@ class ActionExecutor:
             msg.points = [point]
             self.group_publishers[group.name].publish(msg)
 
-            # Format and save joint positions for logging
             pos_strs = ['{:.3f}'.format(p) for p in point.positions]
             joint_log_parts.append(
                 '{}: [{}]'.format(group.name, ', '.join(pos_strs))
@@ -105,19 +104,25 @@ class ActionExecutor:
         base_log = ''
         if self.base_pub is not None:
             cmd = Twist()
-            vx = float(step.get('x.vel', 0.0))
-            vy = float(step.get('y.vel', 0.0))
-            vth = float(step.get('theta.vel', 0.0))
-            if self.max_vel_x > 0.0:
-                vx = max(-self.max_vel_x, min(self.max_vel_x, vx))
-            if self.max_vel_y > 0.0:
-                vy = max(-self.max_vel_y, min(self.max_vel_y, vy))
-            if self.max_vel_theta > 0.0:
-                vth = max(-self.max_vel_theta, min(self.max_vel_theta, vth))
-            cmd.linear.x = 0.0 if abs(vx) < 0.015 else vx
-            cmd.linear.y = 0.0 if abs(vy) < 0.015 else vy
-            cmd.linear.z = float(step.get('z.vel', 0.0))
-            cmd.angular.z = 0.0 if abs(vth) < 0.005 else vth
+            # Only axes the descriptor declares are driven; the rest stay 0 so
+            # a policy emitting an axis this base lacks cannot command it.
+            feats = self.mobile_base_features
+
+            def _axis(key: str, max_vel: float, deadband: float) -> float:
+                if key not in feats:
+                    return 0.0
+                v = float(step.get(key, 0.0))
+                if max_vel > 0.0:
+                    v = max(-max_vel, min(max_vel, v))
+                return 0.0 if abs(v) < deadband else v
+
+            lin_db = self.linear_deadband
+            cmd.linear.x = _axis('x.vel', self.max_vel_x, lin_db)
+            cmd.linear.y = _axis('y.vel', self.max_vel_y, lin_db)
+            cmd.linear.z = _axis('z.vel', self.max_vel_z, lin_db)
+            cmd.angular.z = _axis(
+                'theta.vel', self.max_vel_theta, self.angular_deadband
+            )
             self.base_pub.publish(cmd)
             base_log = ' | BASE: x={:.3f} y={:.3f} th={:.3f}'.format(
                 cmd.linear.x, cmd.linear.y, cmd.angular.z

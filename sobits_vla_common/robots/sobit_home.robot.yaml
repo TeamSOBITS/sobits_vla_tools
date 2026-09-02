@@ -1,5 +1,9 @@
 schema_version: 1
+# Current SOBIT HOME hardware. Older arm-link revision: sobit_home_v1_1.
 robot_id: sobit_home
+version: "2.0.0"
+# max_joint_delta 0.0 everywhere = rate limiting OFF (lab default): raw policy
+# output reaches the controllers. Re-enable per group before real-robot runs.
 
 joint_states_topic: /sobit_home/joint_states
 
@@ -7,7 +11,7 @@ groups:
   - name: head
     command_topic: /sobit_home/head_position_controller/joint_trajectory
     command_action: /sobit_home/head_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.10
+    max_joint_delta: 0.0
     active: true
     joints:
       - ros_name: head_pan_joint
@@ -18,7 +22,7 @@ groups:
   - name: body
     command_topic: /sobit_home/body_position_controller/joint_trajectory
     command_action: /sobit_home/body_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.02
+    max_joint_delta: 0.0
     active: true
     joints:
       - ros_name: body_lift_joint
@@ -27,7 +31,7 @@ groups:
   - name: arm_left
     command_topic: /sobit_home/arm_left_position_controller/joint_trajectory
     command_action: /sobit_home/arm_left_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.15
+    max_joint_delta: 0.0
     active: true
     joints:
       - ros_name: arm_left_shoulder_tilt_joint
@@ -38,6 +42,8 @@ groups:
         feature: arm_left_upper_flex_joint
       - ros_name: arm_left_elbow_joint
         feature: arm_left_elbow_joint
+      - ros_name: arm_left_lower_flex_joint
+        feature: arm_left_lower_flex_joint
       - ros_name: arm_left_wrist_tilt_joint
         feature: arm_left_wrist_tilt_joint
       - ros_name: arm_left_wrist_roll_joint
@@ -46,8 +52,8 @@ groups:
   - name: arm_right
     command_topic: /sobit_home/arm_right_position_controller/joint_trajectory
     command_action: /sobit_home/arm_right_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.15
-    active: false
+    max_joint_delta: 0.0
+    active: true
     joints:
       - ros_name: arm_right_shoulder_tilt_joint
         feature: arm_right_shoulder_tilt_joint
@@ -57,6 +63,8 @@ groups:
         feature: arm_right_upper_flex_joint
       - ros_name: arm_right_elbow_joint
         feature: arm_right_elbow_joint
+      - ros_name: arm_right_lower_flex_joint
+        feature: arm_right_lower_flex_joint
       - ros_name: arm_right_wrist_tilt_joint
         feature: arm_right_wrist_tilt_joint
       - ros_name: arm_right_wrist_roll_joint
@@ -65,7 +73,7 @@ groups:
   - name: hand_left
     command_topic: /sobit_home/hand_left_position_controller/joint_trajectory
     command_action: /sobit_home/hand_left_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.30
+    max_joint_delta: 0.0
     active: true
     relative_exclude: true   # gripper: absolute, never delta-converted
     joints:
@@ -87,8 +95,8 @@ groups:
   - name: hand_right
     command_topic: /sobit_home/hand_right_position_controller/joint_trajectory
     command_action: /sobit_home/hand_right_position_controller/follow_joint_trajectory
-    max_joint_delta: 0.30
-    active: false
+    max_joint_delta: 0.0
+    active: true
     relative_exclude: true   # gripper: absolute, never delta-converted
     joints:
       - ros_name: hand_right_finger_l_mcp_joint
@@ -118,39 +126,63 @@ mobile_base:
   max_vel_z: 0.0
   max_vel_theta: 0.0
   features: [x.vel, y.vel, theta.vel]
+  # Commands below these are sent as zero (base creep suppression).
+  linear_deadband: 0.015
+  angular_deadband: 0.005
 
 sensors:
   cameras:
     - name: head_camera
       compressed_topic: /sobit_home/head_camera/color/image_raw/compressed
       raw_topic: /sobit_home/head_camera/color/image_raw
-      info_topic: /sobit_home/head_camera/color/camera_info
+      info_topic: /sobit_home/head_camera/camera_info
       encoding: ""
       compressed: true
       active: true
     - name: hand_left_camera
       compressed_topic: /sobit_home/hand_left_camera/color/image_raw/compressed
       raw_topic: /sobit_home/hand_left_camera/color/image_raw
-      info_topic: /sobit_home/hand_left_camera/color/camera_info
+      info_topic: /sobit_home/hand_left_camera/camera_info
       encoding: ""
       compressed: true
       active: true
     - name: hand_right_camera
       compressed_topic: /sobit_home/hand_right_camera/color/image_raw/compressed
       raw_topic: /sobit_home/hand_right_camera/color/image_raw
-      info_topic: /sobit_home/hand_right_camera/color/camera_info
+      info_topic: /sobit_home/hand_right_camera/camera_info
       encoding: ""
       compressed: true
-      active: false
+      active: true
+    # Head camera depth stream (Orbbec Gemini 330), 16UC1 millimetres, already
+    # registered to the color frame by the driver. compressedDepth is PNG-based
+    # and lossless, unlike the lossy JPEG used for color.
+    # is_depth marks this for the metric-preserving depth path in conversion.
+    # - name: head_camera_depth
+    #   compressed_topic: /sobit_home/head_camera/depth/image_raw/compressedDepth
+    #   raw_topic: /sobit_home/head_camera/depth/image_raw
+    #   info_topic: /sobit_home/head_camera/camera_info
+    #   encoding: "16UC1"
+    #   compressed: true
+    #   active: true
+    #   is_depth: true
 
 ee_poses:
   - name: left
     source_frame: hand_left_end_effector_link
     target_frame: base_footprint
+  - name: right
+    source_frame: hand_right_end_effector_link
+    target_frame: base_footprint
 
 excluded_joints:
-  - hand_left_finger_r_mcp_joint
-  - hand_right_finger_r_mcp_joint
+  # Passive mimic joints of the arm parallel linkage (present in
+  # joint_states, not commanded by any controller)
+  # - arm_left_upper_roll_sub_joint
+  # - arm_left_upper_flex_sub_joint
+  # - arm_left_elbow_sub_joint
+  # - arm_right_upper_roll_sub_joint
+  # - arm_right_upper_flex_sub_joint
+  # - arm_right_elbow_sub_joint
   - wheel_steer_f_l_joint
   - wheel_steer_f_r_joint
   - wheel_steer_b_l_joint

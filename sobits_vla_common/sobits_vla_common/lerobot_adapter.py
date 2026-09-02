@@ -30,13 +30,16 @@ Single import seam for every lerobot symbol the bridge uses.
 
 All other sobits_vla_tools modules import lerobot symbols from here (via
 ``from sobits_vla_common.lerobot_adapter import X``) instead of reaching into
-lerobot directly. This keeps every 0.5.x/0.6.x import-path gate in exactly
-two files: this module and ``lerobot_compat.py``.
+lerobot directly. This keeps the lerobot import surface centralized in
+exactly two files: this module and ``lerobot_compat.py``.
+
+sobits_vla_tools targets lerobot >= 0.6.0 only; 0.5.1 support was dropped
+(see docs/lerobot_v060_migration_plan.md). The last 0.5.1-compatible
+revision is on branch ``feat/refactor``.
 
 Resolution is lazy (PEP 562 module ``__getattr__``) so light consumers that
 only need e.g. ``HF_LEROBOT_HOME`` don't pay the torch/lerobot import cost at
-ROS node startup, and so version-gated paths resolve at first use rather than
-at adapter-import time.
+ROS node startup.
 """
 
 from __future__ import annotations
@@ -53,46 +56,54 @@ def _parse(v: str) -> tuple:
 LEROBOT_VERSION: tuple = _parse(_pkg_version('lerobot'))
 IS_V06: bool = LEROBOT_VERSION >= (0, 6)
 
+if LEROBOT_VERSION < (0, 6):
+    _found = '.'.join(str(p) for p in LEROBOT_VERSION)
+    raise ImportError(
+        f'sobits_vla_tools now requires lerobot >= 0.6.0; found {_found}. '
+        'The last 0.5.1-compatible revision is on branch feat/refactor.'
+    )
 
-# name -> (v05_module, v06_module). Same module on both sides unless lerobot
-# 0.6.0 moved it. Entries marked ⚠️ in docs/lerobot_v060_changes.md §7
-# (feature_utils, prepare_observation_for_inference,
-# control_utils.predict_action, HF_LEROBOT_HOME) are best-guess placeholders
-# for the v06 column — Phase 1 verifies/fixes them here only.
-_SYMBOLS: dict[str, tuple[str, str]] = {
-    'LeRobotDataset':                    ('lerobot.datasets.lerobot_dataset',) * 2,
-    'LeRobotDatasetMetadata':            ('lerobot.datasets.lerobot_dataset',) * 2,
-    'HF_LEROBOT_HOME':                   ('lerobot.utils.constants',) * 2,
-    'RunningQuantileStats':              ('lerobot.datasets.compute_stats',) * 2,
-    'build_dataset_frame':               ('lerobot.datasets.feature_utils',) * 2,
-    'hw_to_dataset_features':            ('lerobot.datasets.feature_utils',) * 2,
-    'DatasetConfig':                     ('lerobot.configs.default',) * 2,
-    'WandBConfig':                       ('lerobot.configs.default',) * 2,
-    'PeftConfig':                        ('lerobot.configs.default',) * 2,
-    'TrainPipelineConfig':               ('lerobot.configs.train',) * 2,
-    'FeatureType':                       ('lerobot.configs.types',) * 2,
-    'PolicyFeature':                     ('lerobot.configs.types',) * 2,
-    'RTCAttentionSchedule':              ('lerobot.configs.types',) * 2,
-    'PreTrainedConfig':                  ('lerobot.configs.policies',) * 2,
-    'make_policy':                       ('lerobot.policies.factory', 'lerobot.policies'),
-    'make_pre_post_processors':          ('lerobot.policies.factory', 'lerobot.policies'),
-    'prepare_observation_for_inference': ('lerobot.policies.utils',) * 2,
-    'predict_action':                    ('lerobot.utils.control_utils',) * 2,
-    'LatencyTracker':                    ('lerobot.policies.rtc.latency_tracker',) * 2,
-    'RTCConfig':                         ('lerobot.policies.rtc.configuration_rtc',) * 2,
-    'ProcessorStepRegistry':             ('lerobot.processor.pipeline',) * 2,
-    'AbsoluteActionsProcessorStep':      ('lerobot.processor.relative_action_processor',) * 2,
-    'train':                             ('lerobot.scripts.lerobot_train',) * 2,
+
+# name -> backing module. feature_utils and predict_action both moved in
+# lerobot 0.6.0 — see docs/lerobot_v060_changes.md §7.
+_SYMBOLS: dict[str, str] = {
+    'LeRobotDataset':                    'lerobot.datasets.lerobot_dataset',
+    'LeRobotDatasetMetadata':            'lerobot.datasets.lerobot_dataset',
+    'HF_LEROBOT_HOME':                   'lerobot.utils.constants',
+    'RunningQuantileStats':              'lerobot.datasets.compute_stats',
+    'build_dataset_frame':               'lerobot.utils.feature_utils',
+    'hw_to_dataset_features':            'lerobot.utils.feature_utils',
+    'DatasetConfig':                     'lerobot.configs.default',
+    'WandBConfig':                       'lerobot.configs.default',
+    'PeftConfig':                        'lerobot.configs.default',
+    'TrainPipelineConfig':               'lerobot.configs.train',
+    'FeatureType':                       'lerobot.configs.types',
+    'PolicyFeature':                     'lerobot.configs.types',
+    'RTCAttentionSchedule':              'lerobot.configs.types',
+    'PreTrainedConfig':                  'lerobot.configs.policies',
+    'make_policy':                       'lerobot.policies',
+    'make_pre_post_processors':          'lerobot.policies',
+    'prepare_observation_for_inference': 'lerobot.policies.utils',
+    'predict_action':                    'lerobot.common.control_utils',
+    'LatencyTracker':                    'lerobot.policies.rtc.latency_tracker',
+    'RTCConfig':                         'lerobot.policies.rtc.configuration_rtc',
+    'ProcessorStepRegistry':             'lerobot.processor.pipeline',
+    'AbsoluteActionsProcessorStep':      'lerobot.processor.relative_action_processor',
+    'RGBEncoderConfig':                  'lerobot.configs.video',
+    'DepthEncoderConfig':                'lerobot.configs.video',
+    'depth_encoder_defaults':            'lerobot.configs.video',
+    'train':                             'lerobot.scripts.lerobot_train',
+    'SGDConfig':                         'lerobot.optim.optimizers',
+    'ConstantWithWarmupSchedulerConfig': 'lerobot.optim.schedulers',
 }
 
 
 def __getattr__(name: str):
     """PEP 562 lazy module attribute resolution — imports the backing module on first use."""
     try:
-        columns = _SYMBOLS[name]
+        mod_name = _SYMBOLS[name]
     except KeyError:
         raise AttributeError(f'module {__name__!r} has no attribute {name!r}') from None
-    mod_name = columns[1 if IS_V06 else 0]
     module = importlib.import_module(mod_name)
     return getattr(module, name)
 
@@ -108,7 +119,7 @@ def describe() -> dict:
     Returns
     -------
     dict
-        ``{'version': (0, 5, 1), 'is_v06': False, 'unresolvable': [...]}``
+        ``{'version': (0, 6, 0), 'is_v06': True, 'unresolvable': [...]}``
         where ``unresolvable`` lists ``(symbol, error)`` pairs for every
         symbol that failed to import in the active lerobot version. Meant to
         be logged once at node startup and used by the seam test suite.

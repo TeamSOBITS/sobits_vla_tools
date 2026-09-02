@@ -29,11 +29,12 @@
 Automatic episode runner for unattended VLA evaluation.
 
 Drives the sobits_vla_deploy node through N episodes:
-  1. Call the /vla/command service with PLAY.
-  2. Wait for /vla/episode_done (published by the deploy node when an episode
+  1. Call the sobits_vla_deploy/command service with PLAY.
+  2. Wait for sobits_vla_deploy/episode_done (published by the deploy node when an episode
      auto-terminates on success / fall / timeout, or on a manual stop).
-  3. The deploy node resets the world on stop; wait reset_settle_s for the
-     teleport + detecting_pose move to settle.
+  3. The deploy node resets the world on stop and publishes episode_done
+     once the reset teleports have completed — the next PLAY follows
+     immediately, no time-based settle.
   4. Repeat.
 
 After the last episode the node logs a tally and shuts down so the launch
@@ -52,6 +53,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from sobits_interfaces.srv import VlaCommand
 from std_msgs.msg import String
+from tqdm import tqdm
 
 
 class ExperimentRunner(Node):
@@ -59,24 +61,20 @@ class ExperimentRunner(Node):
         super().__init__('vla_experiment_runner')
 
         self.declare_parameter('num_episodes', 20)
-        self.declare_parameter('command_service', '/vla/command')
-        self.declare_parameter('episode_done_topic', '/vla/episode_done')
-        # Time to let the world reset + detecting_pose move settle after a stop.
-        self.declare_parameter('reset_settle_s', 6.0)
+        self.declare_parameter('command_service', 'sobits_vla_deploy/command')
+        self.declare_parameter('episode_done_topic', 'sobits_vla_deploy/episode_done')
         # Pause between settle and the next PLAY.
         self.declare_parameter('inter_episode_pause_s', 1.0)
         # Safety: how long to wait for an episode_done before forcing a STOP.
-        # Should exceed logging.episode_timeout_s with margin.
+        # Should exceed task.common.episode_timeout_s with margin.
         self.declare_parameter('episode_timeout_s', 60.0)
         self.declare_parameter('done_wait_margin_s', 30.0)
-        # How long to wait for the deploy node's command service to appear.
-        # The deploy node loads the policy (a multi-GB download on first run +
-        # GPU load) before advertising the service, so allow several minutes.
+        # Deploy node loads the policy (multi-GB download + GPU load) before
+        # advertising the command service, so allow several minutes.
         self.declare_parameter('startup_timeout_s', 600.0)
 
         self._num_episodes = int(self.get_parameter('num_episodes').value)
         self._command_service = str(self.get_parameter('command_service').value)
-        self._reset_settle_s = float(self.get_parameter('reset_settle_s').value)
         self._inter_episode_pause_s = float(
             self.get_parameter('inter_episode_pause_s').value
         )
@@ -115,6 +113,18 @@ class ExperimentRunner(Node):
         if not future.done():
             self.get_logger().error('Command {} timed out.'.format(command))
             return False
+        try:
+            response = future.result()
+        except Exception as exc:
+            self.get_logger().error('Command {} raised: {}'.format(command, exc))
+            return False
+        if response is None or not response.success:
+            self.get_logger().error(
+                'Command {} failed: {}'.format(
+                    command, response.message if response else 'no response'
+                )
+            )
+            return False
         return True
 
     def _sleep(self, seconds: float) -> None:
@@ -123,12 +133,27 @@ class ExperimentRunner(Node):
         while rclpy.ok() and time.monotonic() < end:
             time.sleep(min(0.1, max(0.0, end - time.monotonic())))
 
+    def _wait_done_sim_time(self, budget_s: float) -> bool:
+        """
+        Wait for episode_done for budget_s NODE-CLOCK seconds.
+
+        With use_sim_time the node clock is simulation time, matching the
+        deploy node's episode_timeout_s units, so RTF < 1 no longer makes
+        this wait expire before the sim-time timeout can fire.
+        """
+        t0 = self.get_clock().now()
+        while rclpy.ok():
+            if self._done_event.wait(0.2):
+                return True
+            elapsed = (self.get_clock().now() - t0).nanoseconds * 1e-9
+            if elapsed >= budget_s:
+                return False
+        return False
+
     def run(self) -> None:
         self.get_logger().info(
-            'Experiment runner: {} episodes, service={}, done-wait={}s, '
-            'settle={}s.'.format(
-                self._num_episodes, self._command_service,
-                self._done_wait_s, self._reset_settle_s,
+            'Experiment runner: {} episodes, service={}, done-wait={}s.'.format(
+                self._num_episodes, self._command_service, self._done_wait_s,
             )
         )
         # Block until the deploy node finishes loading its policy and
@@ -144,14 +169,20 @@ class ExperimentRunner(Node):
             return
         self.get_logger().info('Deploy service ready.')
 
-        # Reset the world before episode 1 so the first episode starts from the
-        # spawn pose (a STOP while idle teleports robot+block + moves to
-        # initial_pose). Without this, episode 1 begins from a stale pose.
+        # A STOP while idle teleports robot+block to spawn pose; without this,
+        # episode 1 would begin from a stale pose.
         self.get_logger().info('Resetting world to start pose before episode 1 ...')
+        self._done_event.clear()
         self._send_command(VlaCommand.Request.STOP)
-        self._sleep(self._reset_settle_s + self._inter_episode_pause_s)
+        # episode_done is published once the reset (teleports + pose motion)
+        # has completed — no time-based settle needed.
+        if not self._done_event.wait(60.0):
+            self.get_logger().warning('Initial reset did not confirm within 60s; continuing.')
+        self._sleep(self._inter_episode_pause_s)
 
         outcomes: Counter = Counter()
+        progress = tqdm(total=self._num_episodes, desc='episodes', unit='ep',
+                        disable=None)
         for ep in range(1, self._num_episodes + 1):
             if not rclpy.ok():
                 break
@@ -162,26 +193,32 @@ class ExperimentRunner(Node):
                 self.get_logger().error('Aborting: could not start episode.')
                 break
 
-            got = self._done_event.wait(self._done_wait_s)
+            # The deploy timeout counts SIM seconds; a wall-clock wait fires
+            # early whenever RTF < 1, force-stopping before 'timeout' can.
+            got = self._wait_done_sim_time(self._done_wait_s)
             if not got:
-                self.get_logger().warn(
+                self.get_logger().warning(
                     'Episode {} did not report done within {}s; forcing STOP.'
                     .format(ep, self._done_wait_s)
                 )
                 self._send_command(VlaCommand.Request.STOP)
-                # The forced STOP itself publishes episode_done; consume it.
-                self._done_event.wait(5.0)
+                # The forced STOP publishes episode_done after the reset
+                # completes.
+                self._done_event.wait(30.0)
                 outcome = self._last_outcome or 'forced_stop'
             else:
                 outcome = self._last_outcome
             outcomes[outcome] += 1
+            progress.set_postfix_str(outcome)
+            progress.update(1)
             self.get_logger().info(
                 'Episode {}/{} outcome: {}'.format(ep, self._num_episodes, outcome)
             )
 
-            # Let the deploy node's world reset + detecting_pose settle.
-            self._sleep(self._reset_settle_s + self._inter_episode_pause_s)
+            # episode_done already confirmed the reset completed; brief pause.
+            self._sleep(self._inter_episode_pause_s)
 
+        progress.close()
         self.get_logger().info(
             'Experiment complete. Outcomes: {}'.format(dict(outcomes))
         )

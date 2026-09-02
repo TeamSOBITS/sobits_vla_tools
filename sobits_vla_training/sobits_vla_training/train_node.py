@@ -45,14 +45,136 @@ import signal
 import threading
 from typing import Any
 
+from rcl_interfaces.msg import ParameterDescriptor
 import rclpy
 from rclpy.node import Node
 
 from sobits_vla_common import runtime_deps
 from sobits_vla_common.lerobot_compat import apply_training_patches
+from sobits_vla_common.param_schema import declare_from_schema, P, read_flat
 from sobits_vla_training.preflight import run_preflight_checks
 
 logger = logging.getLogger(__name__)
+
+
+def _pd(desc: str) -> ParameterDescriptor:
+    return ParameterDescriptor(description=desc)
+
+
+# Static-name declares only. peft.full_training_modules (dynamic_typing) and
+# policy_overrides' undeclared-key discovery stay hand-written below.
+_SCHEMA = {
+    'policy': P('smolvla', descriptor=_pd(
+        'Policy type: smolvla|pi0|pi05|pi0_fast|act|groot|vla_jepa|molmoact2')),
+    'dataset': {
+        'repo_id': P('', descriptor=_pd('HF Hub repo_id or local path to LeRobotDataset')),
+        'num_workers': P(4, descriptor=_pd('DataLoader worker count')),
+        'rename_map': P([''], descriptor=_pd('Feature renames, one "old:new" per entry')),
+        'eval_split': P(0.0, descriptor=_pd(
+            'Fraction of episodes per task held out for eval')),
+    },
+    'checkpoint': {
+        'output_dir': P('', descriptor=_pd(
+            'Checkpoint dir; relative -> lerobotmodel/, absolute -> verbatim')),
+        'resume': P(False, descriptor=_pd('Resume from last checkpoint in output_dir')),
+        'overwrite': P(False, descriptor=_pd(
+            'Delete output_dir before training if it exists')),
+        'pretrained_path': P('', descriptor=_pd(
+            'Local path or HF repo_id for init weights')),
+        'save_freq': P(20000, descriptor=_pd('Save checkpoint every N steps')),
+        'save_checkpoint': P(True, descriptor=_pd('Whether to save checkpoints')),
+    },
+    'training': {
+        'steps': P(100000, descriptor=_pd('Total gradient update steps')),
+        'batch_size': P(32, descriptor=_pd('Per-GPU batch size')),
+        'seed': P(1000, descriptor=_pd('Random seed')),
+        'use_policy_training_preset': P(True, descriptor=_pd(
+            'Use policy built-in optimizer preset')),
+        'log_freq': P(200, descriptor=_pd('Log metrics every N steps')),
+        'eval_steps': P(0, descriptor=_pd(
+            'Held-out eval-loss every N steps; needs dataset.eval_split > 0. 0=off')),
+        'optimizer_type': P('', descriptor=_pd(
+            "Override optimizer algorithm (empty=preset, 'sgd'=SGDConfig)")),
+        'optimizer_sgd': {
+            'lr': P(1e-3, descriptor=_pd('SGD learning rate')),
+            'momentum': P(0.0, descriptor=_pd('SGD momentum')),
+            'dampening': P(0.0, descriptor=_pd('SGD dampening')),
+            'nesterov': P(False, descriptor=_pd('SGD Nesterov momentum')),
+            'weight_decay': P(0.0, descriptor=_pd('SGD weight decay')),
+            'grad_clip_norm': P(10.0, descriptor=_pd('SGD gradient clip norm')),
+        },
+        'scheduler_warmup_steps_override': P(1000, descriptor=_pd(
+            'Warmup steps for the override scheduler (optimizer_type set)')),
+    },
+    'num_gpus': P(1, descriptor=_pd('Number of GPUs (0=CPU, 1=single, >1=DDP)')),
+    'wandb': {
+        'enable': P(True, descriptor=_pd('Enable Weights & Biases logging')),
+        'project': P('sobits_vla_training', descriptor=_pd('W&B project name')),
+        'entity': P('', descriptor=_pd('W&B entity (team/user)')),
+        'run_name': P('', descriptor=_pd('W&B run name (auto-generated if empty)')),
+        'run_id': P('', descriptor=_pd(
+            'W&B run id to resume (empty = new run; auto-recovered on resume)')),
+        'mode': P('', descriptor=_pd("W&B mode: online|offline|disabled ('' = online)")),
+        'notes': P('', descriptor=_pd('W&B run notes')),
+        'disable_artifact': P(False, descriptor=_pd(
+            'Skip uploading checkpoint artifacts to W&B (HF hub still gets them)')),
+    },
+    'hub': {
+        'push_to_hub': P(True, descriptor=_pd('Push final model to HF Hub after training')),
+        'repo_id': P('', descriptor=_pd('HF Hub target repo_id for push')),
+        'private': P(False, descriptor=_pd('Make Hub repo private')),
+        'save_checkpoints': P(False, descriptor=_pd(
+            'Push each saved checkpoint to Hub, not just final')),
+    },
+    # No ParameterDescriptor in the original code -- left plain to match.
+    'policy_overrides': {
+        'max_state_dim': P(32),
+        'max_action_dim': P(32),
+        'chunk_size': P(50),
+        'n_action_steps': P(50),
+        'n_obs_steps': P(1),
+        'paligemma_variant': P('gemma_2b'),
+        'action_expert_variant': P('gemma_300m'),
+        'dtype': P('bfloat16'),
+        'num_inference_steps': P(10),
+        'image_resolution': P([224, 224]),
+        'empty_cameras': P(0),
+        'freeze_vision_encoder': P(False),
+        'gradient_checkpointing': P(True),
+        'train_expert_only': P(False),
+        'use_peft': P(False),  # True = load existing adapter; keep False
+        'tokenizer_max_length': P(200),
+        'use_relative_actions': P(False),
+        'relative_exclude_joints': P(['']),
+        'optimizer_lr': P(2.5e-5),
+        'optimizer_weight_decay': P(0.01),
+        'optimizer_grad_clip_norm': P(1.0),
+        'scheduler_warmup_steps': P(1000),
+        'scheduler_decay_steps': P(30000),
+        'scheduler_decay_lr': P(2.5e-6),
+        'compile_model': P(False),
+    },
+    'peft': {
+        'method_type': P('', descriptor=_pd('PEFT method: LORA or empty to disable')),
+        'r': P(16, descriptor=_pd('LoRA rank')),
+        'lora_alpha': P(32, descriptor=_pd('LoRA alpha (scaling = alpha/r)')),
+        'lora_dropout': P(0.05, descriptor=_pd('LoRA dropout probability')),
+        'target_modules': P('', descriptor=_pd(
+            'LoRA target modules (empty = policy default)')),
+    },
+    'robot': {
+        'descriptor_id': P('', descriptor=_pd('Robot descriptor ID')),
+        # Trim the shared descriptor to this config's subset; unknown names
+        # raise so a typo fails loudly instead of training a wrong morphology.
+        'exclude': {
+            'groups': P(['']),
+            'cameras': P(['']),
+            'ee_poses': P(['']),
+            'joints': P(['']),
+            'mobile_base': P(False, descriptor=_pd('Exclude the mobile base')),
+        },
+    },
+}
 
 
 class TrainNode(Node):
@@ -76,151 +198,28 @@ class TrainNode(Node):
         self.get_logger().info('sobits_vla_training node initialised.')
 
     def _declare_parameters(self) -> None:
-        from rcl_interfaces.msg import ParameterDescriptor
+        declare_from_schema(self, _SCHEMA)
 
-        def _p(desc: str) -> ParameterDescriptor:
-            d = ParameterDescriptor()
-            d.description = desc
-            return d
-
-        self.declare_parameter('policy', 'smolvla', _p('Policy type: smolvla|pi0|pi05|pi0_fast'))
-
-        self.declare_parameter(
-            'dataset.repo_id', '', _p('HF Hub repo_id or local path to LeRobotDataset'))
-        self.declare_parameter(
-            'dataset.num_workers', 4, _p('DataLoader worker count'))
-        self.declare_parameter(
-            'dataset.rename_map', [], _p('Feature rename map {old: new}'))
-
-        self.declare_parameter(
-            'checkpoint.output_dir', './outputs/train', _p('Output directory for checkpoints'))
-        self.declare_parameter(
-            'checkpoint.resume', False, _p('Resume from last checkpoint in output_dir'))
-        self.declare_parameter(
-            'checkpoint.overwrite', False, _p('Delete output_dir before training if it exists'))
-        self.declare_parameter(
-            'checkpoint.pretrained_path', '', _p('Local path or HF repo_id for init weights'))
-        self.declare_parameter(
-            'checkpoint.save_freq', 20000, _p('Save checkpoint every N steps'))
-        self.declare_parameter(
-            'checkpoint.save_checkpoint', True, _p('Whether to save checkpoints'))
-
-        self.declare_parameter(
-            'training.steps', 100000, _p('Total gradient update steps'))
-        self.declare_parameter(
-            'training.batch_size', 32, _p('Per-GPU batch size'))
-        self.declare_parameter(
-            'training.seed', 1000, _p('Random seed'))
-        self.declare_parameter(
-            'training.use_policy_training_preset', True,
-            _p('Use policy built-in optimizer preset'))
-        self.declare_parameter(
-            'training.log_freq', 200, _p('Log metrics every N steps'))
-        self.declare_parameter(
-            'training.eval_freq', 20000, _p('Evaluate every N steps (0=disable)'))
-
-        self.declare_parameter(
-            'num_gpus', 1, _p('Number of GPUs (0=CPU, 1=single, >1=DDP)'))
-
-        self.declare_parameter(
-            'wandb.enable', True, _p('Enable Weights & Biases logging'))
-        self.declare_parameter(
-            'wandb.project', 'sobits_vla_training', _p('W&B project name'))
-        self.declare_parameter(
-            'wandb.entity', '', _p('W&B entity (team/user)'))
-        self.declare_parameter(
-            'wandb.run_name', '', _p('W&B run name (auto-generated if empty)'))
-        self.declare_parameter(
-            'wandb.notes', '', _p('W&B run notes'))
-
-        self.declare_parameter(
-            'hub.push_to_hub', True, _p('Push final model to HF Hub after training'))
-        self.declare_parameter(
-            'hub.repo_id', '', _p('HF Hub target repo_id for push'))
-        self.declare_parameter(
-            'hub.private', False, _p('Make Hub repo private'))
-
-        # Policy override sub-parameters
-        _po = 'policy_overrides.'
-        self.declare_parameter(_po + 'max_state_dim', 32)
-        self.declare_parameter(_po + 'max_action_dim', 32)
-        self.declare_parameter(_po + 'chunk_size', 50)
-        self.declare_parameter(_po + 'n_action_steps', 50)
-        self.declare_parameter(_po + 'n_obs_steps', 1)
-        self.declare_parameter(_po + 'paligemma_variant', 'gemma_2b')
-        self.declare_parameter(_po + 'action_expert_variant', 'gemma_300m')
-        self.declare_parameter(_po + 'dtype', 'bfloat16')
-        self.declare_parameter(_po + 'num_inference_steps', 10)
-        self.declare_parameter(_po + 'image_resolution', [224, 224])
-        self.declare_parameter(_po + 'empty_cameras', 0)
-        self.declare_parameter(_po + 'freeze_vision_encoder', False)
-        self.declare_parameter(_po + 'gradient_checkpointing', True)
-        self.declare_parameter(_po + 'train_expert_only', False)
-        self.declare_parameter(_po + 'use_peft', False)  # True = load existing adapter; keep False
-        self.declare_parameter(_po + 'tokenizer_max_length', 200)
-        self.declare_parameter(_po + 'use_relative_actions', False)
-        self.declare_parameter(_po + 'relative_exclude_joints', ['gripper'])
-        self.declare_parameter(_po + 'optimizer_lr', 2.5e-5)
-        self.declare_parameter(_po + 'optimizer_weight_decay', 0.01)
-        self.declare_parameter(_po + 'optimizer_grad_clip_norm', 1.0)
-        self.declare_parameter(_po + 'scheduler_warmup_steps', 1000)
-        self.declare_parameter(_po + 'scheduler_decay_steps', 30000)
-        self.declare_parameter(_po + 'scheduler_decay_lr', 2.5e-6)
-        self.declare_parameter(_po + 'compile_model', False)
-
-        self.declare_parameter(
-            'peft.method_type', '', _p('PEFT method: LORA or empty to disable'))
-        self.declare_parameter(
-            'peft.r', 16, _p('LoRA rank'))
-        self.declare_parameter(
-            'peft.lora_alpha', 32, _p('LoRA alpha (scaling = alpha/r)'))
-        self.declare_parameter(
-            'peft.lora_dropout', 0.05, _p('LoRA dropout probability'))
-        self.declare_parameter(
-            'peft.target_modules', '', _p('LoRA target modules (empty = policy default)'))
-        self.declare_parameter(
-            'peft.full_training_modules', [], _p('Modules to fully fine-tune alongside LoRA'))
-
-        from rclpy.parameter import Parameter
-        self.declare_parameter('robot.descriptor_id', '', _p('Robot descriptor ID'))
-        # Typed STRING_ARRAY (no default []): empty list infers BYTE_ARRAY,
-        # clashing with the YAML STRING_ARRAY override.
-        self.declare_parameter('robot.active_groups', Parameter.Type.STRING_ARRAY)
-        self.declare_parameter('robot.active_cameras', Parameter.Type.STRING_ARRAY)
-        self.declare_parameter(
-            'robot.active_mobile_base', True, _p('Whether to include mobile base')
-        )
+        # dynamic_typing: an empty [] default infers BYTE_ARRAY, clashing with YAML
+        # STRING_ARRAY overrides; values are normalized to list[str] in _collect_params.
+        _ftm_desc = _pd('Modules to fully fine-tune alongside LoRA')
+        _ftm_desc.dynamic_typing = True
+        self.declare_parameter('peft.full_training_modules', [], _ftm_desc)
 
     def _collect_params(self) -> dict[str, Any]:
         """Read all declared parameters into a flat dict keyed by dotted name."""
-        names = [
-            'policy',
-            'dataset.repo_id', 'dataset.num_workers',
-            'dataset.rename_map',
-            'checkpoint.output_dir', 'checkpoint.resume', 'checkpoint.overwrite',
-            'checkpoint.pretrained_path', 'checkpoint.save_freq',
-            'checkpoint.save_checkpoint',
-            'training.steps', 'training.batch_size',
-            'training.seed', 'training.use_policy_training_preset',
-            'training.log_freq', 'training.eval_freq',
-            'num_gpus',
-            'wandb.enable', 'wandb.project', 'wandb.entity',
-            'wandb.run_name', 'wandb.notes',
-            'hub.push_to_hub', 'hub.repo_id', 'hub.private',
-            'peft.method_type', 'peft.r', 'peft.lora_alpha', 'peft.lora_dropout',
-            'peft.target_modules', 'peft.full_training_modules',
-            'robot.descriptor_id', 'robot.active_groups',
-            'robot.active_cameras', 'robot.active_mobile_base',
-        ]
+        # policy_overrides.* is declared via the schema but read separately below
+        # (nested dict, plus undeclared keys) -- exclude it here or it would also
+        # land as flat 'policy_overrides.foo' keys nothing consumes.
+        _flat_schema = {k: v for k, v in _SCHEMA.items() if k != 'policy_overrides'}
+        params: dict[str, Any] = read_flat(self, _flat_schema)
 
-        params: dict[str, Any] = {}
-        for name in names:
-            try:
-                params[name] = self.get_parameter(name).value
-            except Exception:
-                pass
+        # dynamic_typing param, hand-read: not schema-expressible (see declare above).
+        # YAML may deliver bytes/None; normalize to list[str] so
+        # build_peft_config always sees a string list.
+        ftm = self.get_parameter('peft.full_training_modules').value
+        params['peft.full_training_modules'] = [str(m) for m in ftm] if ftm else []
 
-        # Collect policy_overrides
         po: dict[str, Any] = {}
         try:
             overrides = getattr(self, '_parameter_overrides', None) or {}
@@ -242,7 +241,12 @@ class TrainNode(Node):
                             pass
             except Exception as exc:
                 self.get_logger().warning(f'policy_overrides discovery failed: {exc}')
-        params['policy_overrides'] = po
+        # Strip the [''] empty-list sentinel (see param_schema._read_leaf) --
+        # this hand-written path bypasses the schema reader's filtering.
+        params['policy_overrides'] = {
+            k: [x for x in v if x != ''] if isinstance(v, list) else v
+            for k, v in po.items()
+        }
 
         return params
 
@@ -279,23 +283,15 @@ class TrainNode(Node):
         from sobits_vla_training.config_builder import (
             build_accelerator,
             build_train_config,
-            find_package_src_dir,
+            resolve_output_dir,
         )
 
-        out_dir_raw = params.get('checkpoint.output_dir', '')
-        package_src_dir = find_package_src_dir()
-
-        if not out_dir_raw:
-            out = package_src_dir / 'outputs'
-        else:
-            raw_path = Path(out_dir_raw).expanduser()
-            if raw_path.is_absolute():
-                out = raw_path
-            else:
-                if raw_path.parts and raw_path.parts[0] == 'outputs':
-                    out = (package_src_dir / raw_path).resolve()
-                else:
-                    out = (package_src_dir / 'outputs' / raw_path).resolve()
+        # Relative -> <package_src>/lerobotmodel/, absolute -> verbatim.
+        # See resolve_output_dir() for the full table.
+        out = resolve_output_dir(
+            params.get('checkpoint.output_dir', ''),
+            params.get('hub.repo_id', '') or '',
+        )
 
         if (
             params.get('checkpoint.overwrite', False)
@@ -313,13 +309,15 @@ class TrainNode(Node):
                 shutil.rmtree(out)
                 self.get_logger().info(f'Overwrite: removed existing output dir {out}')
 
-        train_cfg, peft_extra = build_train_config(params)
+        train_cfg, peft_extra = build_train_config(params, output_dir=out)
 
         num_gpus: int = params.get('num_gpus', 1)
         use_amp: bool = getattr(train_cfg.policy, 'use_amp', False)
         accelerator = build_accelerator(num_gpus=num_gpus, use_amp=use_amp)
 
         if train_cfg.peft is not None and peft_extra:
+            # lora_dropout has no PeftConfig field; inject it dynamically so
+            # asdict(cfg.peft) carries it into wrap_with_peft.
             import dataclasses as _dc
             from sobits_vla_common.lerobot_adapter import PeftConfig as _PeftConfig
             _known = {f.name for f in _dc.fields(train_cfg.peft)}
@@ -334,13 +332,15 @@ class TrainNode(Node):
                 _base = _dc.asdict(train_cfg.peft)
                 _base.update(peft_extra)
                 train_cfg.peft = _ExtendedPeft(**_base)
+        if train_cfg.peft is not None:
             targets = (
                 'policy default' if not train_cfg.peft.target_modules
                 else train_cfg.peft.target_modules
             )
+            alpha = train_cfg.peft.lora_alpha
             self.get_logger().info(
                 f'LoRA | r={train_cfg.peft.r} '
-                f'alpha={peft_extra.get("lora_alpha", "default")} '
+                f'alpha={alpha if alpha is not None else "default"} '
                 f'dropout={peft_extra.get("lora_dropout", "default")} '
                 f'targets={targets}'
             )
@@ -350,6 +350,41 @@ class TrainNode(Node):
             f'batch={train_cfg.batch_size} '
             f'output={train_cfg.output_dir}'
         )
+
+        if train_cfg.resume:
+            # lerobot's resume path reads --config_path from sys.argv (draccus CLI
+            # plumbing our in-process train() call never provides); point it here.
+            import sys as _sys
+
+            ckpt_cfg = (
+                Path(train_cfg.output_dir)
+                / 'checkpoints' / 'last' / 'pretrained_model'
+                / 'train_config.json'
+            )
+            if not ckpt_cfg.exists():
+                raise RuntimeError(
+                    'checkpoint.resume=true but no checkpoint found at '
+                    f'{ckpt_cfg} — check output_dir and the checkpoints/last '
+                    'symlink (and that checkpoint.overwrite is false).'
+                )
+
+            # PEFT checkpoints hold adapter_model.safetensors, not model.safetensors; resume
+            # never reloads use_peft, so flip it here or the factory dies on the missing file.
+            if (ckpt_cfg.parent / 'adapter_model.safetensors').exists():
+                train_cfg.policy.use_peft = True
+                self.get_logger().info(
+                    'Adapter checkpoint detected — resuming via the PEFT '
+                    'loading branch (policy.use_peft=true).'
+                )
+
+            # validate() only builds optimizer/scheduler presets when NOT resuming; build
+            # here or make_optimizer_and_scheduler raises (STATE still restores from disk).
+            if train_cfg.use_policy_training_preset and train_cfg.optimizer is None:
+                train_cfg.optimizer = train_cfg.policy.get_optimizer_preset()
+                train_cfg.scheduler = train_cfg.policy.get_scheduler_preset()
+
+            _sys.argv = list(_sys.argv) + [f'--config_path={ckpt_cfg}']
+            self.get_logger().info(f'Resuming from checkpoint: {ckpt_cfg}')
 
         apply_training_patches()
 

@@ -64,6 +64,7 @@ install(DIRECTORY robots config
 # Install executable scripts
 install(PROGRAMS
   scripts/new_robot
+  scripts/world_reset_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -74,19 +75,110 @@ ament_export_dependencies(rclcpp sensor_msgs sobits_interfaces rclcpp_components
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # skip copyright checking
-  set(ament_cmake_copyright_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 
-  # lerobot seam smoke-test suite — the pass/fail gate for the 0.5.1 ->
-  # 0.6.0 port (see docs/lerobot_v060_phase0_plan.md). Also runnable
-  # standalone: `python3 -m pytest sobits_vla_common/test/ -v`.
+  # lerobot seam smoke-test suite — the pass/fail gate for lerobot upgrades.
+  # lerobot lives in the repo's pixi environments (not system python), so
+  # the test runs on the first materialized env interpreter that ships both
+  # pytest and lerobot. Standalone equivalent:
+  #   pixi run -e gpu python -m pytest sobits_vla_common/test/ -v
   find_package(ament_cmake_pytest QUIET)
   if(ament_cmake_pytest_FOUND)
-    ament_add_pytest_test(test_lerobot_seam test/test_lerobot_seam.py
-      APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
-      TIMEOUT 120
-    )
+    set(_pixi_envs_dir "${CMAKE_CURRENT_SOURCE_DIR}/../.pixi/envs")
+    set(_seam_probe_py
+      "import importlib.util as u, sys; sys.exit(int(not (u.find_spec('pytest') and u.find_spec('lerobot'))))")
+    set(_seam_env_candidates gpu cpu)
+    set(_seam_python "")
+    foreach(_env ${_seam_env_candidates})
+      set(_cand "${_pixi_envs_dir}/${_env}/bin/python")
+      if(EXISTS "${_cand}" AND _seam_python STREQUAL "")
+        execute_process(
+          COMMAND "${_cand}" -c "${_seam_probe_py}"
+          RESULT_VARIABLE _seam_probe
+          OUTPUT_QUIET
+          ERROR_QUIET
+        )
+        if(_seam_probe EQUAL 0)
+          set(_seam_python "${_cand}")
+        endif()
+      endif()
+    endforeach()
+    if(_seam_python STREQUAL "")
+      message(STATUS "lerobot seam suite: no pixi env with pytest+lerobot"
+        " - test skipped (run 'pixi install' in sobits_vla_tools)")
+    else()
+      message(STATUS "lerobot seam suite: using ${_seam_python}")
+      # PYTEST_DISABLE_PLUGIN_AUTOLOAD: the appended ROS PYTHONPATH exposes
+      # ROS pytest plugins (launch_testing -> rclpy -> lark) that the pixi
+      # interpreter cannot import; the suite needs no plugins.
+      # LD_LIBRARY_PATH: colcon runs this interpreter without the pixi
+      # activation, so prepend the env's libs as scripts/pixi_ros_bridge.sh does.
+      get_filename_component(_seam_env_root "${_seam_python}" DIRECTORY)
+      get_filename_component(_seam_env_root "${_seam_env_root}" DIRECTORY)
+      ament_add_pytest_test(test_lerobot_seam test/test_lerobot_seam.py
+        PYTHON_EXECUTABLE "${_seam_python}"
+        APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+        PREPEND_ENV LD_LIBRARY_PATH=${_seam_env_root}/lib
+        TIMEOUT 120
+      )
+    endif()
+
+    # world_reset / gz_utils / param_schema unit tests -- pure Python, only
+    # need pytest and PyYAML (no lerobot, no rclpy). Reuse any pixi env with them.
+    set(_wr_probe_py
+      "import importlib.util as u, sys; sys.exit(int(not (u.find_spec('pytest') and u.find_spec('yaml'))))")
+    set(_wr_python "")
+    if(NOT _seam_python STREQUAL "")
+      set(_wr_python "${_seam_python}")
+    else()
+      foreach(_env ${_seam_env_candidates})
+        set(_cand "${_pixi_envs_dir}/${_env}/bin/python")
+        if(EXISTS "${_cand}" AND _wr_python STREQUAL "")
+          execute_process(
+            COMMAND "${_cand}" -c "${_wr_probe_py}"
+            RESULT_VARIABLE _wr_probe
+            OUTPUT_QUIET
+            ERROR_QUIET
+          )
+          if(_wr_probe EQUAL 0)
+            set(_wr_python "${_cand}")
+          endif()
+        endif()
+      endforeach()
+    endif()
+    if(_wr_python STREQUAL "")
+      message(STATUS "world_reset/gz_utils/param_schema tests: no pixi env with pytest+yaml"
+        " - test skipped (run 'pixi install' in sobits_vla_tools)")
+    else()
+      message(STATUS "world_reset/gz_utils/param_schema tests: using ${_wr_python}")
+      ament_add_pytest_test(test_world_reset test/test_world_reset.py
+        PYTHON_EXECUTABLE "${_wr_python}"
+        APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+        TIMEOUT 60
+      )
+      ament_add_pytest_test(test_gz_utils test/test_gz_utils.py
+        PYTHON_EXECUTABLE "${_wr_python}"
+        APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+        TIMEOUT 60
+      )
+      ament_add_pytest_test(test_param_schema test/test_param_schema.py
+        PYTHON_EXECUTABLE "${_wr_python}"
+        APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+        TIMEOUT 60
+      )
+      # Sweeps sibling packages' config YAMLs against their node _SCHEMAs, so
+      # it only runs from a source tree where those packages sit next to us.
+      ament_add_pytest_test(test_config_schemas test/test_config_schemas.py
+        PYTHON_EXECUTABLE "${_wr_python}"
+        APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+        TIMEOUT 60
+      )
+    endif()
   endif()
 endif()
 

@@ -30,6 +30,7 @@
 from pathlib import Path
 
 from rosbags.highlevel import AnyReader
+from tqdm import tqdm
 
 
 class BagReader:
@@ -70,7 +71,12 @@ class BagReader:
 
         with AnyReader([self.bag_path]) as reader:
             connections = [c for c in reader.connections if c.topic in wanted_topics]
-            for connection, timestamp, rawdata in reader.messages(connections=connections):
+            total = sum(getattr(c, 'msgcount', 0) for c in connections) or None
+            msg_iter = tqdm(
+                reader.messages(connections=connections), total=total,
+                desc='  reading bag', unit='msg', disable=None, leave=False,
+            )
+            for connection, timestamp, rawdata in msg_iter:
                 topic = connection.topic
                 t_bag = timestamp * 1e-9
 
@@ -144,10 +150,8 @@ class BagReader:
                     cam_name = topic_to_cam[topic]
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     t_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-                    # Keep rawdata, connection, t_sec, msg
                     cam_series[cam_name].append((t_sec, msg, rawdata, connection))
 
-        # Sort all buffers by timestamp
         joint_states_series.sort(key=lambda x: x[0])
         cmd_vel_series.sort(key=lambda x: x[0])
         odom_series.sort(key=lambda x: x[0])

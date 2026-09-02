@@ -27,18 +27,58 @@
 
 """Dataset writer module for creating, populating and finalising LeRobot datasets."""
 
+import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 
 import numpy as np
 import pandas as pd
-from sobits_vla_common.lerobot_adapter import HF_LEROBOT_HOME, LEROBOT_VERSION, LeRobotDataset
+from sobits_vla_common.lerobot_adapter import (
+    depth_encoder_defaults,
+    HF_LEROBOT_HOME,
+    LEROBOT_VERSION,
+    LeRobotDataset,
+    RGBEncoderConfig,
+)
 import yaml
+
+# lerobot 0.6.0's meta/info.json is a typed DatasetInfo dataclass (no robot_info/
+# user_info); unknown keys via __setitem__ raise or drop on reload, so we sidecar them.
+_CUSTOM_INFO_FILENAME = 'sobits_vla_info.json'
+
+
+def write_custom_info(dataset_root: Path, robot_info: dict, user_info: dict) -> None:
+    """Persist robot_info/user_info to a sidecar JSON file under meta/."""
+    meta_dir = Path(dataset_root) / 'meta'
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    payload = {'robot_info': robot_info, 'user_info': user_info}
+    with open(meta_dir / _CUSTOM_INFO_FILENAME, 'w') as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+
+
+def read_custom_info(dataset_root: Path) -> dict:
+    """Read back the robot_info/user_info sidecar written by write_custom_info."""
+    path = Path(dataset_root) / 'meta' / _CUSTOM_INFO_FILENAME
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        return json.load(f)
 
 
 def _sobits_vla_tools_rev() -> str:
-    """Return `git describe --always --dirty` for this checkout, or 'unknown'."""
+    """
+    Return the sobits_vla_tools revision for provenance, or 'unknown'.
+
+    Tries SOBITS_VLA_TOOLS_REV (for installed/CI environments), then
+    `git describe --always --dirty` from this file's directory — the latter
+    only works when running from the source space, since the colcon install
+    space is not a git checkout.
+    """
+    env_rev = os.environ.get('SOBITS_VLA_TOOLS_REV', '').strip()
+    if env_rev:
+        return env_rev
     try:
         result = subprocess.run(
             ['git', 'describe', '--always', '--dirty'],
@@ -68,6 +108,13 @@ def _make_create_kwargs(
     Factored out so the seam test suite exercises the exact same
     creation path as production conversion (see test_dataset_roundtrip).
     """
+    rgb_encoder = RGBEncoderConfig(vcodec=vcodec)
+    # 'auto' probes hardware encoders and may pick h264_nvenc, but its default B-frames
+    # violate lerobot's default GOP g=2 constraint and avcodec_open2 fails; pin bf=0.
+    rgb_encoder.resolve_vcodec()
+    if rgb_encoder.vcodec.endswith('_nvenc') and 'bf' not in rgb_encoder.extra_options:
+        rgb_encoder.extra_options = {**rgb_encoder.extra_options, 'bf': 0}
+    # Gemini 330's 0.1-20m range fits lerobot's default 0.01-10m depth window.
     return {
         'repo_id': dataset_name,
         'fps': fps,
@@ -75,7 +122,8 @@ def _make_create_kwargs(
         'root': output_directory,
         'robot_type': robot_type,
         'video_backend': 'auto',
-        'vcodec': vcodec,
+        'rgb_encoder': rgb_encoder,
+        'depth_encoder': depth_encoder_defaults(),
         'streaming_encoding': True,
     }
 
@@ -129,7 +177,7 @@ class DatasetWriter:
     def log_warn(self, msg: str):
         """Log warning messages using target logger or print."""
         if self.logger:
-            self.logger.warn(msg)
+            self.logger.warning(msg)
         else:
             print(f'[WARN] {msg}')
 
@@ -148,6 +196,17 @@ class DatasetWriter:
             dataset_root = HF_LEROBOT_HOME / self.dataset_name
 
         if self.overwrite and dataset_root.exists():
+            # Refuse to delete a non-empty directory that doesn't look like a LeRobot
+            # dataset — a mispointed output_directory must not wipe arbitrary data.
+            is_dataset = (dataset_root / 'meta' / 'info.json').exists()
+            is_empty = not any(dataset_root.iterdir())
+            if not is_dataset and not is_empty:
+                raise RuntimeError(
+                    f'overwrite=true but {dataset_root} is not a LeRobot '
+                    'dataset (no meta/info.json) and is not empty — refusing '
+                    'to delete it. Remove it manually or point '
+                    'output_directory elsewhere.'
+                )
             self.log_warn(
                 f'overwrite=true: deleting existing dataset at {dataset_root}'
             )
@@ -163,15 +222,13 @@ class DatasetWriter:
         )
         self.dataset = LeRobotDataset.create(**create_kwargs)
 
-        self.dataset.meta.info['robot_info'] = self.robot_info
-
-        # Version provenance: which lerobot + which sobits_vla_tools revision
-        # produced this dataset. Helps triage a bad conversion after a
-        # lerobot bump.
+        # Version provenance: which lerobot + sobits_vla_tools revision produced this
+        # dataset, to help triage a bad conversion after a lerobot bump.
         provenance = {
             'lerobot_version': '.'.join(str(p) for p in LEROBOT_VERSION),
             'sobits_vla_tools_rev': _sobits_vla_tools_rev(),
         }
+        self.provenance = provenance  # reused by finalize() for the card description
         if self.user_info:
             if len(self.user_info) > 1 or not isinstance(self.user_info, list):
                 user_info = self.user_info
@@ -181,9 +238,16 @@ class DatasetWriter:
                 user_info = {**user_info, **provenance}
             else:
                 user_info = {'user_info': user_info, **provenance}
-            self.dataset.meta.info['user_info'] = user_info
         else:
-            self.dataset.meta.info['user_info'] = provenance
+            user_info = provenance
+
+        # meta/info.json is a typed dataclass with no robot_info/user_info fields (see
+        # write_custom_info); persisted eagerly so it survives an interrupted conversion.
+        write_custom_info(
+            self.dataset.root,
+            robot_info=self.robot_info,
+            user_info=user_info,
+        )
 
     def add_frame(self, frame):
         """Add a single frame to the dataset."""
@@ -194,7 +258,13 @@ class DatasetWriter:
         self.dataset.save_episode()
 
     def _persist_subtasks_metadata(self) -> None:
-        """Persist subtask mapping to meta/subtasks.parquet for LeRobot reload compatibility."""
+        """
+        Persist subtask mapping to a meta/subtasks.parquet sidecar.
+
+        lerobot 0.6.0 no longer loads this file (native subtasks support was
+        replaced by language columns, #3467) — it is kept as our own sidecar
+        so the subtask names survive for a future language-columns migration.
+        """
         if not self.has_subtasks:
             return
 
@@ -206,7 +276,6 @@ class DatasetWriter:
         subtasks_path = Path(self.dataset.root) / 'meta' / 'subtasks.parquet'
         subtasks_path.parent.mkdir(parents=True, exist_ok=True)
         subtasks_df.to_parquet(subtasks_path)
-        self.dataset.meta.subtasks = subtasks_df
         self.log_info(f'Subtasks metadata saved to: {subtasks_path}')
 
     def _verify_subtasks_metadata(self) -> None:
@@ -214,19 +283,37 @@ class DatasetWriter:
         if not self.has_subtasks:
             return
 
+        # lerobot 0.6.0 removed native subtasks support (superseded by language columns),
+        # so meta/subtasks.parquet is purely our sidecar: verify it on disk directly.
         reloaded = LeRobotDataset(self.dataset_name, root=Path(self.dataset.root))
-        if reloaded.meta.subtasks is None:
+        subtasks_path = Path(self.dataset.root) / 'meta' / 'subtasks.parquet'
+        if not subtasks_path.exists():
             raise RuntimeError(
-                'Subtasks metadata was not persisted (meta.subtasks is None after reload).'
+                'Subtasks metadata was not persisted (meta/subtasks.parquet missing).'
             )
-        if len(reloaded.meta.subtasks) != len(self.all_subtasks_list):
+        persisted = pd.read_parquet(subtasks_path)
+        if len(persisted) != len(self.all_subtasks_list):
             raise RuntimeError(
                 f'Subtasks metadata size mismatch after reload: '
                 f'expected {len(self.all_subtasks_list)}, '
-                f'got {len(reloaded.meta.subtasks)}'
+                f'got {len(persisted)}'
             )
         if 'subtask_index' not in reloaded.features:
             raise RuntimeError("Feature 'subtask_index' is missing after reload.")
+
+    def _build_dataset_description(
+        self, total_episodes: int, total_frames: int, episode_stats: list
+    ) -> str:
+        """Build a short markdown description for the Hub dataset card."""
+        tasks = sorted({s['task'] for s in episode_stats if s.get('task')})
+        rev = self.provenance.get('sobits_vla_tools_rev', 'unknown')
+        lines = [
+            f'Robot: {self.robot_type or "unknown"}',
+            f'Episodes: {total_episodes}, Frames: {total_frames}',
+            f'Tasks: {", ".join(tasks) if tasks else "N/A"}',
+            f'Converted with sobits_vla_tools@{rev}',
+        ]
+        return '\n'.join(lines)
 
     def finalize(
         self,
@@ -248,19 +335,24 @@ class DatasetWriter:
         self.log_info(f'Dataset saved to: {self.dataset.root}')
         self.log_info('Dataset creation completed!')
 
+        total_episodes = len(episode_stats)
+        total_frames = sum(s['frames'] for s in episode_stats)
+
         if self.push_to_hub:
             self.log_info(
                 f"Pushing dataset to HuggingFace Hub as '{self.dataset_name}'..."
             )
-            self.dataset.push_to_hub(private=self.hub_private)
+            description = self._build_dataset_description(
+                total_episodes, total_frames, episode_stats
+            )
+            self.dataset.push_to_hub(private=self.hub_private, dataset_description=description)
             self.log_info('Push to Hub completed!')
 
-        # Build stats report
         stats_report = {
             'dataset_name': self.dataset_name,
             **conversion_params,
-            'total_episodes': len(episode_stats),
-            'total_frames': sum(s['frames'] for s in episode_stats),
+            'total_episodes': total_episodes,
+            'total_frames': total_frames,
             'skipped_bags': skipped_bags if skipped_bags else [],
             'fps_warnings': fps_warnings if fps_warnings else [],
             'episodes': episode_stats,

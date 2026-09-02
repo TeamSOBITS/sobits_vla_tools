@@ -56,7 +56,7 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
     """Run dataset-aware pre-flight checks that require info.json."""
     def log_warn(msg: str):
         if ros_logger:
-            ros_logger.warn(msg)
+            ros_logger.warning(msg)
         else:
             logger.warning(msg)
 
@@ -110,14 +110,15 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
         try:
             from sobits_vla_common.robot_descriptor import load_robot_descriptor
             desc = load_robot_descriptor(desc_id)
+            desc = desc.filtered(
+                exclude_groups=params.get('robot.exclude.groups', []),
+                exclude_cameras=params.get('robot.exclude.cameras', []),
+                exclude_ee_poses=params.get('robot.exclude.ee_poses', []),
+                exclude_joints=params.get('robot.exclude.joints', []),
+            )
 
-            active_groups = params.get('robot.active_groups', [])
-            if not active_groups:
-                active_groups = [g.name for g in desc.active_groups]
-            active_cameras = params.get('robot.active_cameras', [])
-            if not active_cameras:
-                active_cameras = [c.name for c in desc.active_cameras]
-            active_mobile_base = params.get('robot.active_mobile_base', True)
+            active_cameras = [c.name for c in desc.active_cameras]
+            active_mobile_base = not params.get('robot.exclude.mobile_base', False)
 
             # 1. Validate active cameras are in dataset
             for cam_name in active_cameras:
@@ -130,16 +131,16 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
 
             # 2. Compare expected action features with dataset actions
             active_joint_features = []
-            for g in desc.groups:
-                if g.name in active_groups:
-                    active_joint_features.extend([j.feature for j in g.joints])
+            for g in desc.active_groups:
+                active_joint_features.extend([j.feature for j in g.joints])
 
             active_base_features = []
             if desc.mobile_base and active_mobile_base:
-                bmap = desc._BASE_FEATURE_MAP
-                active_base_features = [
-                    bmap[f] for f in desc.mobile_base.features if f in bmap
-                ]
+                # active_groups=[] so only base features come back, not group joints
+                # (those are already in active_joint_features above).
+                active_base_features = desc.relative_exclude_features(
+                    active_groups=[], active_mobile_base=active_mobile_base,
+                )
 
             expected_actions = active_joint_features + active_base_features
 
@@ -164,12 +165,12 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
     # relative_exclude_joints validation (config_builder derives this from the
     # descriptor; warn only if it still looks wrong against the dataset).
     if po.get('use_relative_actions', False):
-        exclude = po.get('relative_exclude_joints', ['gripper'])
-        if exclude == ['gripper']:
+        exclude = po.get('relative_exclude_joints', [])
+        if not exclude:
             log_warn(
-                'use_relative_actions=true but relative_exclude_joints is the default '
-                "['gripper'], which matches no SOBIT HOME action. Base velocities would "
-                'be delta-converted. Set robot.descriptor_id or an explicit override.'
+                'use_relative_actions=true but relative_exclude_joints is empty — '
+                'all features, including mobile-base velocities, would be delta-converted. '
+                'Set robot.descriptor_id or an explicit override.'
             )
         elif action_names:
             unknown = [j for j in exclude if j not in action_names]

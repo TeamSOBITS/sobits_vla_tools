@@ -7,9 +7,9 @@
     robot_descriptor_id: "sobit_home"
 
     user_info:
-      name: ""
-      location: ""
-      email: ""
+      name: "Keith Valentin"
+      location: "Soka University, Japan"
+      email: "kvalentincardenas@hotmail.com"
 
     rosbag_config:
       record_directory: ""
@@ -17,7 +17,7 @@
       max_episode_duration: 0.0
       timestamp_jump_threshold: 1.0
       min_disk_space_mb: 2048
-      expected_sensor_fps: 5
+      expected_sensor_fps: 10
       additional_topics:
         - /sobit_home/joy
         - /tf
@@ -30,3 +30,5 @@
       compression_mode: "none"
       compression_format: "zstd"
       rmw_serialization_format: "cdr"
+      # Scene reset is manual only: the gamepad RESET button forwards here.
+      world_reset_service: "world_reset_node/reset_world"

@@ -1,0 +1,119 @@
+/**:
+  ros__parameters:
+    # =========================================================================
+    # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0 (VLM-LoRA)
+    #
+    # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_pi0_vlmlora
+    # Dataset : team-sobits/sobit_home_left_sim-pu_block-abs-332ep (10 fps, absolute actions)
+    # Policy  : PI0 (PaliGemma 2B + Gemma 300M action expert, flow matching)
+    # Base    : lerobot/pi0_base (per HF pi0 docs)
+    # Recipe  : aligned to openpi's pi0_libero_low_mem_finetune (the reference
+    #           LoRA recipe): adapters on attention (q,k,v,o) AND MLP
+    #           (gate,up,down) in BOTH the VLM and the expert, alpha/r = 1,
+    #           full-FT learning-rate schedule kept (openpi does not raise LR
+    #           for LoRA). Replaces the failed thin recipe (q,v-attention only,
+    #           lr 1e-4, and a regex that silently missed action_time_mlp_* /
+    #           state_proj — those module names were wrong).
+    # =========================================================================
+
+    policy: pi0
+
+    robot:
+      descriptor_id: sobit_home_v1_1
+      # Trims the shared descriptor to the left-arm-only 19-dim subset that
+      # sobit_home_frozen used to hardcode (now retired).
+      exclude:
+        groups: [arm_right, hand_right]
+        cameras: [hand_right_camera]
+        ee_poses: [left, right]
+        mobile_base: false
+
+    dataset:
+      repo_id: "team-sobits/sobit_home_left_sim-pu_block-abs-332ep"
+      num_workers: 12
+      # ~16 of 332 episodes held out: the overfitting detector the failed run lacked.
+      eval_split: 0.05
+      rename_map: []
+
+    checkpoint:
+      output_dir: ""
+      resume: false
+      overwrite: true
+      pretrained_path: "lerobot/pi0_base"
+      save_freq: 10000
+      save_checkpoint: true
+
+    training:
+      steps: 30000
+      # openpi's reference pairing is batch 32 @ lr 2.5e-5; drop 24 -> 16 on
+      # OOM (RTX 5090 32 GB). NO gradient accumulation — effective = batch_size.
+      batch_size: 32
+      seed: 1000
+      use_policy_training_preset: true
+      log_freq: 100
+      eval_steps: 1000
+
+    num_gpus: 1
+
+    wandb:
+      enable: true
+      project: "sobits_vla_training"
+      entity: ""
+      run_name: "sobit_home_left_sim-pu_block-abs-332ep-pi0_vlmlora-openpi-recipe"
+      run_id: ""
+      mode: ""
+      notes: "PI0 VLM-LoRA, openpi-aligned recipe: attn(q,k,v,o)+MLP adapters on VLM+expert, r=32 alpha=32, preset LR 2.5e-5"
+      disable_artifact: true
+
+    hub:
+      push_to_hub: true
+      # Org naming rule: <dataset-name>-<policy>_<recipe>-steps<K>-decay<K>.
+      # Overrides the failed thin-LoRA run's repo (old weights stay in its git history).
+      repo_id: "team-sobits/sobit_home_left_sim-pu_block-abs-332ep-pi0_vlmlora-steps30k-decay30k"
+      private: false
+      save_checkpoints: true
+
+    # =========================================================================
+    # LoRA / PEFT — openpi-aligned. pi0 and pi05 share the identical
+    # PaliGemmaWithExpertModel tree, so this regex applies to pi05 unchanged.
+    # =========================================================================
+    peft:
+      method_type: "LORA"
+      # openpi uses r=16 (VLM) / r=32 (expert); one shared rank here, so take
+      # the expert's 32 — the expert is where the control policy lives.
+      r: 32
+      # alpha/r = 1 per openpi (16/16 and 32/32), not the 2.0 of the old recipe.
+      lora_alpha: 32
+      lora_dropout: 0.05
+      # openpi coverage: attention (q,k,v,o) + MLP (gate,up,down) in both
+      # stacks, plus every action/state projection (real module names).
+      target_modules: "(.*\\.(gemma_expert|language_model)\\..*\\.(self_attn\\.(q|k|v|o)_proj|mlp\\.(gate|up|down)_proj)|model\\.(state_proj|action_in_proj|action_out_proj|action_time_mlp_in|action_time_mlp_out))"
+      full_training_modules: []
+
+    policy_overrides:
+      chunk_size: 50
+      n_action_steps: 50
+      dtype: "bfloat16"
+
+      # Signals intent to adapt the VLM. SigLIP has no adapters and stays
+      # frozen regardless, so this is documentation more than behaviour.
+      freeze_vision_encoder: false
+
+      train_expert_only: false
+
+      # Required at this batch on 32 GB; composes with compile (use_reentrant=False).
+      gradient_checkpointing: true
+
+      # DISABLED: Triton sm_120 (Blackwell / RTX 5090) crashes compiling the VLM
+      # backward when LoRA touches language_model layers (as in pi05 VLM-LoRA).
+      compile_model: false
+
+      use_relative_actions: false
+
+      # openpi keeps the full-FT schedule for LoRA — the old 1e-4 (4x, with
+      # half openpi's batch) is a prime suspect in the failed run.
+      optimizer_lr: 2.5e-5
+      optimizer_weight_decay: 0.01
+      scheduler_warmup_steps: 1000
+      scheduler_decay_steps: 30000
+      scheduler_decay_lr: 2.5e-6

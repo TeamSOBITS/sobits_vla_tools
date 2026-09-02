@@ -40,6 +40,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from sobits_vla_common.output_root import output_root
 from sobits_vla_common.policy_registry import make_policy_config
 
 logger = logging.getLogger(__name__)
@@ -48,29 +49,24 @@ logger = logging.getLogger(__name__)
 def find_package_src_dir() -> Path:
     current_file = Path(__file__).resolve()
 
-    # Check if 'build' or 'install' or 'site-packages' or 'dist-packages' is in the path parts
     in_workspace_build_or_install = any(
         part in current_file.parts
         for part in ('build', 'install', 'site-packages', 'dist-packages')
     )
 
     if not in_workspace_build_or_install:
-        # We might be running directly from the source tree
         direct_parent = current_file.parent.parent
         if (direct_parent / 'package.xml').exists():
             return direct_parent
 
-    # Try walking up to find a workspace root containing 'src'
     for p in current_file.parents:
         if (p / 'src').is_dir():
             src_dir = p / 'src'
-            # Look for a directory containing package.xml and named 'sobits_vla_training'
             for path in src_dir.rglob('package.xml'):
                 if path.parent.name == 'sobits_vla_training':
                     return path.parent
             break
 
-    # Fallback to get_package_share_directory if available
     try:
         from ament_index_python.packages import get_package_share_directory
         return Path(get_package_share_directory('sobits_vla_training'))
@@ -78,6 +74,53 @@ def find_package_src_dir() -> Path:
         pass
 
     return current_file.parent.parent
+
+
+def _default_model_root() -> Path:
+    """
+    Resolve the checkpoint output root: <package_src>/lerobotmodel/.
+
+    Falls back to find_package_src_dir() (not the ament-index share dir
+    directly) since output_dir must resolve before lerobot creates it.
+    """
+    return output_root(
+        'sobits_vla_training', 'lerobotmodel', anchor_file=__file__,
+        recursive=False, final_fallback=lambda: find_package_src_dir() / 'lerobotmodel',
+    )
+
+
+def resolve_output_dir(out_dir_raw: str, hub_repo_id: str) -> Path:
+    """
+    Resolve checkpoint.output_dir to the directory training writes into.
+
+    Anything that is not absolute lands under <package_src>/lerobotmodel/::
+
+        ""           -> lerobotmodel/<hub_repo_id>   (organization/model_name)
+        "model_name" -> lerobotmodel/model_name
+        "a/b"        -> lerobotmodel/a/b
+        "/abs/path"  -> /abs/path                    (verbatim)
+
+    Raises
+    ------
+        RuntimeError: If both arguments are empty — with no identifier at all
+            every run would collide on the shared lerobotmodel/ root.
+
+    """
+    model_root = _default_model_root()
+
+    if not out_dir_raw:
+        if not hub_repo_id:
+            raise RuntimeError(
+                'checkpoint.output_dir and hub.repo_id are both empty — '
+                'refusing to default to a shared output root; set one '
+                'explicitly.'
+            )
+        return model_root / hub_repo_id
+
+    raw_path = Path(out_dir_raw).expanduser()
+    if raw_path.is_absolute():
+        return raw_path
+    return (model_root / raw_path).resolve()
 
 
 def _resolve_pretrained_path(raw: str) -> Path | str:
@@ -90,7 +133,7 @@ def _resolve_pretrained_path(raw: str) -> Path | str:
     return raw
 
 
-def build_train_config(params: dict[str, Any]):
+def build_train_config(params: dict[str, Any], output_dir: Path):
     """
     Construct a TrainPipelineConfig from a flat ROS parameter dict.
 
@@ -98,6 +141,8 @@ def build_train_config(params: dict[str, Any]):
     ----------
     params : dict
         Flat dict of ROS parameter names to values.
+    output_dir : Path
+        Resolved checkpoint output directory (caller owns default/overwrite logic).
 
     Returns
     -------
@@ -118,15 +163,18 @@ def build_train_config(params: dict[str, Any]):
         from sobits_vla_common.robot_descriptor import load_robot_descriptor
         desc = load_robot_descriptor(desc_id)
 
-        active_groups = params.get('robot.active_groups', [])
-        if not active_groups:
-            active_groups = [g.name for g in desc.active_groups]
-        active_mobile_base = params.get('robot.active_mobile_base', True)
+        desc = desc.filtered(
+            exclude_groups=params.get('robot.exclude.groups', []),
+            exclude_cameras=params.get('robot.exclude.cameras', []),
+            exclude_ee_poses=params.get('robot.exclude.ee_poses', []),
+            exclude_joints=params.get('robot.exclude.joints', []),
+        )
+        active_groups = [g.name for g in desc.active_groups]
+        active_mobile_base = not params.get('robot.exclude.mobile_base', False)
 
         active_joint_features = []
-        for g in desc.groups:
-            if g.name in active_groups:
-                active_joint_features.extend([j.feature for j in g.joints])
+        for g in desc.active_groups:
+            active_joint_features.extend([j.feature for j in g.joints])
 
         n_base = 0
         if desc.mobile_base and active_mobile_base:
@@ -141,10 +189,8 @@ def build_train_config(params: dict[str, Any]):
 
         # Relative mode: keep base velocities + flagged groups absolute.
         # Descriptor-derived; explicit override wins.
-        if (
-            policy_overrides.get('use_relative_actions', False)
-            and 'relative_exclude_joints' not in policy_overrides
-        ):
+        if policy_overrides.get('use_relative_actions', False) and not policy_overrides.get(
+                'relative_exclude_joints'):
             policy_overrides['relative_exclude_joints'] = desc.relative_exclude_features(
                 active_groups=active_groups,
                 active_mobile_base=active_mobile_base,
@@ -156,14 +202,12 @@ def build_train_config(params: dict[str, Any]):
 
     hub_repo_id: str = params.get('hub.repo_id', '') or ''
     push_to_hub: bool = bool(params.get('hub.push_to_hub', True))
-    if hub_repo_id and push_to_hub:
+    policy_overrides['push_to_hub'] = bool(hub_repo_id) and push_to_hub
+    if hub_repo_id:
         policy_overrides['repo_id'] = hub_repo_id
-        policy_overrides['push_to_hub'] = True
+        # Always set: save_checkpoint_to_hub pushes even with push_to_hub off,
+        # and private=None would create the repo PUBLIC by HF default.
         policy_overrides['private'] = bool(params.get('hub.private', False))
-    else:
-        policy_overrides['push_to_hub'] = False
-        if hub_repo_id:
-            policy_overrides['repo_id'] = hub_repo_id
 
     policy_cfg = make_policy_config(
         policy_type=policy_type,
@@ -175,64 +219,117 @@ def build_train_config(params: dict[str, Any]):
     if not ds_repo_id:
         raise ValueError('dataset.repo_id must be set in training_config.yaml.')
 
-    dataset_cfg = DatasetConfig(repo_id=ds_repo_id)
+    eval_split: float = params.get('dataset.eval_split', 0.0)
+    dataset_cfg = DatasetConfig(repo_id=ds_repo_id, eval_split=eval_split)
 
-    # Version provenance: fold the lerobot version into notes since
-    # WandBConfig has no dedicated metadata field. Keeps the W&B run
-    # traceable to the lerobot version it trained under.
+    # Fold lerobot version into notes (WandBConfig has no metadata field) so
+    # the W&B run stays traceable to the lerobot version it trained under.
     from sobits_vla_common.lerobot_adapter import LEROBOT_VERSION
     lerobot_version_str = '.'.join(str(p) for p in LEROBOT_VERSION)
     user_notes = params.get('wandb.notes', '') or ''
     provenance_note = f'lerobot={lerobot_version_str}'
     notes = f'{user_notes} [{provenance_note}]' if user_notes else f'[{provenance_note}]'
 
+    wandb_mode = params.get('wandb.mode', '') or None
+    if wandb_mode not in (None, 'online', 'offline', 'disabled'):
+        raise ValueError(
+            f'wandb.mode must be online|offline|disabled, got {wandb_mode!r}')
     wandb_cfg = WandBConfig(
         enable=params.get('wandb.enable', True),
+        disable_artifact=bool(params.get('wandb.disable_artifact', False)),
         project=params.get('wandb.project', 'sobits_vla_training'),
         entity=params.get('wandb.entity', None) or None,
-        run_id=params.get('wandb.run_name', None) or None,
         notes=notes,
+        run_id=params.get('wandb.run_id', '') or None,
+        mode=wandb_mode,
     )
+    # wandb.run_name is the display name (job_name), not a resume id --
+    # run_id stays unset so each run starts a fresh W&B run.
+    job_name = params.get('wandb.run_name', '') or None
 
-    output_dir_raw = params.get('checkpoint.output_dir', '')
-    package_src_dir = find_package_src_dir()
-
-    if not output_dir_raw:
-        output_dir = package_src_dir / 'outputs'
+    # ROS delivers rename_map as list[str] ("old:new" entries); lerobot's
+    # TrainPipelineConfig.rename_map wants dict[str, str].
+    raw_renames = params.get('dataset.rename_map', []) or []
+    if isinstance(raw_renames, dict):
+        rename_map: dict = dict(raw_renames)
     else:
-        raw_path = Path(output_dir_raw).expanduser()
-        if raw_path.is_absolute():
-            output_dir = raw_path
-        else:
-            if raw_path.parts and raw_path.parts[0] == 'outputs':
-                output_dir = (package_src_dir / raw_path).resolve()
-            else:
-                output_dir = (package_src_dir / 'outputs' / raw_path).resolve()
-
-    rename_map: dict = params.get('dataset.rename_map', {}) or {}
+        rename_map = {}
+        for entry in raw_renames:
+            old, sep, new = str(entry).partition(':')
+            if not (sep and old and new):
+                raise ValueError(
+                    f'dataset.rename_map entry {entry!r} must be "old:new"')
+            rename_map[old.strip()] = new.strip()
 
     peft_cfg, peft_extra = build_peft_config(params)
 
-    train_cfg = TrainPipelineConfig(
-        dataset=dataset_cfg,
-        policy=policy_cfg,
-        output_dir=output_dir,
-        resume=params.get('checkpoint.resume', False),
-        seed=params.get('training.seed', 1000),
-        num_workers=params.get('dataset.num_workers', 4),
-        batch_size=params.get('training.batch_size', 32),
-        steps=params.get('training.steps', 100000),
-        log_freq=params.get('training.log_freq', 200),
-        eval_freq=params.get('training.eval_freq', 20000),
-        save_checkpoint=params.get('checkpoint.save_checkpoint', True),
-        save_freq=params.get('checkpoint.save_freq', 20000),
-        use_policy_training_preset=params.get('training.use_policy_training_preset', True),
-        wandb=wandb_cfg,
-        peft=peft_cfg,
-        rename_map=rename_map,
-    )
+    train_kwargs: dict[str, Any] = {
+        'dataset': dataset_cfg,
+        'policy': policy_cfg,
+        'output_dir': output_dir,
+        'job_name': job_name,
+        'resume': params.get('checkpoint.resume', False),
+        'seed': params.get('training.seed', 1000),
+        'num_workers': params.get('dataset.num_workers', 4),
+        'batch_size': params.get('training.batch_size', 32),
+        'steps': params.get('training.steps', 100000),
+        'log_freq': params.get('training.log_freq', 200),
+        'eval_steps': params.get('training.eval_steps', 0),
+        'save_checkpoint': params.get('checkpoint.save_checkpoint', True),
+        'save_freq': params.get('checkpoint.save_freq', 20000),
+        'use_policy_training_preset': params.get('training.use_policy_training_preset', True),
+        'wandb': wandb_cfg,
+        'peft': peft_cfg,
+        'rename_map': rename_map,
+        'save_checkpoint_to_hub': params.get('hub.save_checkpoints', False),
+    }
+
+    optimizer_override, scheduler_override = build_optimizer_scheduler_override(params)
+    if optimizer_override is not None:
+        # Override active: bypass the policy preset entirely.
+        train_kwargs['use_policy_training_preset'] = False
+        train_kwargs['optimizer'] = optimizer_override
+        train_kwargs['scheduler'] = scheduler_override
+
+    train_cfg = TrainPipelineConfig(**train_kwargs)
 
     return train_cfg, peft_extra
+
+
+def build_optimizer_scheduler_override(params: dict[str, Any]):
+    """
+    Build an (optimizer, scheduler) override pair, or (None, None) if unset.
+
+    Only active when training.optimizer_type is non-empty. Bypasses the
+    policy's own optimizer/scheduler preset entirely (see TrainPipelineConfig
+    .validate(): the preset always overwrites .optimizer/.scheduler unless
+    use_policy_training_preset=False, and both become mandatory in that mode).
+    Currently wires up SGDConfig only; add another `elif optimizer_type == ...`
+    branch here to support a second optimizer type.
+    """
+    optimizer_type: str = params.get('training.optimizer_type', '') or ''
+    if not optimizer_type:
+        return None, None
+
+    from sobits_vla_common.lerobot_adapter import ConstantWithWarmupSchedulerConfig, SGDConfig
+
+    if optimizer_type != 'sgd':
+        raise ValueError(
+            f"Unsupported training.optimizer_type: {optimizer_type!r} (only 'sgd' is wired up)"
+        )
+
+    optimizer_override = SGDConfig(
+        lr=params.get('training.optimizer_sgd.lr', 1e-3),
+        momentum=params.get('training.optimizer_sgd.momentum', 0.0),
+        dampening=params.get('training.optimizer_sgd.dampening', 0.0),
+        nesterov=params.get('training.optimizer_sgd.nesterov', False),
+        weight_decay=params.get('training.optimizer_sgd.weight_decay', 0.0),
+        grad_clip_norm=params.get('training.optimizer_sgd.grad_clip_norm', 10.0),
+    )
+    scheduler_override = ConstantWithWarmupSchedulerConfig(
+        num_warmup_steps=params.get('training.scheduler_warmup_steps_override', 1000),
+    )
+    return optimizer_override, scheduler_override
 
 
 def build_peft_config(params: dict[str, Any]):
@@ -259,25 +356,27 @@ def build_peft_config(params: dict[str, Any]):
     target_raw = params.get('peft.target_modules', '') or ''
     target_modules: list[str] | str | None = None
     if target_raw:
+        # peft treats a plain string as a regex fullmatch; only split on ','
+        # (literal module list) -- a comma-free string is a regex and stays a string.
         target_modules = (
-            target_raw if isinstance(target_raw, list) else target_raw
+            target_raw if isinstance(target_raw, list) or ',' not in target_raw
+            else [s.strip() for s in target_raw.split(',') if s.strip()]
         )
 
     full_training_modules = params.get('peft.full_training_modules', None)
 
+    lora_alpha = params.get('peft.lora_alpha', None)
     peft_cfg = PeftConfig(
         method_type=method_type,
         r=int(params.get('peft.r', 16)),
+        lora_alpha=int(lora_alpha) if lora_alpha is not None else None,
         target_modules=target_modules,
         full_training_modules=full_training_modules if full_training_modules is not None else [],
     )
 
-    # lora_alpha and lora_dropout are extra LoRA args not on PeftConfig —
-    # they are injected via peft_cli_overrides in wrap_with_peft.
+    # lora_dropout is the one LoRA arg with no PeftConfig field; it reaches
+    # wrap_with_peft via the ExtendedPeft injection in train_node.
     extra: dict[str, Any] = {}
-    lora_alpha = params.get('peft.lora_alpha', None)
-    if lora_alpha is not None:
-        extra['lora_alpha'] = int(lora_alpha)
     lora_dropout = params.get('peft.lora_dropout', None)
     if lora_dropout is not None:
         extra['lora_dropout'] = float(lora_dropout)

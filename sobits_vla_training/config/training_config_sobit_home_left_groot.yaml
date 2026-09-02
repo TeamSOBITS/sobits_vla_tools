@@ -1,43 +1,40 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — GR00T N1.5
+    # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — GR00T N1.7
     #
     # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_groot
     # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
-    # Policy  : GR00T N1.5-3B (Eagle2 VLM + flow-matching action head)
-    # Base    : nvidia/GR00T-N1.5-3B (loaded via base_model_path, not
-    #           checkpoint.pretrained_path)
-    # Recipe  : GR00T-native post-training — tune projector + diffusion action
-    #           head on the frozen VLM (tune_* flags, NOT lerobot PEFT).
+    # Policy  : GR00T N1.7-3B (Cosmos-Reason2-2B backbone + flow-matching head)
+    # Base    : nvidia/GR00T-N1.7-3B, loaded via base_model_path (NOT
+    #           checkpoint.pretrained_path); flash-attn optional (SDPA fallback)
+    # Recipe  : GR00T-native post-training — projector + diffusion head on the
+    #           frozen VLM via the tune_* flags, not lerobot PEFT.
     #
-    # REQUIREMENTS:
-    #  - flash-attn:  pip install flash-attn --no-build-isolation  (CUDA only)
-    #  - N1.6 / N1.7 are NOT supported by lerobot 0.5.1 (different backbone;
-    #    fine-tune those via NVIDIA's Isaac-GR00T repo instead).
+    # IMPORTANT: lerobot 0.6.0 dropped GR00T N1.5 entirely — existing N1.5
+    # fine-tunes cannot be loaded and must be retrained against N1.7.
     # =========================================================================
 
     policy: groot
 
     robot:
-      descriptor_id: sobit_home
-      active_groups:
-        - head
-        - body
-        - arm_left
-        - hand_left
-      active_cameras:
-        - head_camera
-        - hand_left_camera
-      active_mobile_base: true
+      descriptor_id: sobit_home_v1_1
+      # exclude trims the shared descriptor to this task's subset.
+      # Unknown names raise.
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        cameras: ["hand_right_camera"]
+        # Dataset carries no EE-pose features.
+        ee_poses: [left, right]
+        mobile_base: false
 
     dataset:
       repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
-      num_workers: 4
+      num_workers: 12
       rename_map: []
 
     checkpoint:
-      output_dir: "sobit_home_pickup_block_groot"
+      output_dir: ""
       resume: false
       overwrite: true
       # Empty: GR00T weights come from policy base_model_path (nvidia repo).
@@ -46,16 +43,15 @@
       save_checkpoint: true
 
     training:
-      # MUST stay 10000: GrootConfig.get_scheduler_preset() hardcodes a
-      # 10k-step cosine decay (5% warmup) — longer runs would train at the
-      # floor LR after step 10k. 10k is also Isaac-GR00T's default max_steps.
+      # N1.7 derives warmup from training.steps via warmup_ratio (5%) instead
+      # of N1.5's hardcoded 10k schedule, so steps can be tuned freely.
       steps: 10000
       batch_size: 16
       seed: 1000
-      # GR00T preset: AdamW lr=1e-4, betas (0.95, 0.999), cosine 10k decay.
+      # GR00T preset: AdamW lr=1e-4, betas (0.9, 0.999), cosine decay.
       use_policy_training_preset: true
       log_freq: 100
-      eval_freq: 5000
+      eval_steps: 0
 
     num_gpus: 1
 
@@ -64,12 +60,10 @@
       project: "sobits_vla_training"
       entity: ""
       run_name: "sobit_home-pickup_block-left-abs-groot"
-      notes: "GR00T N1.5 post-train (projector+diffusion head) on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)"
-      tags:
-        - groot
-        - sobit_home
-        - pickup_block
-        - gazebo
+      run_id: ""
+      mode: ""
+      notes: "GR00T N1.7 post-train (projector+diffusion head) on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)"
+      disable_artifact: true
 
     hub:
       push_to_hub: true
@@ -77,22 +71,22 @@
       private: false
 
     peft:
-      # GR00T uses its OWN freezing (tune_* flags below) and its own built-in
-      # LoRA (policy_overrides.lora_rank) — lerobot PEFT must stay disabled.
+      # GR00T uses its OWN freezing (tune_* flags below), so lerobot PEFT stays
+      # off. Its built-in LoRA fields were never wired up in N1.7.
       method_type: ""
 
     policy_overrides:
-      chunk_size: 50
-      n_action_steps: 50
-      max_state_dim: 64
-      max_action_dim: 32
+      # N1.7-native values set directly — GrootConfig would otherwise auto-remap
+      # the legacy N1.5 defaults with a warning.
+      chunk_size: 40
+      n_action_steps: 40
+      max_state_dim: 132
+      max_action_dim: 132
       embodiment_tag: "new_embodiment"
       # Default post-training recipe: action head only, VLM frozen.
       tune_llm: false
       tune_visual: false
       tune_projector: true
       tune_diffusion_model: true
-      # Optional: set lora_rank > 0 to also adapt the (frozen) LLM via
-      # GR00T's built-in LoRA if language-following needs improvement.
-      lora_rank: 0
+      tune_vlln: true
       use_bf16: true

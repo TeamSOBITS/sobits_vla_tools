@@ -1,0 +1,66 @@
+# MolmoAct2 policy training defaults.
+# All fields map 1-to-1 to MolmoAct2Config dataclass fields (lerobot 0.6.0).
+# Override any field in training_config.yaml under policy_overrides:
+#
+# Architecture: AI2 MolmoAct2 VLA (converted HF checkpoint) with a
+# flow-matching action expert; discrete actions via the FAST tokenizer.
+# Inference fits ~12 GB in bf16; LoRA-VLM fine-tuning fits a 24 GB GPU.
+#
+# WEIGHTS: loaded via checkpoint_path below (original HF checkpoint) — NOT
+# via checkpoint.pretrained_path. Use checkpoint.pretrained_path /
+# policy.path semantics only for checkpoints previously saved by lerobot.
+
+policy_type: molmoact2
+
+# Original MolmoAct2 HF checkpoint to initialise from.
+checkpoint_path: "allenai/MolmoAct2"
+discrete_action_tokenizer: "allenai/MolmoAct2-FAST-Tokenizer"
+
+# --- Action chunking (HF LIBERO recipe uses 10/10) ---
+chunk_size: 10
+n_action_steps: 10
+n_obs_steps: 1
+
+# --- Action decoding ---
+# 'both' trains continuous (flow-matching) + discrete (FAST tokens) heads.
+action_mode: "both"
+num_flow_timesteps: 8
+# Released checkpoints are fixed at 32 padded action dims; robots with fewer
+# DOF are padded (and masked via mask_action_dim_padding).
+expected_max_action_dim: 32
+mask_action_dim_padding: true
+
+# --- Prompt conditioning (robot-specific; set in the training config) ---
+setup_type: ""
+control_mode: ""
+
+# --- Fine-tuning scope ---
+# Full fine-tune by default. For small datasets the HF docs recommend
+# enable_lora_vlm: true or train_action_expert_only: true, keeping the
+# action expert fully trainable in both cases (built-in LoRA — lerobot's
+# peft: section does not apply here).
+enable_lora_vlm: false
+lora_rank: 64
+lora_alpha: 16
+lora_dropout: 0.05
+train_action_expert_only: false
+freeze_embedding: true
+gradient_checkpointing: true
+
+# --- Precision ---
+model_dtype: "bfloat16"
+
+# --- Optimisation (policy preset, used when use_policy_training_preset: true) ---
+optimizer_lr: 1.0e-5
+optimizer_vit_lr: 5.0e-6
+optimizer_connector_lr: 5.0e-6
+optimizer_action_expert_lr: 5.0e-5
+optimizer_betas: [0.9, 0.95]
+optimizer_eps: 1.0e-6
+optimizer_weight_decay: 0.0
+optimizer_grad_clip_norm: 1.0
+
+# --- LR schedule ---
+scheduler_warmup_steps: 200
+scheduler_decay_steps: 100000
+scheduler_decay_lr: 1.0e-6

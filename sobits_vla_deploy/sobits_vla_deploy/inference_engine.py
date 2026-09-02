@@ -31,6 +31,7 @@ from time import monotonic
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES
 import torch
 
 try:
@@ -69,6 +70,7 @@ class InferenceEngine:
         model_use_relative_actions: bool,
         joint_features: List[str],
         mobile_base_features: List[str],
+        relative_exclude_features: Optional[List[str]] = None,
         logger=None,
     ):
         self.policy = policy
@@ -88,6 +90,7 @@ class InferenceEngine:
         self.model_use_relative_actions = model_use_relative_actions
         self.joint_features = joint_features
         self.mobile_base_features = mobile_base_features
+        self.relative_exclude_features = set(relative_exclude_features or [])
         self.logger = logger
 
         self.task_label = ''
@@ -97,6 +100,9 @@ class InferenceEngine:
         self.inference_cond = Condition()
         self.single_step_result: Optional[Dict[str, float]] = None
         self.single_step_lock = Lock()
+        # Bumped on every play toggle so results from a prior session's
+        # in-flight predict (e.g. raced by a STOP+reset) get discarded.
+        self.session_gen = 0
 
         self.latency_tracker = None
         if self.rtc_enabled and _RTC_AVAILABLE and LatencyTracker is not None:
@@ -104,12 +110,7 @@ class InferenceEngine:
             seed_latency = self.rtc_inference_delay / max(self.control_hz, 1.0)
             self.latency_tracker.add(seed_latency)
 
-        self._BASE_KEY_ALIASES: Dict[str, str] = {
-            'base_x': 'x.vel',
-            'base_y': 'y.vel',
-            'base_z': 'z.vel',
-            'base_theta': 'theta.vel',
-        }
+        self._BASE_KEY_ALIASES: Dict[str, str] = dict(BASE_KEY_ALIASES)
 
     def log_info(self, msg: str):
         if self.logger:
@@ -117,9 +118,13 @@ class InferenceEngine:
         else:
             print(f'[INFO] {msg}')
 
+    def log_debug(self, msg: str):
+        if self.logger:
+            self.logger.debug(msg)
+
     def log_warn(self, msg: str):
         if self.logger:
-            self.logger.warn(msg)
+            self.logger.warning(msg)
         else:
             print(f'[WARN] {msg}')
 
@@ -134,6 +139,10 @@ class InferenceEngine:
 
     def update_play_enabled(self, enabled: bool):
         with self.inference_cond:
+            # Bump only on a real transition: refill calls this every tick, and
+            # unconditional bumping livelocked (100ms tick < ~130ms inference).
+            if enabled != self.play_enabled:
+                self.session_gen += 1
             self.play_enabled = enabled
             self.inference_cond.notify_all()
 
@@ -145,13 +154,19 @@ class InferenceEngine:
         with self.single_step_lock:
             self.single_step_result = None
 
+    def pop_single_step_result(self) -> Optional[Dict[str, float]]:
+        """Atomically get-and-clear so a result can't be cleared unexecuted."""
+        with self.single_step_lock:
+            result = self.single_step_result
+            self.single_step_result = None
+            return result
+
     def start(
         self,
         obs_builder,
         chunk_buffer,
         tf_buffer,
-        ee_left_base_frame,
-        ee_left_target_frame,
+        ee_poses,
     ):
         self.chunk_buffer = chunk_buffer
         self.thread = Thread(
@@ -160,8 +175,7 @@ class InferenceEngine:
                 obs_builder,
                 chunk_buffer,
                 tf_buffer,
-                ee_left_base_frame,
-                ee_left_target_frame,
+                ee_poses,
             ),
             daemon=True,
         )
@@ -179,23 +193,21 @@ class InferenceEngine:
         obs_builder,
         chunk_buffer,
         tf_buffer,
-        ee_left_base_frame,
-        ee_left_target_frame,
+        ee_poses,
     ) -> None:
         import rclpy
 
-        # single_step_mode
         if self.single_step_mode:
             while rclpy.ok() and not self.shutdown_inference:
                 with self.inference_cond:
                     if not self.play_enabled:
                         self.inference_cond.wait(timeout=0.5)
                         continue
+                    gen = self.session_gen
 
                 obs_frame = obs_builder.snapshot_observation(
                     tf_buffer,
-                    ee_left_base_frame,
-                    ee_left_target_frame,
+                    ee_poses,
                     self.expected_state_dim,
                     self.model_action_feature_names,
                 )
@@ -219,11 +231,17 @@ class InferenceEngine:
                     continue
 
                 if steps:
+                    with self.inference_cond:
+                        if gen != self.session_gen:
+                            self.log_info(
+                                'Discarding stale single-step result from a '
+                                'previous play session.'
+                            )
+                            continue
                     with self.single_step_lock:
                         self.single_step_result = steps[0]
             return
 
-        # Default chunked mode
         while rclpy.ok() and not self.shutdown_inference:
             with self.inference_cond:
                 play = self.play_enabled
@@ -235,6 +253,7 @@ class InferenceEngine:
                     (self.async_enabled and queue_len <= threshold_len)
                     or (not self.async_enabled and queue_len == 0)
                 )
+                gen = self.session_gen
                 if not need_infer:
                     self.inference_cond.wait(timeout=0.5)
                     continue
@@ -242,8 +261,7 @@ class InferenceEngine:
             q_len_at_obs = chunk_buffer.size()
             obs_frame = obs_builder.snapshot_observation(
                 tf_buffer,
-                ee_left_base_frame,
-                ee_left_target_frame,
+                ee_poses,
                 self.expected_state_dim,
                 self.model_action_feature_names,
             )
@@ -269,6 +287,13 @@ class InferenceEngine:
                 continue
 
             if chunk:
+                with self.inference_cond:
+                    if gen != self.session_gen:
+                        self.log_info(
+                            'Discarding stale chunk from a previous play '
+                            'session (episode was reset mid-inference).'
+                        )
+                        continue
                 if self.rtc_enabled:
                     chunk_buffer.replace(raw_model_chunk, chunk, used_delay)
                 else:
@@ -414,26 +439,7 @@ class InferenceEngine:
             steps = steps[: self.actions_per_chunk]
 
         if manually_add_delta and steps:
-            has_absolute_step = False
-            try:
-                from sobits_vla_common.lerobot_adapter import AbsoluteActionsProcessorStep
-
-                if self.postprocessor is not None:
-                    has_absolute_step = any(
-                        isinstance(s, AbsoluteActionsProcessorStep)
-                        for s in self.postprocessor.steps
-                    )
-            except Exception:
-                pass
-
-            if not has_absolute_step:
-                for step in steps:
-                    for key in list(step.keys()):
-                        if (
-                            key in state_vector
-                            and key not in self.mobile_base_features
-                        ):
-                            step[key] = state_vector[key] + step[key]
+            self._apply_manual_delta(steps, state_vector)
 
         try:
             state_in = [float(v) for v in obs_frame.get('observation.state', [])]
@@ -451,12 +457,48 @@ class InferenceEngine:
                 names[i]: round(action_out[i], 4)
                 for i in range(min(len(names), len(action_out)))
             }
-            self.log_info('VLA DBG: state_in={}'.format(state_dict))
-            self.log_info('VLA DBG: action_out={}'.format(action_dict))
+            self.log_debug('VLA DBG: state_in={}'.format(state_dict))
+            self.log_debug('VLA DBG: action_out={}'.format(action_dict))
         except Exception:
             pass
 
         return steps, rtc_raw_model_chunk, inference_delay
+
+    def _apply_manual_delta(
+        self, steps: List[Dict[str, float]], state_vector: Dict[str, float]
+    ) -> None:
+        """
+        Add current state to model output in place.
+
+        For policies that predict deltas but ship no
+        AbsoluteActionsProcessorStep to do it themselves.
+
+        Skips mobile-base and relative_exclude features (e.g. a gripper),
+        which must stay absolute regardless of the policy's delta mode.
+        """
+        has_absolute_step = False
+        try:
+            from sobits_vla_common.lerobot_adapter import AbsoluteActionsProcessorStep
+
+            if self.postprocessor is not None:
+                has_absolute_step = any(
+                    isinstance(s, AbsoluteActionsProcessorStep)
+                    for s in self.postprocessor.steps
+                )
+        except Exception:
+            pass
+
+        if has_absolute_step:
+            return
+
+        for step in steps:
+            for key in list(step.keys()):
+                if (
+                    key in state_vector
+                    and key not in self.mobile_base_features
+                    and key not in self.relative_exclude_features
+                ):
+                    step[key] = state_vector[key] + step[key]
 
     def _to_action_steps(self, raw_actions: Any) -> List[Dict[str, float]]:
         action_keys = self.joint_features + self.mobile_base_features

@@ -36,20 +36,31 @@
 
     logging:
       enabled: false
-      log_dir: "/tmp/vla_logs"
-      tilt_threshold_deg: 30.0
-      episode_timeout_s: 60.0
-      lift_success_m: 0.05
-      fall_z_drop_m: 0.15
+      log_dir: ""
+
+    task:
+      # Selects which block below defines success.
+      mode: pick
+
+      common:
+        robot_model_name: sobit_home
+        tracked_model_name: box_to_pick
+        episode_timeout_s: 60.0
+        tilt_threshold_deg: 30.0
+        fall_z_drop_m: 0.15
+
+      # success_lift once tracked_model rises lift_success_m.
+      pick:
+        lift_success_m: 0.05
+
 
     robot:
       descriptor_id: sobit_home
-      active_groups:
-        - head
-        - body
-        - arm_left
-        - hand_left
-      active_cameras:
-        - head_camera
-        - hand_left_camera
-      active_mobile_base: true
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        # 19-dim pickup checkpoint (v1.1 data): the current robot has this
+        # joint but the model does not know it.
+        joints: ["arm_left_lower_flex_joint"]
+        cameras: ["hand_right_camera"]
+        ee_poses: ["right"]
+        mobile_base: false

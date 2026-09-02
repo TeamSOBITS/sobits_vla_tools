@@ -1,0 +1,160 @@
+/**:
+  ros__parameters:
+    # Gazebo scene reset only. Returning the robot to a named pose is handled
+    # by sobits_teleop (its poses-only <device>_vla.yaml profile).
+    #
+    # Orientation is roll/pitch/yaw in RADIANS; the node converts to the
+    # quaternion Gazebo wants. Each model takes a `pose` block (the nominal
+    # placement) and an optional `randomize` block giving [lo, hi] bounds
+    # sampled per reset and added to the matching pose field. Any of
+    # x/y/z/roll/pitch/yaw may be randomized.
+    world_reset:
+      world_name: "rcw2026_arena"
+      settle_s: 0.5
+      # Robot re-pose, published straight to the joint controllers before the
+      # teleports (arm reaction torque shoves the brake-less base, so posing
+      # afterwards would push it off target). Mirrors vla_pose_on_table in
+      # sobits_teleop config/sobit_home/quest_vla.yaml -- keep the two in sync.
+      # Omit reset_pose.groups to skip re-posing entirely.
+      # Absolute: this node runs un-namespaced, so a relative name resolves to
+      # /joint_states, where the robot publishes nothing.
+      joint_states_topic: "/sobit_home/joint_states"
+      reset_pose:
+        time_from_start: 3.0
+        # true: block until the arm stops moving (or wait_s elapses) before
+        # teleporting. false: teleport as soon as the trajectories are
+        # published -- faster, but arm reaction torque can shove the base off
+        # its target pose.
+        wait: true
+        wait_s: 4.0
+        groups: ["head", "body", "arm_left", "arm_right", "hand_left", "hand_right"]
+        head:
+          topic: "/sobit_home/head_position_controller/joint_trajectory"
+          joints: ["head_pan_joint", "head_tilt_joint"]
+          positions: [0.0, 0.0]
+        body:
+          topic: "/sobit_home/body_position_controller/joint_trajectory"
+          joints:    [ body_lift_joint ]
+          positions: [ 0.3             ]
+        arm_left:
+          topic: "/sobit_home/arm_left_position_controller/joint_trajectory"
+          joints: ["arm_left_shoulder_tilt_joint", "arm_left_upper_roll_joint",
+                   "arm_left_upper_flex_joint", "arm_left_elbow_joint",
+                   "arm_left_lower_flex_joint", "arm_left_wrist_tilt_joint",
+                   "arm_left_wrist_roll_joint"]
+          positions: [-0.75, -1.22, -0.2, 2.5, 0.0, 0.0, 0.0]
+        arm_right:
+          topic: "/sobit_home/arm_right_position_controller/joint_trajectory"
+          joints: [ arm_right_shoulder_tilt_joint, arm_right_upper_roll_joint,
+                    arm_right_upper_flex_joint,    arm_right_elbow_joint,
+                    arm_right_lower_flex_joint,    arm_right_wrist_tilt_joint,
+                    arm_right_wrist_roll_joint ]
+          positions: [ -0.75, -1.22, -0.2, 2.5, 0.0, 0.0, 0.0 ]
+        hand_left:
+          topic: "/sobit_home/hand_left_position_controller/joint_trajectory"
+          joints: ["hand_left_finger_c_mcp_joint", "hand_left_finger_c_ip_joint",
+                   "hand_left_finger_l_mcp_joint", "hand_left_finger_l_pip_joint",
+                   "hand_left_finger_l_dip_joint", "hand_left_finger_r_pip_joint",
+                   "hand_left_finger_r_dip_joint"]
+          positions: [-1.57, 0.0, -1.5707, 1.57, 0.0, -1.57, 0.0]
+        hand_right:
+          topic: "/sobit_home/hand_right_position_controller/joint_trajectory"
+          joints: ["hand_right_finger_c_mcp_joint", "hand_right_finger_c_ip_joint",
+                   "hand_right_finger_l_mcp_joint", "hand_right_finger_l_pip_joint",
+                   "hand_right_finger_l_dip_joint", "hand_right_finger_r_pip_joint",
+                   "hand_right_finger_r_dip_joint"]
+          positions: [1.57, 0.0, 1.57, 1.57, 0.0, -1.57, 0.0]
+      # Preset names; each needs a block below listing its models. Clients may
+      # override per call via the VlaResetWorld preset field.
+      presets: ["default", "can_on_shelf"]
+      # Preset used when a caller sends preset:"" (which every caller does
+      # unless it sets the field explicitly). Change this to switch scenes
+      # without touching any client; `ros2 param set` works at runtime too.
+      active_preset: "can_on_shelf"
+
+      default:
+        models: ["sobit_home", "pear", "bowl"]
+        # Robot 0.75 m in front of the pear on the laundry desk, facing +Y
+        # (yaw 90 deg). 0.63 m clear of the desk edge.
+        sobit_home:
+          pose:
+            x: -3.0
+            y: 3.60
+            z: 0.0
+            roll: 0.0
+            pitch: 0.0
+            yaw: 1.5708
+        # Desk top is z=0.7337. rcw26_pear and rcw26_bowl are RECENTRED local
+        # models: the origin is the body footprint centre on its base plane,
+        # so these poses address the visible object directly -- no
+        # back-correction, and yaw spins the body in place.
+        pear:
+          # Clearance radius (m) for randomized placement: a sample is
+          # redrawn while it lands within radius+other.radius of a model
+          # already placed this reset. 0 or absent = never blocks.
+          # Minimal enclosing radius about the (now centred) origin, measured
+          # from the collision mesh: yaw over +-pi sweeps exactly this circle.
+          radius: 0.0499
+          pose:
+            x: -3.0000
+            y: 4.3500
+            z: 0.7337
+          # Safe with the recentred models: yaw now spins the pear about its
+          # own body centre, and the radius guard redraws any xy sample that
+          # lands within radius+bowl.radius (0.1312 m) of the bowl.
+          randomize:
+            x: [-0.05, 0.05]
+            y: [-0.05, 0.05]
+            yaw: [-3.1416, 3.1416]
+        # 0.16 m from the pear along +X, on the same desk.
+        bowl:
+          # Mesh XY is 0.160 x 0.160 m -- effectively circular. Minimal
+          # enclosing radius about the recentred origin.
+          radius: 0.0813
+          pose:
+            x: -2.8400
+            y: 4.3501
+            z: 0.7337
+          randomize:
+            x: [-0.05, 0.05]
+            y: [-0.05, 0.05]
+
+      # Soup can on the bookshelf, robot standing in front of it. Poses read
+      # back from the live sim. kitchen_trashbin_1 is listed only to send it
+      # home to its world-file spot in the living room, in case an earlier
+      # preset or a GUI drag left it in the kitchen.
+      can_on_shelf:
+        models: ["sobit_home", "tomato_soup_can"]
+        sobit_home:
+          pose:
+            x: -3.5
+            y: 1.5
+            z: 0.0
+            roll: 0.0
+            pitch: 0.0
+            yaw: -1.57
+        # On the bookshelf board (bookshelf at -3.687, 0.309, yaw pi). The model
+        # was recentred on its own origin (ycb_010_tomato_soup_can/
+        # model-1_4.sdf), so x/y are the visible can and z is the board top --
+        # no mesh back-correction, and yaw spins the can in place.
+        #
+        # Board measured by bisecting the drop-settle boundary:
+        #   x -4.119 .. -3.316 (0.803 m), y +0.204 .. +0.438 (0.233 m)
+        # Centre is (-3.717, 0.321). Jitter below keeps the can body (r=0.034)
+        # about 3 cm clear of every edge; verified upright with no drift over
+        # the full range at random yaw.
+        tomato_soup_can:
+          radius: 0.034
+          pose:
+            x: -3.717
+            y: 0.321
+            z: 1.0584
+          # DISABLED: every episode starts at the nominal shelf pose above.
+          # The full +-0.30 m x span covers 0.60 m of a 0.80 m board, and
+          # cans drawn at the far end (x ~ -3.95, about 1 m from the bin) were
+          # never picked up at all, while near-end draws reached the bin --
+          # so the jitter mixed reachable and unreachable placements.
+          # randomize:
+          #   x: [-0.30, 0.30]
+          #   y: [-0.07, 0.07]
+          #   yaw: [-3.1416, 3.1416]

@@ -26,9 +26,10 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES
 import torch
 
 try:
@@ -54,7 +55,6 @@ class ObsBuilder:
         self.state_vector: Dict[str, float] = {
             feature: 0.0 for feature in self.joint_features
         }
-        # Include base features if present
         for feat in self.mobile_base_features:
             self.state_vector[feat] = 0.0
 
@@ -62,14 +62,9 @@ class ObsBuilder:
             cam_name: None for cam_name in self.camera_names
         }
         self.obs_features = None
-        self.prev_ee_pose_left = None
+        self.prev_ee_pose: Dict[str, Optional[np.ndarray]] = {}
 
-        self._BASE_KEY_ALIASES: Dict[str, str] = {
-            'base_x': 'x.vel',
-            'base_y': 'y.vel',
-            'base_z': 'z.vel',
-            'base_theta': 'theta.vel',
-        }
+        self._BASE_KEY_ALIASES: Dict[str, str] = dict(BASE_KEY_ALIASES)
 
     def update_joint_state(self, feature: str, value: float):
         with self.lock:
@@ -87,19 +82,19 @@ class ObsBuilder:
 
     def clear_prev_ee_pose(self):
         with self.lock:
-            self.prev_ee_pose_left = None
+            self.prev_ee_pose = {}
 
-    def _get_ee_pose_left(
-        self, tf_buffer, ee_left_base_frame, ee_left_target_frame
+    def get_ee_pose(
+        self, tf_buffer, base_frame, target_frame
     ) -> Optional[np.ndarray]:
-        """Return left EE pose as [x, y, z, roll, pitch, yaw] in base_footprint frame."""
+        """Return EE pose as [x, y, z, roll, pitch, yaw] in base_frame."""
         import rclpy.duration
         import rclpy.time
 
         try:
             t = tf_buffer.lookup_transform(
-                ee_left_base_frame,
-                ee_left_target_frame,
+                base_frame,
+                target_frame,
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.05),
             )
@@ -110,28 +105,22 @@ class ObsBuilder:
 
                 rpy = _R.from_quat([q.x, q.y, q.z, q.w]).as_euler('xyz')
             except ImportError:
-                import math as _math
+                from sobits_vla_common.geometry import quat_to_rpy
 
-                sinr = 2.0 * (q.w * q.x + q.y * q.z)
-                cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
-                roll = _math.atan2(sinr, cosr)
-                sinp = 2.0 * (q.w * q.y - q.z * q.x)
-                pitch = _math.asin(max(-1.0, min(1.0, sinp)))
-                siny = 2.0 * (q.w * q.z + q.x * q.y)
-                cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-                yaw = _math.atan2(siny, cosy)
-                rpy = [roll, pitch, yaw]
+                rpy = quat_to_rpy(q.x, q.y, q.z, q.w)
             return np.array(
                 [tx.x, tx.y, tx.z, rpy[0], rpy[1], rpy[2]], dtype=np.float32
             )
         except Exception:
             return None
 
+    # Deprecated alias, remove after one release; use get_ee_pose directly.
+    _get_ee_pose = get_ee_pose
+
     def snapshot_observation(
         self,
         tf_buffer,
-        ee_left_base_frame: str,
-        ee_left_target_frame: str,
+        ee_poses: List[Tuple[str, str, str]],
         expected_state_dim: Optional[int],
         model_action_feature_names: Optional[List[str]],
     ) -> Optional[Dict[str, Any]]:
@@ -160,22 +149,18 @@ class ObsBuilder:
 
         frame = build_dataset_frame(self.obs_features, obs, 'observation')
 
-        ee_pose = self._get_ee_pose_left(
-            tf_buffer, ee_left_base_frame, ee_left_target_frame
-        )
-        if ee_pose is not None:
-            frame['observation.ee_pose.left'] = ee_pose
-            frame['observation.ee_pose.left.delta'] = (
-                ee_pose - self.prev_ee_pose_left
-                if self.prev_ee_pose_left is not None
-                else np.zeros(6, dtype=np.float32)
-            )
-            self.prev_ee_pose_left = ee_pose.copy()
-        else:
-            frame['observation.ee_pose.left'] = np.zeros(6, dtype=np.float32)
-            frame['observation.ee_pose.left.delta'] = np.zeros(
-                6, dtype=np.float32
-            )
+        for name, source_frame, target_frame in ee_poses:
+            ee_pose = self.get_ee_pose(tf_buffer, target_frame, source_frame)
+            prev = self.prev_ee_pose.get(name)
+            if ee_pose is not None:
+                frame[f'observation.ee_pose.{name}'] = ee_pose
+                frame[f'observation.ee_pose.{name}.delta'] = (
+                    ee_pose - prev if prev is not None else np.zeros(6, dtype=np.float32)
+                )
+                self.prev_ee_pose[name] = ee_pose.copy()
+            else:
+                frame[f'observation.ee_pose.{name}'] = np.zeros(6, dtype=np.float32)
+                frame[f'observation.ee_pose.{name}.delta'] = np.zeros(6, dtype=np.float32)
 
         state_dim = (
             frame['observation.state'].shape[-1]

@@ -11,7 +11,7 @@
 
   <maintainer email="kvalentincardenas@gmail.com">VALENTIN Keith</maintainer>
 
-  <license>BSD</license>
+  <license>BSD-3-Clause</license>
 
   <url type="website">https://home.soka.ac.jp/~choi/index.html</url>
   <url type="repository">https://github.com/TeamSOBITS/sobits_vla_tools</url>
@@ -21,7 +21,7 @@
   <author email="kvalentincardenas@gmail.com">VALENTIN Keith</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  
+
   <depend>ament_index_python</depend>
   <depend>launch</depend>
   <depend>launch_ros</depend>
@@ -43,6 +43,7 @@
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

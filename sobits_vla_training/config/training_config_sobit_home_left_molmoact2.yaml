@@ -1,0 +1,98 @@
+/**:
+  ros__parameters:
+    # =========================================================================
+    # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — MolmoAct2
+    #
+    # Launch  : ros2 launch sobits_vla_training sobits_vla_training.launch.py robot:=sobit_home_left_molmoact2
+    # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
+    # Policy  : MolmoAct2 (AI2 VLA — flow-matching action expert + FAST
+    #           discrete tokens; released checkpoints pad actions to 32 dims)
+    # Base    : allenai/MolmoAct2, loaded via policy_overrides.checkpoint_path
+    # Recipe  : per HF molmoact2 docs — on small datasets keep the action expert
+    #           fully trainable and LoRA the VLM; fits 24 GB at bs 1-4.
+    # =========================================================================
+
+    policy: molmoact2
+
+    robot:
+      descriptor_id: sobit_home_v1_1
+      # exclude trims the shared descriptor to this task's subset.
+      # Unknown names raise.
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        cameras: ["hand_right_camera"]
+        # Dataset carries no EE-pose features.
+        ee_poses: [left, right]
+        mobile_base: false
+
+    dataset:
+      repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
+      num_workers: 12
+      rename_map: []
+
+    checkpoint:
+      output_dir: ""
+      resume: false
+      overwrite: true
+      # Empty on purpose: base weights come from policy_overrides.checkpoint_path.
+      # Set this only to resume from a checkpoint SAVED BY LEROBOT.
+      pretrained_path: ""
+      save_freq: 5000
+      save_checkpoint: true
+
+    training:
+      # HF LIBERO recipe is 10k steps at global batch 256; single-GPU trades
+      # batch for steps — start at 20k.
+      steps: 20000
+      # LoRA-VLM + both action modes: ~20-27 GB. Raise while VRAM allows.
+      batch_size: 4
+      seed: 1000
+      # MolmoAct2 preset: per-module LRs (VLM 1e-5, ViT/connector 5e-6,
+      # action expert 5e-5), grad_clip 1.0.
+      use_policy_training_preset: true
+      log_freq: 100
+      eval_steps: 0
+
+    num_gpus: 1
+
+    wandb:
+      enable: true
+      project: "sobits_vla_training"
+      entity: ""
+      run_name: "sobit_home-pickup_block-left-abs-molmoact2-vlmlora"
+      run_id: ""
+      mode: ""
+      notes: "MolmoAct2 LoRA-VLM fine-tune from allenai/MolmoAct2 on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm only)"
+      disable_artifact: true
+
+    hub:
+      push_to_hub: true
+      repo_id: "team-sobits/sobit_home_pickup_block_left_abs_molmoact2_vlmlora"
+      private: false
+
+    peft:
+      # No lerobot PEFT: MolmoAct2 ships its own LoRA (enable_lora_vlm below).
+      method_type: ""
+
+    policy_overrides:
+      checkpoint_path: "allenai/MolmoAct2"
+      # HF recipe chunking (10 steps = 1 s at 10 fps).
+      chunk_size: 10
+      n_action_steps: 10
+      action_mode: "both"
+      # Prompt conditioning baked into the token stream — describe the robot
+      # and control space in plain language.
+      setup_type: "single left-arm mobile manipulator SOBIT HOME in gazebo"
+      control_mode: "absolute joint position"
+      image_keys:
+        - "observation.images.head_camera"
+        - "observation.images.hand_left_camera"
+      # Small-dataset recipe: LoRA on the VLM, action expert fully trainable.
+      enable_lora_vlm: true
+      lora_rank: 64
+      lora_alpha: 16
+      lora_dropout: 0.05
+      gradient_checkpointing: true
+      freeze_embedding: true
+      model_dtype: "bfloat16"
+      num_flow_timesteps: 8

@@ -14,18 +14,13 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 
-find_package(sobits_vla_rosbag_collection REQUIRED)
-# find_package(sobits_vla_rosbag_conversion REQUIRED)
-# find_package(sobits_vla_training REQUIRED)
-# find_package(sobits_vla_deploy REQUIRED)
-find_package(sobits_vla_visualization REQUIRED)
+# Aggregator only: members are listed as <depend> in package.xml, which is what
+# orders the colcon build. find_package() here would add nothing, and the
+# ament_python members cannot be found that way at all.
 
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
-  set(ament_cmake_copyright_FOUND TRUE)
   # the following line skips cpplint (only works in a git repo)
   # comment the line when this package is in a git repo and when
   # a copyright and license is added to all source files

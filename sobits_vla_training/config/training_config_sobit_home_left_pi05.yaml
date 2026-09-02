@@ -1,60 +1,48 @@
 /**:
   ros__parameters:
     # =========================================================================
-    # sobits_vla_training — SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0.5
+    # SOBIT HOME "pickup_the_block" (Gazebo, left arm) — PI0.5
     #
     # Dataset : team-sobits/sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions)
-    # Policy  : PI0.5  (PaliGemma 2B + Gemma 300M action expert, flow matching)
-    # Robot   : SOBIT HOME — left arm only, 2 cameras (head + hand_left), mobile base
-    # DOF     : 19 (head×2 + body×1 + arm_left×6 + hand_left×7 + mobile_base [x,y,θ])
-    # GPU     : 32 GB VRAM
-    # VRAM    : ~20-21 GB estimated peak at batch_size=8, 2 cameras, bf16, chunk_size=50
+    # Policy  : PI0.5 (PaliGemma 2B + Gemma 300M action expert, flow matching)
+    # Robot   : left arm only, 2 cameras (head + hand_left), mobile base
+    # DOF     : 19 (head×2 + body×1 + arm_left×6 + hand_left×7 + base [x,y,θ])
+    # GPU     : 32 GB VRAM — see batch_size/gradient_checkpointing below
     # =========================================================================
 
     policy: pi05
 
     robot:
-      descriptor_id: sobit_home
-      active_groups:
-        - head
-        - body
-        - arm_left
-        - hand_left
-      active_cameras:
-        - head_camera
-        - hand_left_camera
-      active_mobile_base: true
+      descriptor_id: sobit_home_v1_1
+      # exclude trims the shared descriptor to this task's subset.
+      # Unknown names raise.
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        cameras: ["hand_right_camera"]
+        # Dataset carries no EE-pose features.
+        ee_poses: [left, right]
+        mobile_base: false
 
     # =========================================================================
     # Dataset
     # =========================================================================
     dataset:
-      # Local LeRobotDataset path (already downloaded from HuggingFace Hub).
       repo_id: "team-sobits/sobit_home-pickup_the_block-left-abs-gazebo"
-
-      # DataLoader workers — 4 is safe for 3-camera video datasets on this machine.
-      num_workers: 4
-
-      # Feature rename map — dataset keys already match PI0.5 conventions.
+      # Video decode is the bottleneck at native resolution — keep this high.
+      num_workers: 12
+      # Dataset keys already match PI0.5 conventions.
       rename_map: []
 
     # =========================================================================
     # Checkpoint / resume
     # =========================================================================
     checkpoint:
-      output_dir: "outputs/pi05_vlmlora"
-
-      # Set to true to continue an interrupted run from the last saved checkpoint.
+      output_dir: ""
       resume: false
-
-      # Set to true to delete output_dir before training (ignored when resume is true).
+      # Deletes output_dir before training (ignored when resume is true).
       overwrite: true
-
-      # Fine-tune from the official PI0.5 base weights.
-      # Set to a local path if you have already downloaded lerobot/pi05.
+      # Official PI0.5 base weights; a local path works too.
       pretrained_path: "lerobot/pi05_base"
-
-      # Save every 5 000 steps — frequent enough for a 101-episode dataset.
       save_freq: 5000
       save_checkpoint: true
 
@@ -62,33 +50,18 @@
     # Training loop
     # =========================================================================
     training:
-      # ~30 000 steps ≈ reasonable convergence for a 101-episode manipulation task.
+      # ~30k steps ≈ reasonable convergence for a 101-episode task.
       steps: 30000
-
-      # 32 GB RTX 5090 (shared with display) — pi05 activations ~1.1 GB/sample.
-      # NOTE: lerobot 0.5.1 has NO gradient accumulation — effective batch is
-      # exactly batch_size × num_gpus.
-      # batch_size=16 WITHOUT gradient checkpointing peaks ~29 GB → OOM risk;
-      # REQUIRES gradient_checkpointing: true below (peak ~23 GB, safe).
+      # pi05 activations ~1.1 GB/sample and lerobot has NO gradient
+      # accumulation, so batch 16 REQUIRES gradient_checkpointing below
+      # (~23 GB peak; without it ~29 GB → OOM on this 32 GB card).
       batch_size: 16
-
       seed: 1000
-
-      # Use PI0.5's built-in AdamW preset (lr=2.5e-5, weight_decay=0.01).
+      # PI0.5 preset: AdamW lr=2.5e-5, weight_decay=0.01.
       use_policy_training_preset: true
-
-      # Log every 100 steps.
       log_freq: 100
+      eval_steps: 0
 
-      # EFFECTIVELY DISABLED: lerobot's eval_freq only triggers gym-env
-      # rollouts (cfg.env), which is None for real-robot datasets. No eval
-      # runs during training.
-      eval_freq: 5000
-
-    # =========================================================================
-    # Multi-GPU
-    # =========================================================================
-    # Single laptop GPU.
     num_gpus: 1
 
     # =========================================================================
@@ -98,61 +71,44 @@
       enable: true
       project: "sobits_vla_training"
       entity: ""
-      run_name: "sobit_home-pickup_block-left-abs-pi05-vlmlora_test20"
+      run_name: "sobit_home-pickup_block-left-abs-pi05-vlmlora"
+      run_id: ""
+      mode: ""
       notes: "PI0.5 VLM-LoRA on sobit_home-pickup_the_block-left-abs-gazebo (10 fps, absolute actions, left arm, language_model adapters unfrozen)"
-      tags:
-        - pi05
-        - sobit_home
-        - task00
-        - absolute_actions
-        - left_arm
+      disable_artifact: true
 
     # =========================================================================
-    # HuggingFace Hub push
+    # HuggingFace Hub push — FINAL-step model + processors.
     # =========================================================================
     hub:
-      # Push the FINAL-step model (+ processors) to the Hub after training.
       push_to_hub: true
       repo_id: "team-sobits/sobit_home_pickup_block_left_abs_pi05_vlmlora"
       private: false
 
     # =========================================================================
-    # LoRA / PEFT — VLM-LoRA recipe
+    # LoRA / PEFT — VLM-LoRA recipe: adds adapters to the PaliGemma
+    # language_model attention (~3.2M trainable vs ~1.3M with pi05 defaults),
+    # letting the VLM adapt to the robot's visual domain without unfreezing it.
     # =========================================================================
-    # Extends the standard pi05 LoRA targets to also add adapters to the
-    # PaliGemma language_model attention layers (~3.2M trainable params vs
-    # ~1.3M with default targets). Lets the VLM adapt to the robot's visual
-    # domain without unfreezing the full backbone.
     peft:
       method_type: "LORA"
-
-      # Rank — r=16 is the recommended starting point for task adaptation.
+      # r=16 is the recommended start for task adaptation; alpha/r = 2.0.
       r: 16
-
-      # lora_alpha=32 gives a scaling factor of alpha/r = 2.0 (standard).
       lora_alpha: 32
-
-      # Light dropout to prevent overfitting on 101 episodes.
+      # Light dropout against overfitting on 101 episodes.
       lora_dropout: 0.05
-
-      # VLM-LoRA extended targets:
-      #   1. gemma_expert self_attn (q,v)_proj  — standard pi05 default
-      #   2. language_model self_attn (q,v)_proj — adds PaliGemma LM adapters
-      #   3. action_in_proj / action_out_proj / time_mlp_in / time_mlp_out
+      # Targets: gemma_expert self_attn (q,v)_proj (the pi05 default), plus
+      # language_model self_attn (q,v)_proj and the action/time projections.
       target_modules: "(.*\\.gemma_expert\\..*\\.self_attn\\.(q|v)_proj|.*\\.language_model\\..*\\.self_attn\\.(q|v)_proj|model\\.(action_in_proj|action_out_proj|time_mlp_in|time_mlp_out))"
-
-      # Modules to fully fine-tune alongside the LoRA adapters.
       full_training_modules: []
 
     # =========================================================================
-    # PI0.5 policy overrides
+    # PI0.5 policy overrides — these win over config/policies/pi05.yaml.
     # =========================================================================
-    # These override the base values in config/policies/pi05.yaml.
     policy_overrides:
 
       # --- Action chunking ---
-      # 50 steps at 10 fps = 5 s of predicted motion per inference call.
-      # Keep 50: pi05_base was pretrained with chunk_size=50.
+      # 50 @ 10 fps = 5 s per inference call; pi05_base was pretrained at 50.
       chunk_size: 50
       n_action_steps: 50
       n_obs_steps: 1
@@ -165,80 +121,57 @@
       # --- Flow matching ---
       num_inference_steps: 10
 
-      # --- Vision ---
-      # PI0.5 resizes all cameras to 224×224 internally.
+      # --- Vision --- (PI0.5 resizes all cameras to 224×224 internally)
       image_resolution:
         - 224
         - 224
-
-      # 2 physical cameras (head + hand_left) — no empty camera padding needed.
+      # 2 physical cameras — no empty-camera padding needed.
       empty_cameras: 0
 
-      # VLM-LoRA: language_model adapters are active so we signal intent to
-      # adapt the VLM — freeze_vision_encoder=false. The vision tower (SigLIP)
-      # itself still has no adapters and runs frozen; this flag is moot for
-      # SigLIP under LoRA but documents that VLM layers ARE being trained.
+      # Signals intent to adapt the VLM. SigLIP has no adapters and stays
+      # frozen regardless, so this is documentation more than behaviour.
       freeze_vision_encoder: false
 
-      # Memory/speed trade: recomputes activations in backward (~35% less VRAM,
-      # ~25% slower steps). Required at batch_size=16 on this 32 GB GPU
-      # (without it the realistic peak is ~29 GB + compile workspaces → OOM).
-      # Composes fine with compile_model (pi05 uses use_reentrant=False).
-      # At batch_size<=10 it can be turned off for faster steps.
+      # Recomputes activations in backward: ~35% less VRAM, ~25% slower steps.
+      # Required at batch 16 here; droppable at batch <= 10 for speed.
       gradient_checkpointing: true
 
-      # No effect under LoRA (VLM has no adapters and is frozen regardless);
-      # false matches the trained model's config. true would only add eval()
-      # mode on the VLM — harmless, pointless.
+      # No effect under LoRA (the VLM is frozen either way); false matches the
+      # trained model's config.
       train_expert_only: false
 
-      # MISLEADING NAME: use_peft does NOT mean "train with LoRA" — it means
-      # "the checkpoint at pretrained_path IS a PEFT adapter repo".
-      #   false → pretrained_path is loaded as full model weights (pi05_base: correct)
-      #   true  → factory.py reads adapter_config.json at pretrained_path, loads
-      #           the base model it references, and applies the adapter on top.
-      #           Use this only to CONTINUE training from a previous adapter.
-      # LoRA training is enabled by the peft: section above; after wrapping,
-      # lerobot flips config.use_peft to true automatically so the final Hub
-      # push uploads adapter files (pretrained.py:313, lerobot_train.py:549).
+      # MISLEADING NAME: use_peft means "pretrained_path IS a PEFT adapter
+      # repo", not "train with LoRA". false → pi05_base loads as full weights
+      # (correct here); true → only to CONTINUE from a previous adapter.
+      # LoRA training is switched on by the peft: section above, after which
+      # lerobot flips this to true so the Hub push uploads adapter files.
       use_peft: false
 
-      # Tokenizer context length (PI0.5 default is 200).
+      # PI0.5 default.
       tokenizer_max_length: 200
 
       # --- Relative actions ---
-      # Disabled: PI0.5 works in absolute joint-space for this task.
-      # The exclude list below only takes effect if use_relative_actions is
-      # ever enabled: base_x/base_y/base_theta are VELOCITIES and must never
-      # be delta-converted (matches the Jun 9 trained model's config).
-      # IMPORTANT (HF pi05 docs): enabling relative actions ALSO requires
-      # recomputing dataset stats in relative space first:
-      #   lerobot-edit-dataset --repo_id <ds> --operation.type recompute_stats \
-      #     --operation.relative_action true --operation.chunk_size 50 \
-      #     --operation.relative_exclude_joints "['base_x','base_y','base_theta']"
-      # Training relative actions against absolute-space q01/q99 stats (as the
-      # Jun 8 runs did) produces degenerate normalization and a broken policy.
+      # Disabled: absolute joint-space for this task. Enabling it ALSO requires
+      # recomputing dataset stats in relative space first (lerobot-edit-dataset
+      # --operation.type recompute_stats --operation.relative_action true ...),
+      # excluding base_x/base_y/base_theta which are VELOCITIES. Training
+      # relative actions against absolute-space stats yields a broken policy.
       use_relative_actions: false
 
       # --- Optimisation ---
-      # NOTE: these ARE used even with use_policy_training_preset: true —
-      # PI05Config.get_optimizer_preset()/get_scheduler_preset() read
-      # optimizer_* and scheduler_* fields from the policy config.
-      # LoRA LR: HF PEFT docs recommend ~10x the full-fine-tune LR (2.5e-5).
-      # 1e-4 (4x) is a conservative middle ground for the 2B+300M pi05 —
-      # full 10x (2.5e-4) risks instability with the larger expert.
+      # Used even with use_policy_training_preset: true — the preset getters
+      # read these optimizer_*/scheduler_* fields. LoRA LR 1e-4 is 4x the
+      # full-FT 2.5e-5; HF PEFT suggests up to 10x, but that risks instability
+      # with the larger expert.
       optimizer_lr: 1.0e-4
       optimizer_weight_decay: 0.01
       optimizer_grad_clip_norm: 1.0
 
-      # --- LR schedule ---
+      # --- LR schedule --- (keeps the ~1/10 peak-to-final ratio)
       scheduler_warmup_steps: 500
       scheduler_decay_steps: 30000
-      # Keep the ~1/10 peak-to-final ratio: 1e-4 -> 1e-5.
       scheduler_decay_lr: 1.0e-5
 
-      # DISABLED: Triton sm_120 (Blackwell / RTX 5090) crashes during VLM
-      # backward graph compilation when LoRA adapters touch language_model
-      # layers (triton_red_fused…native_dropout kernel). compile_model=false
-      # is required for the VLM-LoRA recipe on this GPU.
+      # DISABLED: Triton sm_120 (Blackwell / RTX 5090) crashes compiling the VLM
+      # backward when LoRA adapters touch language_model layers.
       compile_model: false
