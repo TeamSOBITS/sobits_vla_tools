@@ -130,6 +130,20 @@ class ObsBuilder:
     # Deprecated alias, remove after one release; use get_ee_pose directly.
     _get_ee_pose = get_ee_pose
 
+    def refresh_ee_state(self, tf_buffer) -> bool:
+        """
+        One-shot TF refresh of the ee.{name}.* state channels.
+
+        Snapshots only run while PLAY is enabled, so the engage path calls
+        this first -- otherwise the very first engage would seed zeros.
+        """
+        poses = self._read_ee_state_poses(tf_buffer)
+        if poses is None:
+            return False
+        with self.lock:
+            self._apply_ee_state_poses(poses)
+        return True
+
     def _read_ee_state_poses(self, tf_buffer) -> Optional[Dict[str, np.ndarray]]:
         """
         Look up each configured arm's EE pose via TF (unlocked -- may block).

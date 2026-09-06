@@ -104,16 +104,23 @@ class TestServoTargetPublisher:
 
     def test_publish_step_missing_key_arm_skipped(self):
         pub, bc, _publishers = _make_servo_publisher()
-        pub.engage({'ee.left.' + a: 0.0 for a in
-                    ['x', 'y', 'z', 'roll', 'pitch', 'yaw']})
+        pub.engage(_ee_axes('ee.left', z=0.5))
         pub.publish_step({'ee.left.x': 1.0}, now_msg='t0')  # missing other 5 keys
         assert bc.sent == []
 
+    def test_engage_all_zero_state_leaves_arm_disabled(self):
+        pub, bc, publishers = _make_servo_publisher()
+        pub.engage(_ee_axes('ee.left'))  # all-zero: EE state never measured
+        assert pub.engaged
+        assert 'left' not in pub._last_target
+        assert publishers['left'].published == []  # enable never latched true
+        pub.publish_step(_ee_axes('ee.left', x=0.4, z=0.3), now_msg='t0')
+        assert bc.sent == []  # unseeded arm broadcasts nothing
+
     def test_publish_step_clamps_linear_norm(self):
         pub, bc, _publishers = _make_servo_publisher(max_lin_step_m=0.03)
-        pub.engage({'ee.left.' + a: 0.0 for a in
-                    ['x', 'y', 'z', 'roll', 'pitch', 'yaw']})
-        step = _ee_axes('ee.left', x=1.0, y=0.0, z=0.0)  # huge jump
+        pub.engage(_ee_axes('ee.left', yaw=0.1))
+        step = _ee_axes('ee.left', x=1.0, yaw=0.1)  # huge translation jump
         pub.publish_step(step, now_msg='t0')
         assert len(bc.sent) == 1
         t = bc.sent[0].transform.translation
@@ -122,9 +129,8 @@ class TestServoTargetPublisher:
 
     def test_publish_step_clamps_per_axis_angular(self):
         pub, bc, _publishers = _make_servo_publisher(max_ang_step_rad=0.15)
-        pub.engage({'ee.left.' + a: 0.0 for a in
-                    ['x', 'y', 'z', 'roll', 'pitch', 'yaw']})
-        step = _ee_axes('ee.left', roll=1.0, pitch=-1.0, yaw=0.05)
+        pub.engage(_ee_axes('ee.left', x=0.4))
+        step = _ee_axes('ee.left', x=0.4, roll=1.0, pitch=-1.0, yaw=0.05)
         pub.publish_step(step, now_msg='t0')
         roll, pitch, yaw = pub._last_target['left'][3:]
         assert abs(roll - 0.15) < 1e-9

@@ -490,6 +490,21 @@ class LeRobotDeployNode(Node):
             logger=self.get_logger(),
         )
 
+    def _refresh_and_engage_servo(self) -> None:
+        """
+        Refresh EE state via TF, then engage the servo targets.
+
+        Snapshots only run while PLAY is on, so without this the first
+        engage of a session would see the zero-initialized EE state and
+        (correctly) refuse to enable the arm.
+        """
+        if not self._obs_builder.refresh_ee_state(self._tf_buffer):
+            self.get_logger().warning(
+                'EE state TF refresh failed at engage -- arms with no prior '
+                'measurement stay disabled until the trigger is re-pressed.'
+            )
+        self._servo_targets.engage(self._obs_builder.state_vector)
+
     def _init_logging(self) -> None:
         self._episode_logger = EpisodeLogger(
             log_dir=self._log_dir,
@@ -1070,7 +1085,7 @@ class LeRobotDeployNode(Node):
         if self._servo_targets is not None and not self._safety_enabled:
             # With a deadman trigger, engagement happens on first press instead
             # (see _publish_next_action) -- PLAY alone must not move the arm.
-            self._servo_targets.engage(self._obs_builder.state_vector)
+            self._refresh_and_engage_servo()
         Thread(target=self._do_begin_episode, daemon=True).start()
         return True
 
@@ -1259,7 +1274,7 @@ class LeRobotDeployNode(Node):
                 self._interpolator.reset()
                 self._safety_was_pressed = True
                 if self._servo_targets is not None:
-                    self._servo_targets.engage(self._obs_builder.state_vector)
+                    self._refresh_and_engage_servo()
                 if self._episode_t0 is None:
                     # Deferred episode clock: timing/timeout start now, not
                     # while the scene was staged with the trigger released.

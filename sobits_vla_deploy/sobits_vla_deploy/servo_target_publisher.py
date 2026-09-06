@@ -91,12 +91,15 @@ class ServoTargetPublisher:
                 continue
             values = [float(state_vector[k]) for k in keys]
             if all(v == 0.0 for v in values):
+                # Fail toward "arm does not move": an all-zero pose means the
+                # EE state was never measured -- enabling would servo to origin.
                 self._warn(
                     'ServoTargetPublisher.engage: state_vector for arm {!r} is '
-                    'all-zero (uninitialized?) -- seeding anyway.'.format(
+                    'all-zero (EE state never measured) -- arm left disabled.'.format(
                         spec.ee_pose
                     )
                 )
+                continue
             self._last_target[spec.ee_pose] = values
 
             pub = self.enable_publishers.get(spec.ee_pose)
@@ -112,8 +115,12 @@ class ServoTargetPublisher:
             keys = [f'ee.{spec.ee_pose}.{ax}' for ax in EE_ACTION_AXES]
             if any(k not in step for k in keys):
                 continue
+            prev = self._last_target.get(spec.ee_pose)
+            if prev is None:
+                # Never seeded (engage skipped it) => enable was never latched
+                # true for this arm; broadcasting targets would be dead weight.
+                continue
             target = [float(step[k]) for k in keys]
-            prev = self._last_target.get(spec.ee_pose, target)
             clamped = self._clamp_target(prev, target)
             self._last_target[spec.ee_pose] = clamped
             self._broadcast(spec, clamped, now_msg)
