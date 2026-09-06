@@ -34,7 +34,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
-from sobits_vla_deploy.deploy_node import ActionChunkBuffer  # noqa: E402
+from sobits_vla_deploy.deploy_node import ActionChunkBuffer, LeRobotDeployNode  # noqa: E402
 from sobits_vla_deploy.episode_logger import EpisodeLogger  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
 
@@ -564,3 +564,14 @@ class TestEvaluateTerminationPlace:
         _set_poses(logger, block=_pose(x=9.0, y=9.0, z=0.0))
         outcome = logger.evaluate_termination(elapsed_sim_s=50.0)  # under the 60s timeout
         assert outcome is None
+
+
+class TestCheckNoDeprecatedExcludeEEPoses:
+    """Pure staticmethod -- no Node instance needed."""
+
+    def test_old_key_set_raises(self):
+        with pytest.raises(ValueError, match='robot.exclude.ee_poses was renamed'):
+            LeRobotDeployNode._check_no_deprecated_exclude_ee_poses(['right'])
+
+    def test_old_key_empty_is_allowed(self):
+        LeRobotDeployNode._check_no_deprecated_exclude_ee_poses([])

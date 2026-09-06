@@ -50,7 +50,7 @@
     exclude:
       groups: []
       cameras: []
-      ee_poses: []
+      ee: []
 
     # `primary` - sync trigger camera; a new frame is assembled each time an
     #             image arrives from it. Empty = first active camera in the

@@ -58,4 +58,4 @@
       exclude:
         groups: [arm_left, arm_right, hand_right]
         cameras: [hand_right_camera]
-        ee_poses: [right]
+        ee: [right]

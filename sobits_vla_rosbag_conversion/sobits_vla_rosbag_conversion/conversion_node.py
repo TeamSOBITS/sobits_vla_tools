@@ -95,8 +95,13 @@ _SCHEMA = {
     'exclude': {
         'groups': P(['']),
         'cameras': P(['']),
-        'ee_poses': P(['']),
+        'ee': P(['']),
         'joints': P(['']),
+        # Deprecated: renamed to 'ee' above. rclpy silently ignores yaml
+        # params that were never declared, so an old config with ee_poses:
+        # here would silently stop excluding -- declared and rejected loudly
+        # in __init__ instead.
+        'ee_poses': P(['']),
     },
     'cameras': {
         'primary': P(''),
@@ -142,6 +147,13 @@ def _build_camera_maps(sensors: dict):
 
 
 class RosbagConversionNode(Node):
+
+    @staticmethod
+    def _check_deprecated_params(params) -> None:
+        """Reject a non-empty exclude.ee_poses -- renamed to exclude.ee."""
+        if params.exclude.ee_poses:
+            raise ValueError('exclude.ee_poses was renamed to exclude.ee')
+
     def __init__(self):
         super().__init__('rosbag_conversion_node')
 
@@ -157,6 +169,7 @@ class RosbagConversionNode(Node):
 
         declare_from_schema(self, _SCHEMA)
         params = read_schema(self, _SCHEMA)
+        self._check_deprecated_params(params)
 
         self.rosbag_directory = params.rosbag_directory
         self.recorded_bags_meta_file = params.recorded_bags_meta_file
@@ -198,7 +211,7 @@ class RosbagConversionNode(Node):
         desc = desc.filtered(
             exclude_groups=params.exclude.groups,
             exclude_cameras=params.exclude.cameras,
-            exclude_ee_poses=params.exclude.ee_poses,
+            exclude_ee=params.exclude.ee,
             exclude_joints=params.exclude.joints,
         )
 
@@ -207,7 +220,7 @@ class RosbagConversionNode(Node):
         # Catches groups omitted entirely, which all_excluded_ros_names above misses.
         self.active_ros_names = set(desc.active_ros_names)
 
-        # Driven purely by exclude.ee_poses: emitted when any frame survives,
+        # Driven purely by exclude.ee: emitted when any frame survives,
         # skipped when all are excluded.
         if desc.ee_poses:
             self.ee_pose_enabled = True
@@ -299,7 +312,7 @@ class RosbagConversionNode(Node):
         except ValueError as exc:
             raise ValueError(
                 f'{exc} (an ee_actions arm must have a surviving ee_poses entry -- '
-                'check exclude.ee_poses.)'
+                'check exclude.ee.)'
             ) from exc
 
         excluded_groups = set(params.exclude.groups)

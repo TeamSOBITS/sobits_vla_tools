@@ -28,7 +28,7 @@ Schema-driven (`_SCHEMA` in `conversion_node.py`, no dynamic sections):
 `rosbag_directory`, `recorded_bags_meta_file`, `dataset_name`,
 `output_directory`, `fps`, `vcodec`, `sync_threshold`,
 `downsample_tolerance`, `push_to_hub`, `use_relative_actions`,
-`skip_static_threshold`, `exclude.{groups,cameras,ee_poses}` (trims the
+`skip_static_threshold`, `exclude.{groups,cameras,ee}` (trims the
 shared descriptor), `cameras.primary`, `robot_descriptor_id`. See
 `sobits_vla_rosbag_conversion/sobits_vla_rosbag_conversion/conversion_node.py:77`.
 

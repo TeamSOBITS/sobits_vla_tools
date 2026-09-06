@@ -693,14 +693,21 @@ class LeRobotDeployNode(Node):
         # names raise, so a typo fails loudly instead of running a wrong body.
         self.declare_parameter('robot.exclude.groups', [''])
         self.declare_parameter('robot.exclude.cameras', [''])
-        self.declare_parameter('robot.exclude.ee_poses', [''])
+        self.declare_parameter('robot.exclude.ee', [''])
         self.declare_parameter('robot.exclude.joints', [''])
         self.declare_parameter('robot.exclude.mobile_base', False)
+
+        # Deprecated: robot.exclude.ee_poses was renamed to robot.exclude.ee.
+        # rclpy silently ignores yaml params that were never declared, so an
+        # old config setting exclude.ee_poses would otherwise stop excluding
+        # without warning -- declare it and reject it loudly instead.
+        self.declare_parameter('robot.exclude.ee_poses', [''])
+        self._check_no_deprecated_exclude_ee_poses(self._str_list('robot.exclude.ee_poses'))
 
         desc = desc.filtered(
             exclude_groups=self._str_list('robot.exclude.groups'),
             exclude_cameras=self._str_list('robot.exclude.cameras'),
-            exclude_ee_poses=self._str_list('robot.exclude.ee_poses'),
+            exclude_ee=self._str_list('robot.exclude.ee'),
             exclude_joints=self._str_list('robot.exclude.joints'),
         )
         active_groups_list = [g.name for g in desc.active_groups]
@@ -794,7 +801,7 @@ class LeRobotDeployNode(Node):
             raise RuntimeError(
                 'model.action_space is "ee" but no ee_control spec survived '
                 'robot.exclude filtering -- nothing to servo. Check '
-                "robot.exclude.ee_poses against the descriptor's ee_control list."
+                "robot.exclude.ee against the descriptor's ee_control list."
             )
         still_active = [c.group for c in self._ee_control if c.group in active_groups_list]
         if still_active:
@@ -883,6 +890,14 @@ class LeRobotDeployNode(Node):
         """Read a string-array parameter, dropping the empty-default sentinel."""
         raw = self.get_parameter(name).get_parameter_value().string_array_value
         return [s for s in raw if s]
+
+    @staticmethod
+    def _check_no_deprecated_exclude_ee_poses(old_key_values: List[str]) -> None:
+        """Reject a non-empty robot.exclude.ee_poses; pure logic, no Node needed."""
+        if old_key_values:
+            raise ValueError(
+                'robot.exclude.ee_poses was renamed to robot.exclude.ee'
+            )
 
     def _on_set_parameters(self, params: List[Any]) -> Any:
         from rcl_interfaces.msg import SetParametersResult

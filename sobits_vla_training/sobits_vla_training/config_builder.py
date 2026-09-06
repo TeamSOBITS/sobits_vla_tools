@@ -192,13 +192,20 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
 
     desc_id = params.get('robot.descriptor_id', '')
     if desc_id:
+        # Deprecated: robot.exclude.ee_poses was renamed to robot.exclude.ee.
+        # rclpy silently ignores yaml params that were never declared, so an
+        # old config setting exclude.ee_poses would otherwise stop excluding
+        # without warning -- reject it loudly instead.
+        if params.get('robot.exclude.ee_poses', []):
+            raise ValueError('robot.exclude.ee_poses was renamed to robot.exclude.ee')
+
         from sobits_vla_common.robot_descriptor import load_robot_descriptor
         desc = load_robot_descriptor(desc_id)
 
         desc = desc.filtered(
             exclude_groups=params.get('robot.exclude.groups', []),
             exclude_cameras=params.get('robot.exclude.cameras', []),
-            exclude_ee_poses=params.get('robot.exclude.ee_poses', []),
+            exclude_ee=params.get('robot.exclude.ee', []),
             exclude_joints=params.get('robot.exclude.joints', []),
         )
         active_groups = [g.name for g in desc.active_groups]

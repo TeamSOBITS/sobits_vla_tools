@@ -37,7 +37,7 @@
     exclude:
       groups: []
       cameras: []
-      ee_poses: []
+      ee: []
 
     # primary = sync trigger camera (one frame assembled per primary image).
     # Names and compression come from the descriptor's active cameras.

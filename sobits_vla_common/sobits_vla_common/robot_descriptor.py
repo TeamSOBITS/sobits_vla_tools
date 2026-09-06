@@ -207,7 +207,7 @@ class RobotDescriptor:
         self,
         exclude_groups: Optional[List[str]] = None,
         exclude_cameras: Optional[List[str]] = None,
-        exclude_ee_poses: Optional[List[str]] = None,
+        exclude_ee: Optional[List[str]] = None,
         exclude_joints: Optional[List[str]] = None,
     ) -> 'RobotDescriptor':
         """
@@ -225,7 +225,7 @@ class RobotDescriptor:
         """
         ex_g = list(exclude_groups or [])
         ex_c = list(exclude_cameras or [])
-        ex_e = list(exclude_ee_poses or [])
+        ex_e = list(exclude_ee or [])
         ex_j = list(exclude_joints or [])
         if not (ex_g or ex_c or ex_e or ex_j):
             return self

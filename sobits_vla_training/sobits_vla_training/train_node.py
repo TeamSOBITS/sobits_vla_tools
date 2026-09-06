@@ -168,9 +168,14 @@ _SCHEMA = {
         'exclude': {
             'groups': P(['']),
             'cameras': P(['']),
-            'ee_poses': P(['']),
+            'ee': P(['']),
             'joints': P(['']),
             'mobile_base': P(False, descriptor=_pd('Exclude the mobile base')),
+            # Deprecated: renamed to 'ee' above. rclpy silently ignores yaml
+            # params that were never declared, so an old config with
+            # ee_poses: here would silently stop excluding -- declared and
+            # rejected loudly in config_builder/preflight instead.
+            'ee_poses': P(['']),
         },
         # ee_pose names whose EE channels (ee.<name>.{x,y,z,roll,pitch,yaw})
         # replace joint features in the dataset; empty = joint mode.

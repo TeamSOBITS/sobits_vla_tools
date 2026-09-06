@@ -655,7 +655,7 @@ class TestEEControlValidation:
 
     def test_filtered_drops_ee_control_when_ee_pose_excluded(self):
         desc = self._descriptor()
-        filtered = desc.filtered(exclude_ee_poses=['left'])
+        filtered = desc.filtered(exclude_ee=['left'])
         with pytest.raises(ValueError):
             filtered.ee_control_for(['left'])
 
@@ -769,6 +769,25 @@ class TestResolveEEActionsValidation:
         params = self._params(exclude_groups=['arm_left'])
         RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
         assert node.ee_frame == 'base'
+
+
+@skip_no_rclpy
+class TestDeprecatedExcludeEEPoses:
+    """_check_deprecated_params is a staticmethod; no ROS node needed."""
+
+    def _params(self, ee_poses=()):
+        return types.SimpleNamespace(
+            exclude=types.SimpleNamespace(ee_poses=list(ee_poses)),
+        )
+
+    def test_old_key_set_raises(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        with pytest.raises(ValueError, match='exclude.ee_poses was renamed'):
+            RosbagConversionNode._check_deprecated_params(self._params(ee_poses=['left']))
+
+    def test_old_key_empty_is_allowed(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        RosbagConversionNode._check_deprecated_params(self._params(ee_poses=[]))
 
 
 if __name__ == '__main__':

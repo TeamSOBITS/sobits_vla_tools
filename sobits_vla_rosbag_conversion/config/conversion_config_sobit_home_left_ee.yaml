@@ -44,9 +44,9 @@
     exclude:
       groups: ["arm_left", "arm_right", "hand_right"]
       cameras: ["hand_right_camera"]
-      ee_poses: ["right"]
+      ee: ["right"]
 
-    # EE poses follow exclude.ee_poses above: emitted when any frame survives,
+    # EE poses follow exclude.ee above: emitted when any frame survives,
     # skipped when all are excluded. Exclude every name to drop them entirely.
 
     # Synthesize absolute EE pose actions from offline TF for the left arm,

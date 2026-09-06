@@ -24,7 +24,7 @@
       exclude:
         groups: ["arm_left", "arm_right", "hand_right"]
         cameras: ["hand_right_camera"]
-        ee_poses: ["right"]
+        ee: ["right"]
         mobile_base: false
       # left ee_pose's 6 EE channels replace arm_left's joint features.
       ee_action_arms: ["left"]
