@@ -175,22 +175,21 @@ groups:
     joints:
       - ros_name: shoulder_r
         feature: shoulder_r
-ee_poses:
+ee:
   - name: left
-    source_frame: hand_left_link
-    target_frame: base_footprint
+    ee_link: hand_left_link
+    reference_frame: base_footprint
+    control:
+      group: arm_left
+      command_frame: left_target_link
+      enable_topic: arm_left/moveit_track_enabled
   - name: right
-    source_frame: hand_right_link
-    target_frame: base_footprint
-ee_control:
-  - ee_pose: left
-    group: arm_left
-    target_frame: left_target_link
-    enable_topic: arm_left/moveit_track_enabled
-  - ee_pose: right
-    group: arm_right
-    target_frame: right_target_link
-    enable_topic: arm_right/moveit_track_enabled
+    ee_link: hand_right_link
+    reference_frame: base_footprint
+    control:
+      group: arm_right
+      command_frame: right_target_link
+      enable_topic: arm_right/moveit_track_enabled
 """
 
 
@@ -213,11 +212,73 @@ def test_ee_control_parses_from_yaml():
 
 
 def test_ee_control_missing_key_defaults_to_empty_list():
-    text = _MINIMAL_YAML.split('ee_control:')[0]
+    text = _MINIMAL_YAML.split('ee:')[0]
     with tempfile.TemporaryDirectory() as tmp:
         path = _write_yaml(tmp, text)
         desc = _parse_descriptor_file(path)
     assert desc.ee_control == []
+    assert desc.ee_poses is None
+
+
+def test_ee_missing_key_yields_none_poses_and_empty_control():
+    """No 'ee:' key at all -> ee_poses stays None, ee_control stays []."""
+    text = _MINIMAL_YAML.split('ee:')[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        desc = _parse_descriptor_file(path)
+    assert desc.ee_poses is None
+    assert desc.ee_control == []
+
+
+def test_ee_empty_list_yields_empty_poses_and_empty_control():
+    text = _MINIMAL_YAML.split('ee:')[0] + 'ee: []\n'
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        desc = _parse_descriptor_file(path)
+    assert desc.ee_poses == []
+    assert desc.ee_control == []
+
+
+def test_ee_entry_without_control_parses_pose_only():
+    text = _MINIMAL_YAML.split('ee:')[0] + """ee:
+  - name: left
+    ee_link: hand_left_link
+    reference_frame: base_footprint
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        desc = _parse_descriptor_file(path)
+    assert len(desc.ee_poses) == 1
+    left = desc.ee_poses[0]
+    assert left.name == 'left'
+    assert left.source_frame == 'hand_left_link'
+    assert left.target_frame == 'base_footprint'
+    assert desc.ee_control == []
+
+
+def test_old_ee_poses_key_raises_value_error():
+    text = _MINIMAL_YAML.split('ee:')[0] + """ee_poses:
+  - name: left
+    source_frame: hand_left_link
+    target_frame: base_footprint
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        with pytest.raises(ValueError, match="removed 'ee_poses'"):
+            _parse_descriptor_file(path)
+
+
+def test_old_ee_control_key_raises_value_error():
+    text = _MINIMAL_YAML.split('ee:')[0] + """ee_control:
+  - ee_pose: left
+    group: arm_left
+    target_frame: left_target_link
+    enable_topic: arm_left/moveit_track_enabled
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        with pytest.raises(ValueError, match="removed 'ee_poses'"):
+            _parse_descriptor_file(path)
 
 
 def test_ee_control_validate_unknown_ee_pose():

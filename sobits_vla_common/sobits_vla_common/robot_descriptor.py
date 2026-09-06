@@ -129,7 +129,7 @@ class EEPoseSpec:
 
 @dataclass
 class EEControlSpec:
-    ee_pose: str        # references an ee_poses[].name ('left'/'right')
+    ee_pose: str        # references an ee[].name ('left'/'right')
     group: str          # joint group superseded by servo control ('arm_left')
     target_frame: str   # TF child frame streamed to the servo bridge
     enable_topic: str   # relative topic, e.g. 'arm_left/moveit_track_enabled'
@@ -385,27 +385,32 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
         else:
             sensors[s_type] = s_list
 
-    ee_poses = None
-    ee_list = data.get('ee_poses')
-    if ee_list:
-        ee_poses = [
-            EEPoseSpec(
-                name=e['name'],
-                source_frame=e['source_frame'],
-                target_frame=e['target_frame']
-            )
-            for e in ee_list
-        ]
-
-    ee_control = [
-        EEControlSpec(
-            ee_pose=c['ee_pose'],
-            group=c['group'],
-            target_frame=c['target_frame'],
-            enable_topic=c['enable_topic'],
+    if 'ee_poses' in data or 'ee_control' in data:
+        raise ValueError(
+            "descriptor uses removed 'ee_poses'/'ee_control' blocks; migrate "
+            "to the merged 'ee:' block (name/ee_link/reference_frame + "
+            'optional control.group/command_frame/enable_topic)'
         )
-        for c in (data.get('ee_control') or [])
-    ]
+
+    ee_poses = None
+    ee_control = []
+    ee_list = data.get('ee')
+    if ee_list is not None:
+        ee_poses = []
+        for e in ee_list:
+            ee_poses.append(EEPoseSpec(
+                name=e['name'],
+                source_frame=e['ee_link'],
+                target_frame=e['reference_frame'],
+            ))
+            c = e.get('control')
+            if c:
+                ee_control.append(EEControlSpec(
+                    ee_pose=e['name'],
+                    group=c['group'],
+                    target_frame=c['command_frame'],
+                    enable_topic=c['enable_topic'],
+                ))
 
     return RobotDescriptor(
         robot_id=data['robot_id'],
@@ -505,8 +510,10 @@ def validate_descriptor(desc: RobotDescriptor) -> List[str]:
                     'compressed_topic or raw_topic defined.'
                 )
 
-    # 4. ee_control specs must reference real ee_poses/groups, non-empty
-    # frame/topic, and not double-claim an ee_pose or a group.
+    # 4. ee_control specs must reference real ee poses/groups, non-empty
+    # frame/topic, and not double-claim an ee_pose or a group. Unreachable
+    # via yaml today (control is nested under its ee[] entry) but kept for
+    # dataclasses constructed directly.
     known_ee = {e.name for e in (desc.ee_poses or [])}
     known_groups = {g.name for g in desc.groups}
     ee_poses_seen = []

@@ -147,11 +147,11 @@ def generate_descriptor_yaml(
 
     yaml_lines.extend([
         '',
-        '# ── End-effector TF poses ─────────────────────────────────────',
-        'ee_poses:',
+        '# ── End effectors ──────────────────────────────────────────────',
+        'ee:',
         '  - name: left  # TODO: Verify name',
-        '    source_frame: hand_left_end_effector_link  # TODO: Verify source frame',
-        '    target_frame: base_footprint  # TODO: Verify target frame',
+        '    ee_link: hand_left_end_effector_link  # TODO: Verify ee_link',
+        '    reference_frame: base_footprint  # TODO: Verify reference_frame',
         '',
         '# ── Excluded joints ──────────────────────────────────────────',
         'excluded_joints:',
