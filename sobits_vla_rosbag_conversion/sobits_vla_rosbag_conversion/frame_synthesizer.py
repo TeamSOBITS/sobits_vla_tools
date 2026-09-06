@@ -55,6 +55,7 @@ class FrameSynthesizer:
         camera_topics: dict,
         subtask_label_to_idx: dict,
         depth_camera_topics: dict | None = None,
+        ee_action_specs: list = [],
         logger=None,
     ):
         self.fps = fps
@@ -72,6 +73,7 @@ class FrameSynthesizer:
         self.camera_topics = camera_topics
         self.depth_camera_topics = depth_camera_topics or {}
         self.subtask_label_to_idx = subtask_label_to_idx
+        self.ee_action_specs = ee_action_specs
         self.logger = logger
 
     def log_warn(self, msg: str):
@@ -98,6 +100,7 @@ class FrameSynthesizer:
         last_frame_time = 0.0
         min_frame_interval = 1.0 / self.fps if self.fps > 0 else 0.0
         prev_ee_poses = {name: None for name, _, _ in self.ee_configs}
+        prev_ee_action_poses = {name: None for name, _, _ in self.ee_action_specs}
         tf_tree = ctx['tf_tree']
 
         # Inner bar: frames within the current episode; leave=False keeps the
@@ -128,10 +131,10 @@ class FrameSynthesizer:
             image_times.update(depth_times)
 
             frame_data = self._build_frame_core(
-                t_sec, image_times, ctx, sync_deltas, instruction
+                t_sec, image_times, ctx, sync_deltas, instruction,
+                tf_tree, prev_ee_action_poses, counters,
             )
             if frame_data is None:
-                counters['static'] += 1
                 continue
 
             state, action, frame = frame_data
@@ -225,7 +228,10 @@ class FrameSynthesizer:
         image_times.update(secondary_times)
         return images, image_times, False
 
-    def _build_frame_core(self, t_sec, image_times, ctx, sync_deltas, instruction):
+    def _build_frame_core(
+        self, t_sec, image_times, ctx, sync_deltas, instruction,
+        tf_tree=None, prev_ee_action_poses=None, counters=None,
+    ):
         img_times = list(image_times.values())
         max_camera_diff = max(img_times) - min(img_times)
 
@@ -255,6 +261,7 @@ class FrameSynthesizer:
         if self.skip_static_threshold > 0.0:
             joint_vel_vals = [joint_vel[f] for f in self.action_features]
             if not np.any(np.abs(joint_vel_vals) > self.skip_static_threshold):
+                counters['static'] += 1
                 return None
 
         state = [joint_pos[feat] for feat in self.action_features]
@@ -264,6 +271,14 @@ class FrameSynthesizer:
         )
         if self.use_relative_actions:
             action = sync_joints.to_relative_action(action, state)
+
+        if self.ee_action_specs:
+            ok = self._append_ee_channels(
+                state, action, tf_tree, t_sec, prev_ee_action_poses, counters
+            )
+            if not ok:
+                return None
+
         if self.has_mobile_base:
             state = state + list(odom_vel)
             action = action + list(cmd_vel)
@@ -274,6 +289,30 @@ class FrameSynthesizer:
             'observation.state': torch.tensor(state, dtype=torch.float32),
         }
         return state, action, frame
+
+    def _append_ee_channels(
+        self, state, action, tf_tree, t_sec, prev_ee_action_poses, counters
+    ) -> bool:
+        """Extend state/action in place with EE state/action pose6 per spec; False = skip frame."""
+        t_ns = int(t_sec * 1e9)
+        for spec in self.ee_action_specs:
+            name, ee_src, ee_tgt = spec
+            result = sync_poses.synthesize_ee_action(
+                tf_tree, ee_src, ee_tgt, t_ns, self.fps, prev_ee_action_poses[name]
+            )
+            if result is None:
+                counters['tf'] += 1
+                if counters['tf'] <= 5:
+                    self.log_warn(
+                        f"EE action TF lookup failed: '{ee_src}' -> '{ee_tgt}' "
+                        f'at t={t_sec:.3f}s. Skipping frame.'
+                    )
+                return False
+            state_pose, action_pose = result
+            state.extend(state_pose.tolist())
+            action.extend(action_pose.tolist())
+            prev_ee_action_poses[name] = state_pose
+        return True
 
     def _sync_component_diffs(self, t_sec, ctx):
         joint_diff = abs(t_sec - get_closest_t(

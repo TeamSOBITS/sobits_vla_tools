@@ -43,6 +43,7 @@ from sobits_vla_common import runtime_deps
 from sobits_vla_common.lerobot_compat import apply_conversion_patches
 from sobits_vla_common.output_root import output_root
 from sobits_vla_common.param_schema import declare_from_schema, P, read_schema
+from sobits_vla_common.robot_descriptor import ee_action_features
 from sobits_vla_rosbag_conversion.dataset_writer import DatasetWriter
 from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
 from sobits_vla_rosbag_conversion.pipeline.discovery import candidate_bag_dirs, discover_episodes
@@ -101,6 +102,11 @@ _SCHEMA = {
         'primary': P(''),
     },
     'robot_descriptor_id': P(''),
+    # Absolute EE pose actions synthesized from offline TF (v1: abs only).
+    'ee_actions': {
+        'enabled': P(False),
+        'arms': P(['']),
+    },
 }
 
 
@@ -206,6 +212,8 @@ class RosbagConversionNode(Node):
             self.ee_pose_enabled = False
             self.ee_configs = []
 
+        self.ee_action_specs = self._resolve_ee_actions(desc, params)
+
         # Exclude every camera name for a state/action-only dataset.
         self.skip_cameras = False
         active_cams = desc.active_cameras
@@ -251,6 +259,49 @@ class RosbagConversionNode(Node):
 
         # One-shot timer to start conversion after the node is ready
         self.timer = self.create_timer(1.0, self.timer_callback)
+
+    def _resolve_ee_actions(self, desc, params) -> list:
+        """Validate ee_actions config against desc; return (name, src, tgt) TF triples."""
+        if not params.ee_actions.enabled:
+            return []
+        if self.use_relative_actions:
+            raise NotImplementedError(
+                'ee_actions is not supported with use_relative_actions (v1 abs-only).'
+            )
+        arms = params.ee_actions.arms
+        if not arms:
+            raise ValueError('ee_actions.enabled is true but ee_actions.arms is empty.')
+        # desc.filtered() already drops ee_control entries whose ee_pose was
+        # excluded, so an unknown/excluded arm surfaces here as a ValueError.
+        try:
+            specs = desc.ee_control_for(arms)
+        except ValueError as exc:
+            raise ValueError(
+                f'{exc} (an ee_actions arm must have a surviving ee_poses entry -- '
+                'check exclude.ee_poses.)'
+            ) from exc
+
+        excluded_groups = set(params.exclude.groups)
+        for spec in specs:
+            if spec.group not in excluded_groups:
+                raise ValueError(
+                    f"ee_actions arm '{spec.ee_pose}' supersedes joint group "
+                    f"'{spec.group}', which must be listed in exclude.groups "
+                    'to avoid emitting both joint and EE actions for the same arm.'
+                )
+        if self.skip_static_threshold > 0.0:
+            self.get_logger().warning(
+                'skip_static_threshold > 0 with ee_actions enabled: static detection '
+                'only looks at joint velocities, so arm-only motion via EE actions '
+                'will not be detected as non-static.'
+            )
+
+        ee_by_name = {ee.name: ee for ee in (desc.ee_poses or [])}
+        return [
+            (spec.ee_pose, ee_by_name[spec.ee_pose].source_frame,
+             ee_by_name[spec.ee_pose].target_frame)
+            for spec in specs
+        ]
 
     def timer_callback(self):
         """One-shot timer callback to trigger the conversion."""
@@ -452,15 +503,21 @@ class RosbagConversionNode(Node):
             else:
                 self.base_keys = ['base_x', 'base_theta']
 
+        self.ee_action_keys = [
+            k for spec in self.ee_action_specs for k in ee_action_features(spec[0])
+        ]
+
         joint_dim = len(self.action_features)
+        ee_action_dim = len(self.ee_action_keys)
         base_dim = len(self.base_keys)
-        total_dim = joint_dim + base_dim if self.has_mobile_base else joint_dim
+        total_dim = joint_dim + ee_action_dim
         if self.has_mobile_base:
-            action_names = self.action_features + self.base_keys
-            state_names = self.action_features + self.base_keys
-        else:
-            action_names = self.action_features
-            state_names = self.action_features
+            total_dim += base_dim
+        names = self.action_features + self.ee_action_keys
+        if self.has_mobile_base:
+            names = names + self.base_keys
+        action_names = names
+        state_names = names
 
         features = {
             'action': {'dtype': 'float32', 'shape': (total_dim,), 'names': action_names},
@@ -514,7 +571,8 @@ class RosbagConversionNode(Node):
             ee_configs=self.ee_configs, skip_cameras=self.skip_cameras,
             primary_camera=self.primary_camera, camera_topics=self.camera_topics,
             depth_camera_topics=self.depth_camera_topics,
-            subtask_label_to_idx=self.subtask_label_to_idx, logger=self.get_logger(),
+            subtask_label_to_idx=self.subtask_label_to_idx,
+            ee_action_specs=self.ee_action_specs, logger=self.get_logger(),
         )
 
     def _run_episodes(self, dirs: list, all_tasks: list, pipeline: EpisodePipeline) -> None:
