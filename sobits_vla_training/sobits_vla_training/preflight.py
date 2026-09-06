@@ -58,13 +58,18 @@ def _expected_ee_actions(desc, params: dict, active_groups: list) -> list[str]:
 
     Mirrors config_builder._ee_action_dim's group-exclusion rule: an EE arm's
     ee_control group must already be excluded from active_groups, or joint
-    and EE features would both land in expected_actions.
+    and EE features would both land in expected_actions. robot.ee_rotation
+    selects rpy (6D) vs quat (7D) names, matching the dataset's conversion.
     """
     from sobits_vla_common.robot_descriptor import ee_action_features
 
     arms = [a for a in params.get('robot.ee_action_arms', []) if a]
     if not arms:
         return []
+
+    rotation = params.get('robot.ee_rotation', 'rpy') or 'rpy'
+    if rotation not in ('rpy', 'quat'):
+        raise ValueError(f"robot.ee_rotation must be 'rpy' or 'quat', got {rotation!r}")
 
     specs = desc.ee_control_for(arms)
     still_active = [s for s in specs if s.group in active_groups]
@@ -77,7 +82,7 @@ def _expected_ee_actions(desc, params: dict, active_groups: list) -> list[str]:
 
     features = []
     for s in specs:
-        features.extend(ee_action_features(s.ee_pose))
+        features.extend(ee_action_features(s.ee_pose, rotation=rotation))
     return features
 
 

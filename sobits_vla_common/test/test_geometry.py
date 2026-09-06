@@ -34,7 +34,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sobits_vla_common.geometry import (  # noqa: E402
-    quat_to_rpy, rpy_to_quat, unwrap_rpy,
+    quat_relative, quat_shortest_arc, quat_to_rpy, rpy_to_quat, unwrap_rpy,
 )
 
 
@@ -91,3 +91,44 @@ def test_unwrap_rpy_per_axis_independent():
     assert math.isclose(out[0], -3.0 + 2 * math.pi, abs_tol=1e-9)
     assert math.isclose(out[1], 3.0 - 2 * math.pi, abs_tol=1e-9)
     assert math.isclose(out[2], 0.6, abs_tol=1e-9)
+
+
+def test_quat_shortest_arc_flips_antipodal():
+    q_ref = rpy_to_quat(0.1, 0.2, 0.3)
+    q_antipodal = tuple(-c for c in q_ref)
+    out = quat_shortest_arc(q_antipodal, q_ref)
+    for a, b in zip(out, q_ref):
+        assert math.isclose(a, b, abs_tol=1e-9)
+
+
+def test_quat_shortest_arc_identity_when_aligned():
+    q_ref = rpy_to_quat(0.1, 0.2, 0.3)
+    out = quat_shortest_arc(q_ref, q_ref)
+    assert out == q_ref
+
+
+def test_quat_relative_roundtrip():
+    for (rf, pf, yf), (rt, pt, yt) in (
+        ((0.0, 0.0, 0.0), (0.3, -0.4, 1.2)),
+        ((0.3, -0.4, 1.2), (-1.5, 0.7, -2.9)),
+        ((-1.0, 0.5, 2.0), (1.0, -0.5, -2.0)),
+    ):
+        q_from = rpy_to_quat(rf, pf, yf)
+        q_to = rpy_to_quat(rt, pt, yt)
+        rel = quat_relative(q_from, q_to)
+        composed = _quat_mul(q_from, rel)
+        composed = quat_shortest_arc(composed, q_to)
+        for a, b in zip(composed, q_to):
+            assert math.isclose(a, b, abs_tol=1e-6)
+
+
+def _quat_mul(q1, q2):
+    """Hamilton product q1 (x)(x) q2, both (x, y, z, w) -- test-local, matches rpy_to_quat."""
+    x1, y1, z1, w1 = q1
+    x2, y2, z2, w2 = q2
+    return (
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+    )

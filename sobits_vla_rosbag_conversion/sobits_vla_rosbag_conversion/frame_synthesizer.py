@@ -26,6 +26,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import numpy as np
+from sobits_vla_common.geometry import quat_relative, quat_shortest_arc
 from sobits_vla_rosbag_conversion.offline_tf_tree import OfflineTFTree
 from sobits_vla_rosbag_conversion.sync import images as sync_images
 from sobits_vla_rosbag_conversion.sync import joints as sync_joints
@@ -56,6 +57,7 @@ class FrameSynthesizer:
         subtask_label_to_idx: dict,
         depth_camera_topics: dict | None = None,
         ee_action_specs: list = [],
+        ee_rotation: str = 'rpy',
         logger=None,
     ):
         self.fps = fps
@@ -74,6 +76,7 @@ class FrameSynthesizer:
         self.depth_camera_topics = depth_camera_topics or {}
         self.subtask_label_to_idx = subtask_label_to_idx
         self.ee_action_specs = ee_action_specs
+        self.ee_rotation = ee_rotation
         self.logger = logger
 
     def log_warn(self, msg: str):
@@ -293,11 +296,15 @@ class FrameSynthesizer:
     def _append_ee_channels(
         self, state, action, tf_tree, t_sec, prev_ee_action_poses, counters
     ) -> bool:
-        """Extend state/action in place with EE state/action pose6 per spec; False = skip frame."""
+        """Extend state/action in place with EE state/action pose per spec; False = skip frame."""
         t_ns = int(t_sec * 1e9)
+        synth_fn = (
+            sync_poses.synthesize_ee_action_quat if self.ee_rotation == 'quat'
+            else sync_poses.synthesize_ee_action
+        )
         for spec in self.ee_action_specs:
             name, ee_src, ee_tgt = spec
-            result = sync_poses.synthesize_ee_action(
+            result = synth_fn(
                 tf_tree, ee_src, ee_tgt, t_ns, self.fps, prev_ee_action_poses[name]
             )
             if result is None:
@@ -311,13 +318,29 @@ class FrameSynthesizer:
             state_pose, action_pose = result
             state.extend(state_pose.tolist())
             # Joints get delta-converted by to_relative_action above; EE deltas
-            # are formed here from the already-unwrap-consistent (state, action) pair.
+            # are formed here from the already-unwrap/shortest-arc-consistent
+            # (state, action) pair.
             if self.use_relative_actions:
-                action.extend((action_pose - state_pose).tolist())
+                if self.ee_rotation == 'quat':
+                    action.extend(self._relative_ee_pose7(state_pose, action_pose))
+                else:
+                    action.extend((action_pose - state_pose).tolist())
             else:
                 action.extend(action_pose.tolist())
             prev_ee_action_poses[name] = state_pose
         return True
+
+    @staticmethod
+    def _relative_ee_pose7(state_pose, action_pose) -> list:
+        """Relative 7D EE action: [dx,dy,dz, dqx,dqy,dqz,dqw] (base-frame translation delta)."""
+        delta_xyz = (action_pose[:3] - state_pose[:3]).tolist()
+        # state/action quats already come out shortest-arc-continuous from
+        # synthesize_ee_action_quat; re-align action against state here too
+        # since quat_relative's result is only meaningful for the shorter arc.
+        state_q = tuple(state_pose[3:7])
+        action_q = quat_shortest_arc(action_pose[3:7], state_q)
+        delta_q = quat_relative(state_q, action_q)
+        return delta_xyz + list(delta_q)
 
     def _sync_component_diffs(self, t_sec, ctx):
         joint_diff = abs(t_sec - get_closest_t(

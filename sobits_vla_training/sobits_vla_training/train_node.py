@@ -175,6 +175,9 @@ _SCHEMA = {
         # ee_pose names whose EE channels (ee.<name>.{x,y,z,roll,pitch,yaw})
         # replace joint features in the dataset; empty = joint mode.
         'ee_action_arms': P(['']),
+        # Must match the rotation representation the dataset was converted
+        # with (conversion_node.py ee_actions.rotation): rpy (6D) | quat (7D).
+        'ee_rotation': P('rpy'),
     },
 }
 

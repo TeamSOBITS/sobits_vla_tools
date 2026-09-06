@@ -47,10 +47,24 @@ BASE_KEY_ALIASES: Dict[str, str] = {
 # Absolute EE pose action axes, base_footprint frame, in feature-name order.
 EE_ACTION_AXES = ('x', 'y', 'z', 'roll', 'pitch', 'yaw')
 
+# Quaternion variant: translation + quaternion (x, y, z, w), in feature-name order.
+EE_ACTION_AXES_QUAT = ('x', 'y', 'z', 'qx', 'qy', 'qz', 'qw')
 
-def ee_action_features(name: str) -> List[str]:
-    """Dataset action feature names for one EE pose, e.g. 'ee.left.x'."""
-    return [f'ee.{name}.{ax}' for ax in EE_ACTION_AXES]
+
+def ee_action_features(name: str, rotation: str = 'rpy') -> List[str]:
+    """
+    Dataset action feature names for one EE pose, e.g. 'ee.left.x'.
+
+    rotation='rpy' (default) -> 6D (x,y,z,roll,pitch,yaw); 'quat' -> 7D
+    (x,y,z,qx,qy,qz,qw). Any other value raises ValueError.
+    """
+    if rotation == 'rpy':
+        axes = EE_ACTION_AXES
+    elif rotation == 'quat':
+        axes = EE_ACTION_AXES_QUAT
+    else:
+        raise ValueError(f"rotation must be 'rpy' or 'quat', got {rotation!r}")
+    return [f'ee.{name}.{ax}' for ax in axes]
 
 
 @dataclass

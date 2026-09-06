@@ -272,6 +272,22 @@ def test_ee_action_features_axis_order():
     ]
 
 
+def test_ee_action_features_default_matches_explicit_rpy():
+    assert ee_action_features('left') == ee_action_features('left', rotation='rpy')
+
+
+def test_ee_action_features_quat_axis_order():
+    assert ee_action_features('left', rotation='quat') == [
+        'ee.left.x', 'ee.left.y', 'ee.left.z',
+        'ee.left.qx', 'ee.left.qy', 'ee.left.qz', 'ee.left.qw',
+    ]
+
+
+def test_ee_action_features_invalid_rotation_raises():
+    with pytest.raises(ValueError, match='rotation'):
+        ee_action_features('left', rotation='axis_angle')
+
+
 def test_ee_control_for_returns_matching_specs():
     with tempfile.TemporaryDirectory() as tmp:
         path = _write_yaml(tmp, _MINIMAL_YAML)

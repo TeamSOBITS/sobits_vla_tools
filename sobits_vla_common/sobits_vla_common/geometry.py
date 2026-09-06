@@ -77,3 +77,41 @@ def unwrap_rpy(
         elif diff < -math.pi:
             out[ax] += 2 * math.pi
     return out[0], out[1], out[2]
+
+
+def quat_shortest_arc(
+    q: Sequence[float], q_ref: Sequence[float]
+) -> Tuple[float, float, float, float]:
+    """
+    Flip the sign of unit quaternion q if dot(q, q_ref) < 0.
+
+    Quaternions q and -q represent the same rotation; without this, a
+    continuous rotation can flip sign between consecutive samples and alias
+    into a huge single-step jump, same failure mode unwrap_rpy fixes for
+    Euler angles.
+    """
+    dot = q[0] * q_ref[0] + q[1] * q_ref[1] + q[2] * q_ref[2] + q[3] * q_ref[3]
+    if dot < 0.0:
+        return -q[0], -q[1], -q[2], -q[3]
+    return q[0], q[1], q[2], q[3]
+
+
+def quat_relative(
+    q_from: Sequence[float], q_to: Sequence[float]
+) -> Tuple[float, float, float, float]:
+    """
+    Rotation from q_from to q_to: q_from^-1 (x)(x) q_to, unit quaternions (x, y, z, w).
+
+    For a unit quaternion the inverse is the conjugate (negate the vector
+    part). Composition order matches q_from (x)(x) result == q_to.
+    """
+    x1, y1, z1, w1 = q_from
+    x2, y2, z2, w2 = q_to
+    # Conjugate of q_from (its inverse, since it's a unit quaternion).
+    cx, cy, cz, cw = -x1, -y1, -z1, w1
+    return (
+        cw * x2 + cx * w2 + cy * z2 - cz * y2,
+        cw * y2 - cx * z2 + cy * w2 + cz * x2,
+        cw * z2 + cx * y2 - cy * x2 + cz * w2,
+        cw * w2 - cx * x2 - cy * y2 - cz * z2,
+    )

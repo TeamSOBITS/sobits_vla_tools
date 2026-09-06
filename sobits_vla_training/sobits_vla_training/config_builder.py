@@ -127,16 +127,21 @@ def _ee_action_dim(desc, params: dict[str, Any], active_groups: list[str]) -> in
     """
     Dataset action/state dim contributed by EE channels, or 0 in joint mode.
 
-    robot.ee_action_arms names ee_poses whose 6-channel EE pose replaces
-    their arm's joint features in the dataset. Their ee_control group must
-    already be excluded from active_groups -- an EE arm still reporting
-    joint features would double-count the dim.
+    robot.ee_action_arms names ee_poses whose EE pose (6D rpy or 7D quat,
+    per robot.ee_rotation) replaces their arm's joint features in the
+    dataset. Their ee_control group must already be excluded from
+    active_groups -- an EE arm still reporting joint features would
+    double-count the dim.
     """
     from sobits_vla_common.robot_descriptor import ee_action_features
 
     arms = [a for a in params.get('robot.ee_action_arms', []) if a]
     if not arms:
         return 0
+
+    rotation = params.get('robot.ee_rotation', 'rpy') or 'rpy'
+    if rotation not in ('rpy', 'quat'):
+        raise ValueError(f"robot.ee_rotation must be 'rpy' or 'quat', got {rotation!r}")
 
     specs = desc.ee_control_for(arms)
     still_active = [s for s in specs if s.group in active_groups]
@@ -147,7 +152,7 @@ def _ee_action_dim(desc, params: dict[str, Any], active_groups: list[str]) -> in
             'robot.exclude.groups so joint and EE features do not both count.'
         )
 
-    return sum(len(ee_action_features(s.ee_pose)) for s in specs)
+    return sum(len(ee_action_features(s.ee_pose, rotation=rotation)) for s in specs)
 
 
 def _resolve_pretrained_path(raw: str) -> Path | str:

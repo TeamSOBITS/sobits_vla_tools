@@ -101,6 +101,13 @@ def mat_to_pose6d(mat: np.ndarray) -> np.ndarray:
     return np.concatenate([xyz, rpy])
 
 
+def mat_to_pose7d(mat: np.ndarray) -> np.ndarray:
+    """Convert 4x4 homogeneous matrix to [x, y, z, qx, qy, qz, qw] (float32)."""
+    xyz = mat[:3, 3].astype(np.float32)
+    quat = Rotation.from_matrix(mat[:3, :3]).as_quat().astype(np.float32)
+    return np.concatenate([xyz, quat])
+
+
 class OfflineTFTree:
     """
     Reads /tf and /tf_static messages and resolves arbitrary frame chains.

@@ -28,8 +28,8 @@
 """EE-pose synthesis via TF lookups, per-axis unwrap (fb188e1), and delta."""
 
 import numpy as np
-from sobits_vla_common.geometry import unwrap_rpy
-from sobits_vla_rosbag_conversion.offline_tf_tree import mat_to_pose6d
+from sobits_vla_common.geometry import quat_shortest_arc, unwrap_rpy
+from sobits_vla_rosbag_conversion.offline_tf_tree import mat_to_pose6d, mat_to_pose7d
 
 # Not sobits_vla_common.gz_utils.wrap_pi: that wraps an absolute angle to
 # (-pi, pi]; this unwraps a delta against the previous sample (fb188e1).
@@ -87,5 +87,35 @@ def synthesize_ee_action(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_pose):
         action_pose = mat_to_pose6d(action_mat)
         rpy = unwrap_rpy(action_pose[3:6], state_pose[3:6])
         action_pose[3:6] = rpy
+
+    return state_pose, action_pose
+
+
+def synthesize_ee_action_quat(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_quat):
+    """
+    (state_pose7, action_pose7) or None when the state lookup fails.
+
+    Quaternion analogue of synthesize_ee_action: 7D = [x, y, z, qx, qy, qz,
+    qw]. state = observed EE pose at t, action = pose at t + 1/fps
+    (shift-forward); action falls back to state when the future lookup
+    fails (end of bag => zero motion). Continuity is enforced via
+    shortest-arc alignment (quat_shortest_arc) instead of per-axis unwrap:
+    state's quat is aligned against prev_state_quat (or left as-is when
+    prev is None), and action's quat is aligned against state's quat.
+    """
+    state_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, t_ns)
+    if state_mat is None:
+        return None
+    state_pose = mat_to_pose7d(state_mat)
+    if prev_state_quat is not None:
+        state_pose[3:7] = quat_shortest_arc(state_pose[3:7], prev_state_quat[3:7])
+
+    future_ns = t_ns + int(round((1.0 / fps) * 1e9)) if fps > 0 else t_ns
+    action_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, future_ns)
+    if action_mat is None:
+        action_pose = state_pose.copy()
+    else:
+        action_pose = mat_to_pose7d(action_mat)
+        action_pose[3:7] = quat_shortest_arc(action_pose[3:7], state_pose[3:7])
 
     return state_pose, action_pose

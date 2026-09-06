@@ -107,6 +107,9 @@ _SCHEMA = {
     'ee_actions': {
         'enabled': P(False),
         'arms': P(['']),
+        # rpy = roll/pitch/yaw (6D, per-axis unwrap) | quat = quaternion
+        # x,y,z,w (7D, shortest-arc).
+        'rotation': P('rpy'),
     },
 }
 
@@ -263,6 +266,12 @@ class RosbagConversionNode(Node):
 
     def _resolve_ee_actions(self, desc, params) -> list:
         """Validate ee_actions config against desc; return (name, src, tgt) TF triples."""
+        rotation = params.ee_actions.rotation
+        if rotation not in ('rpy', 'quat'):
+            raise ValueError(
+                f"ee_actions.rotation must be 'rpy' or 'quat', got {rotation!r}"
+            )
+        self.ee_rotation = rotation
         if not params.ee_actions.enabled:
             return []
         arms = params.ee_actions.arms
@@ -501,7 +510,8 @@ class RosbagConversionNode(Node):
                 self.base_keys = ['base_x', 'base_theta']
 
         self.ee_action_keys = [
-            k for spec in self.ee_action_specs for k in ee_action_features(spec[0])
+            k for spec in self.ee_action_specs
+            for k in ee_action_features(spec[0], rotation=self.ee_rotation)
         ]
 
         joint_dim = len(self.action_features)
@@ -569,7 +579,8 @@ class RosbagConversionNode(Node):
             primary_camera=self.primary_camera, camera_topics=self.camera_topics,
             depth_camera_topics=self.depth_camera_topics,
             subtask_label_to_idx=self.subtask_label_to_idx,
-            ee_action_specs=self.ee_action_specs, logger=self.get_logger(),
+            ee_action_specs=self.ee_action_specs, ee_rotation=self.ee_rotation,
+            logger=self.get_logger(),
         )
 
     def _run_episodes(self, dirs: list, all_tasks: list, pipeline: EpisodePipeline) -> None:

@@ -43,7 +43,9 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sobits_vla_rosbag_conversion.sync.poses import synthesize_ee_action  # noqa: E402
+from sobits_vla_rosbag_conversion.sync.poses import (  # noqa: E402
+    synthesize_ee_action, synthesize_ee_action_quat,
+)
 
 # conversion_node imports lerobot/rosbags at module scope (runtime_deps.ensure);
 # only importable inside the pixi env, same gate as test_conversion_golden.py.
@@ -136,17 +138,104 @@ class TestSynthesizeEEAction:
         assert abs(action[5] - (state_yaw - 0.05)) < 1e-3
 
 
+class TestSynthesizeEEActionQuat:
+    """Quaternion analogue of TestSynthesizeEEAction: 7D [x,y,z,qx,qy,qz,qw]."""
+
+    def _quat_lookup(self, roll, pitch, yaw):
+        from scipy.spatial.transform import Rotation
+        return tuple(Rotation.from_euler('xyz', [roll, pitch, yaw]).as_quat())
+
+    def test_shape_and_unit_norm(self):
+        qx, qy, qz, qw = self._quat_lookup(0.0, 0.0, 0.0)
+        tree = _StubTFTreeQuat({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, qx, qy, qz, qw),
+            ('base', 'ee', STEP_NS): (0.1, 0.0, 0.0, qx, qy, qz, qw),
+        })
+        result = synthesize_ee_action_quat(tree, 'ee', 'base', 0, FPS, None)
+        assert result is not None
+        state, action = result
+        assert state.shape == (7,)
+        assert action.shape == (7,)
+        assert abs(np.linalg.norm(state[3:7]) - 1.0) < 1e-5
+        assert abs(np.linalg.norm(action[3:7]) - 1.0) < 1e-5
+        np.testing.assert_allclose(action[:3], [0.1, 0.0, 0.0], atol=1e-6)
+
+    def test_state_lookup_failure_returns_none(self):
+        tree = _StubTFTreeQuat({})
+        assert synthesize_ee_action_quat(tree, 'ee', 'base', 0, FPS, None) is None
+
+    def test_end_of_bag_falls_back_to_state(self):
+        qx, qy, qz, qw = self._quat_lookup(0.0, 0.0, 0.3)
+        tree = _StubTFTreeQuat({
+            ('base', 'ee', 0): (0.2, 0.3, 0.0, qx, qy, qz, qw),
+        })
+        result = synthesize_ee_action_quat(tree, 'ee', 'base', 0, FPS, None)
+        assert result is not None
+        state, action = result
+        np.testing.assert_allclose(action, state, atol=1e-6)
+
+    def test_shortest_arc_continuity_across_sign_flip(self):
+        # Same physical orientation, but the raw quaternion sample flips sign
+        # (double cover) relative to prev_state -- must realign, not jump.
+        qx, qy, qz, qw = self._quat_lookup(0.0, 0.0, 0.5)
+        prev_state = np.array([0.0, 0.0, 0.0, qx, qy, qz, qw], dtype=np.float32)
+        flipped = (-qx, -qy, -qz, -qw)
+        tree = _StubTFTreeQuat({
+            ('base', 'ee', STEP_NS): (0.0, 0.0, 0.0) + flipped,
+        })
+        result = synthesize_ee_action_quat(tree, 'ee', 'base', STEP_NS, FPS, prev_state)
+        assert result is not None
+        state, _ = result
+        # Realigned quat should match prev_state's sign convention, not the flipped raw sample.
+        dot = np.dot(state[3:7], prev_state[3:7])
+        assert dot > 0.0
+        np.testing.assert_allclose(state[3:7], [qx, qy, qz, qw], atol=1e-5)
+
+    def test_action_realigned_against_state_not_prev(self):
+        qx, qy, qz, qw = self._quat_lookup(0.0, 0.0, 0.4)
+        flipped = (-qx, -qy, -qz, -qw)
+        tree = _StubTFTreeQuat({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, qx, qy, qz, qw),
+            ('base', 'ee', STEP_NS): (0.0, 0.0, 0.0) + flipped,
+        })
+        result = synthesize_ee_action_quat(tree, 'ee', 'base', 0, FPS, None)
+        assert result is not None
+        state, action = result
+        dot = np.dot(action[3:7], state[3:7])
+        assert dot > 0.0
+
+
+class _StubTFTreeQuat:
+    """resolve() returns a matrix built directly from a 7D (x,y,z,qx,qy,qz,qw) tuple."""
+
+    def __init__(self, lookups: dict):
+        self._lookups = lookups
+
+    def resolve(self, target, source, stamp_ns):
+        val = self._lookups.get((target, source, stamp_ns))
+        if val is None:
+            return None
+        x, y, z, qx, qy, qz, qw = val
+        from scipy.spatial.transform import Rotation
+        mat = np.eye(4, dtype=np.float64)
+        mat[:3, :3] = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
+        mat[0, 3], mat[1, 3], mat[2, 3] = x, y, z
+        return mat
+
+
 class TestAppendEEChannelsRelative:
     """_append_ee_channels is a plain method; drive it via a stub self (R1: no rclpy)."""
 
-    def _synthesizer(self, use_relative_actions):
+    def _synthesizer(self, use_relative_actions, ee_rotation='rpy'):
         from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
         return types.SimpleNamespace(
             ee_action_specs=[('left', 'ee', 'base')],
             fps=FPS,
             use_relative_actions=use_relative_actions,
+            ee_rotation=ee_rotation,
             log_warn=lambda msg: None,
             _append_ee_channels=FrameSynthesizer._append_ee_channels,
+            _relative_ee_pose7=staticmethod(FrameSynthesizer._relative_ee_pose7),
         )
 
     def _run(self, synth, tree, t_sec, prev):
@@ -208,6 +297,90 @@ class TestAppendEEChannelsRelative:
         np.testing.assert_allclose(action[:3], [0.1, 0.0, 0.0], atol=1e-6)
 
 
+class TestAppendEEChannelsRelativeQuat:
+    """Quat-mode _append_ee_channels: state absolute 7D, action = [dp, q_rel]."""
+
+    def _synthesizer(self, use_relative_actions):
+        from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
+        return types.SimpleNamespace(
+            ee_action_specs=[('left', 'ee', 'base')],
+            fps=FPS,
+            use_relative_actions=use_relative_actions,
+            ee_rotation='quat',
+            log_warn=lambda msg: None,
+            _append_ee_channels=FrameSynthesizer._append_ee_channels,
+            _relative_ee_pose7=staticmethod(FrameSynthesizer._relative_ee_pose7),
+        )
+
+    def _run(self, synth, tree, t_sec, prev):
+        state, action = [], []
+        prev_ee_action_poses = {'left': prev}
+        ok = synth._append_ee_channels(
+            synth, state, action, tree, t_sec, prev_ee_action_poses,
+            {'tf': 0},
+        )
+        return ok, np.array(state, dtype=np.float32), np.array(action, dtype=np.float32)
+
+    def _quat(self, roll, pitch, yaw):
+        from scipy.spatial.transform import Rotation
+        return tuple(Rotation.from_euler('xyz', [roll, pitch, yaw]).as_quat())
+
+    def test_relative_mode_state_absolute_action_is_delta_pose_and_rel_quat(self):
+        qx0, qy0, qz0, qw0 = self._quat(0.0, 0.0, 0.0)
+        qx1, qy1, qz1, qw1 = self._quat(0.0, 0.0, 0.2)
+        tree = _StubTFTreeQuat({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, qx0, qy0, qz0, qw0),
+            ('base', 'ee', STEP_NS): (0.1, 0.2, 0.0, qx1, qy1, qz1, qw1),
+        })
+        synth = self._synthesizer(use_relative_actions=True)
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+        assert state.shape == (7,)
+        assert action.shape == (7,)
+        np.testing.assert_allclose(state[:3], [0.0, 0.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(state[3:7], [qx0, qy0, qz0, qw0], atol=1e-6)
+        np.testing.assert_allclose(action[:3], [0.1, 0.2, 0.0], atol=1e-6)
+        assert abs(np.linalg.norm(action[3:7]) - 1.0) < 1e-5
+
+    def test_composing_state_and_rel_quat_gives_next_state_quat(self):
+        from sobits_vla_common.geometry import quat_shortest_arc
+        qx0, qy0, qz0, qw0 = self._quat(0.0, 0.0, 0.0)
+        qx1, qy1, qz1, qw1 = self._quat(0.1, -0.2, 0.3)
+        tree = _StubTFTreeQuat({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, qx0, qy0, qz0, qw0),
+            ('base', 'ee', STEP_NS): (0.0, 0.0, 0.0, qx1, qy1, qz1, qw1),
+        })
+        synth = self._synthesizer(use_relative_actions=True)
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+
+        def quat_mul(q1, q2):
+            x1, y1, z1, w1 = q1
+            x2, y2, z2, w2 = q2
+            return (
+                w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+                w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+                w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+            )
+
+        composed = quat_mul(tuple(state[3:7]), tuple(action[3:7]))
+        composed = quat_shortest_arc(composed, (qx1, qy1, qz1, qw1))
+        np.testing.assert_allclose(composed, [qx1, qy1, qz1, qw1], atol=1e-5)
+
+    def test_absolute_mode_appends_pose7_as_is(self):
+        qx, qy, qz, qw = self._quat(0.0, 0.0, 0.1)
+        tree = _StubTFTreeQuat({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, qx, qy, qz, qw),
+            ('base', 'ee', STEP_NS): (0.1, 0.0, 0.0, qx, qy, qz, qw),
+        })
+        synth = self._synthesizer(use_relative_actions=False)
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+        np.testing.assert_allclose(action[:3], [0.1, 0.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(action[3:7], [qx, qy, qz, qw], atol=1e-6)
+
+
 class TestEEActionFeatures:
 
     def test_feature_names_in_order(self):
@@ -216,6 +389,18 @@ class TestEEActionFeatures:
             'ee.left.x', 'ee.left.y', 'ee.left.z',
             'ee.left.roll', 'ee.left.pitch', 'ee.left.yaw',
         ]
+
+    def test_quat_feature_names_in_order(self):
+        from sobits_vla_common.robot_descriptor import ee_action_features
+        assert ee_action_features('left', rotation='quat') == [
+            'ee.left.x', 'ee.left.y', 'ee.left.z',
+            'ee.left.qx', 'ee.left.qy', 'ee.left.qz', 'ee.left.qw',
+        ]
+
+    def test_invalid_rotation_raises(self):
+        from sobits_vla_common.robot_descriptor import ee_action_features
+        with pytest.raises(ValueError):
+            ee_action_features('left', rotation='bogus')
 
 
 @skip_no_rclpy
@@ -226,6 +411,7 @@ class TestBuildFeaturesWithEE:
         base = {
             'action_features': ['head_pan_joint', 'head_tilt_joint'],
             'ee_action_specs': [('left', 'ee_l', 'base')],
+            'ee_rotation': 'rpy',
             'has_mobile_base': True, 'has_cmd_vel_y': False, 'has_cmd_vel_z': False,
             'ee_pose_enabled': False, 'ee_configs': [], 'has_subtasks': False,
             'skip_cameras': True, 'camera_topics': {}, 'camera_shapes': {},
@@ -261,6 +447,19 @@ class TestBuildFeaturesWithEE:
             'head_pan_joint', 'head_tilt_joint', 'base_x', 'base_theta',
         ]
         assert features['action']['shape'] == (4,)
+
+    def test_quat_rotation_gives_7_names_per_arm(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        node = self._stub_node(ee_rotation='quat')
+        features = RosbagConversionNode._build_features(node, all_tasks=[])
+        assert features['action']['names'] == [
+            'head_pan_joint', 'head_tilt_joint',
+            'ee.left.x', 'ee.left.y', 'ee.left.z',
+            'ee.left.qx', 'ee.left.qy', 'ee.left.qz', 'ee.left.qw',
+            'base_x', 'base_theta',
+        ]
+        assert features['action']['shape'] == (11,)
+        assert features['observation.state']['shape'] == (11,)
 
 
 class TestEEControlValidation:
@@ -332,9 +531,11 @@ class TestResolveEEActionsValidation:
             get_logger=lambda: types.SimpleNamespace(warning=lambda msg: None),
         )
 
-    def _params(self, enabled=True, arms=('left',), exclude_groups=()):
+    def _params(self, enabled=True, arms=('left',), exclude_groups=(), rotation='rpy'):
         return types.SimpleNamespace(
-            ee_actions=types.SimpleNamespace(enabled=enabled, arms=list(arms)),
+            ee_actions=types.SimpleNamespace(
+                enabled=enabled, arms=list(arms), rotation=rotation,
+            ),
             exclude=types.SimpleNamespace(groups=list(exclude_groups)),
         )
 
@@ -364,6 +565,20 @@ class TestResolveEEActionsValidation:
         node = self._node()
         params = self._params(enabled=False, arms=(), exclude_groups=[])
         assert RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params) == []
+
+    def test_quat_rotation_sets_ee_rotation_attr(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        node = self._node()
+        params = self._params(exclude_groups=['arm_left'], rotation='quat')
+        RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+        assert node.ee_rotation == 'quat'
+
+    def test_invalid_rotation_raises(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        node = self._node()
+        params = self._params(exclude_groups=['arm_left'], rotation='axis_angle')
+        with pytest.raises(ValueError, match='rotation'):
+            RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
 
 
 if __name__ == '__main__':
