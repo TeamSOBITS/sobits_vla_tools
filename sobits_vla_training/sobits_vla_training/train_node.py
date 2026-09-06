@@ -172,6 +172,9 @@ _SCHEMA = {
             'joints': P(['']),
             'mobile_base': P(False, descriptor=_pd('Exclude the mobile base')),
         },
+        # ee_pose names whose EE channels (ee.<name>.{x,y,z,roll,pitch,yaw})
+        # replace joint features in the dataset; empty = joint mode.
+        'ee_action_arms': P(['']),
     },
 }
 

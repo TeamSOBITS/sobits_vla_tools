@@ -123,6 +123,33 @@ def resolve_output_dir(out_dir_raw: str, hub_repo_id: str) -> Path:
     return (model_root / raw_path).resolve()
 
 
+def _ee_action_dim(desc, params: dict[str, Any], active_groups: list[str]) -> int:
+    """
+    Dataset action/state dim contributed by EE channels, or 0 in joint mode.
+
+    robot.ee_action_arms names ee_poses whose 6-channel EE pose replaces
+    their arm's joint features in the dataset. Their ee_control group must
+    already be excluded from active_groups -- an EE arm still reporting
+    joint features would double-count the dim.
+    """
+    from sobits_vla_common.robot_descriptor import ee_action_features
+
+    arms = [a for a in params.get('robot.ee_action_arms', []) if a]
+    if not arms:
+        return 0
+
+    specs = desc.ee_control_for(arms)
+    still_active = [s for s in specs if s.group in active_groups]
+    if still_active:
+        raise ValueError(
+            'robot.ee_action_arms names arm(s) whose group is not excluded: '
+            f'{[s.group for s in still_active]}. Add them to '
+            'robot.exclude.groups so joint and EE features do not both count.'
+        )
+
+    return sum(len(ee_action_features(s.ee_pose)) for s in specs)
+
+
 def _resolve_pretrained_path(raw: str) -> Path | str:
     """Return a Path for local files, or pass through HF Hub repo_id strings."""
     if not raw:
@@ -180,7 +207,9 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
         if desc.mobile_base and active_mobile_base:
             n_base = len(desc.mobile_base.features)
 
-        total_dim = len(active_joint_features) + n_base
+        n_ee = _ee_action_dim(desc, params, active_groups)
+
+        total_dim = len(active_joint_features) + n_ee + n_base
 
         if 'max_state_dim' not in policy_overrides:
             policy_overrides['max_state_dim'] = max(32, total_dim)

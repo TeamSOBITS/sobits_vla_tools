@@ -52,6 +52,35 @@ def load_dataset_info(repo_id: str) -> dict | None:
         return None
 
 
+def _expected_ee_actions(desc, params: dict, active_groups: list) -> list[str]:
+    """
+    Dataset action feature names for robot.ee_action_arms, or [] in joint mode.
+
+    Mirrors config_builder._ee_action_dim's group-exclusion rule: an EE arm's
+    ee_control group must already be excluded from active_groups, or joint
+    and EE features would both land in expected_actions.
+    """
+    from sobits_vla_common.robot_descriptor import ee_action_features
+
+    arms = [a for a in params.get('robot.ee_action_arms', []) if a]
+    if not arms:
+        return []
+
+    specs = desc.ee_control_for(arms)
+    still_active = [s for s in specs if s.group in active_groups]
+    if still_active:
+        raise ValueError(
+            'robot.ee_action_arms names arm(s) whose group is not excluded: '
+            f'{[s.group for s in still_active]}. Add them to '
+            'robot.exclude.groups so joint and EE features do not both count.'
+        )
+
+    features = []
+    for s in specs:
+        features.extend(ee_action_features(s.ee_pose))
+    return features
+
+
 def run_preflight_checks(params: dict, ros_logger=None) -> None:
     """Run dataset-aware pre-flight checks that require info.json."""
     def log_warn(msg: str):
@@ -134,6 +163,9 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
             for g in desc.active_groups:
                 active_joint_features.extend([j.feature for j in g.joints])
 
+            active_groups = [g.name for g in desc.active_groups]
+            ee_features = _expected_ee_actions(desc, params, active_groups)
+
             active_base_features = []
             if desc.mobile_base and active_mobile_base:
                 # active_groups=[] so only base features come back, not group joints
@@ -142,7 +174,8 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
                     active_groups=[], active_mobile_base=active_mobile_base,
                 )
 
-            expected_actions = active_joint_features + active_base_features
+            # Layout: [joints..., ee..., base...] to match dataset action order.
+            expected_actions = active_joint_features + ee_features + active_base_features
 
             if action_names:
                 missing = [a for a in expected_actions if a not in action_names]
@@ -158,7 +191,10 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
                         f"not specified in active robot descriptor '{desc_id}' configuration."
                     )
         except Exception as exc:
-            if isinstance(exc, RuntimeError):
+            # ValueError: robot.ee_action_arms group-exclusion violation, must
+            # surface like config_builder's; RuntimeError: dim/camera checks
+            # above. Anything else is an unexpected descriptor/dataset issue.
+            if isinstance(exc, (RuntimeError, ValueError)):
                 raise
             log_warn(f'Failed to run robot-descriptor-based pre-flight checks: {exc}')
 
