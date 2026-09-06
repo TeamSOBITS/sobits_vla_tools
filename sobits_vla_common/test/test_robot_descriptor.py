@@ -27,15 +27,18 @@
 
 """Unit tests for RobotDescriptor.filtered(), focused on exclude_joints."""
 
+from dataclasses import replace
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import pytest  # noqa: E402
 
 from sobits_vla_common.robot_descriptor import (  # noqa: E402
-    CameraSpec, EEPoseSpec, GroupSpec, JointSpec, MobileBaseSpec, RobotDescriptor,
+    _parse_descriptor_file, CameraSpec, ee_action_features, EEPoseSpec, GroupSpec,
+    JointSpec, MobileBaseSpec, RobotDescriptor, validate_descriptor,
 )
 
 
@@ -150,3 +153,143 @@ def test_exclude_joints_empty_list_is_noop():
     desc = _make_descriptor()
     filtered = desc.filtered(exclude_joints=[])
     assert filtered is desc
+
+
+_MINIMAL_YAML = """
+schema_version: 1
+robot_id: test_robot
+joint_states_topic: /joint_states
+groups:
+  - name: arm_left
+    command_topic: /arm_left/cmd
+    max_joint_delta: 0.0
+    active: true
+    joints:
+      - ros_name: shoulder
+        feature: shoulder
+  - name: arm_right
+    command_topic: /arm_right/cmd
+    max_joint_delta: 0.0
+    active: true
+    joints:
+      - ros_name: shoulder_r
+        feature: shoulder_r
+ee_poses:
+  - name: left
+    source_frame: hand_left_link
+    target_frame: base_footprint
+  - name: right
+    source_frame: hand_right_link
+    target_frame: base_footprint
+ee_control:
+  - ee_pose: left
+    group: arm_left
+    target_frame: left_target_link
+    enable_topic: arm_left/moveit_track_enabled
+  - ee_pose: right
+    group: arm_right
+    target_frame: right_target_link
+    enable_topic: arm_right/moveit_track_enabled
+"""
+
+
+def _write_yaml(tmp_path, text):
+    path = os.path.join(tmp_path, 'test_robot.robot.yaml')
+    with open(path, 'w') as f:
+        f.write(text)
+    return path
+
+
+def test_ee_control_parses_from_yaml():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    assert len(desc.ee_control) == 2
+    left = next(c for c in desc.ee_control if c.ee_pose == 'left')
+    assert left.group == 'arm_left'
+    assert left.target_frame == 'left_target_link'
+    assert left.enable_topic == 'arm_left/moveit_track_enabled'
+
+
+def test_ee_control_missing_key_defaults_to_empty_list():
+    text = _MINIMAL_YAML.split('ee_control:')[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        desc = _parse_descriptor_file(path)
+    assert desc.ee_control == []
+
+
+def test_ee_control_validate_unknown_ee_pose():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    bad = desc.ee_control[0]
+    desc.ee_control[0] = replace(bad, ee_pose='center')
+    errors = validate_descriptor(desc)
+    assert any('unknown ee_pose' in e for e in errors)
+
+
+def test_ee_control_validate_unknown_group():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    desc.ee_control[0] = replace(desc.ee_control[0], group='arm_center')
+    errors = validate_descriptor(desc)
+    assert any('unknown group' in e for e in errors)
+
+
+def test_ee_control_validate_empty_enable_topic():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    desc.ee_control[0] = replace(desc.ee_control[0], enable_topic='')
+    errors = validate_descriptor(desc)
+    assert any('empty enable_topic' in e for e in errors)
+
+
+def test_ee_control_validate_duplicate_group():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    desc.ee_control[1] = replace(desc.ee_control[1], group='arm_left')
+    errors = validate_descriptor(desc)
+    assert any('Duplicate ee_control group' in e for e in errors)
+
+
+def test_ee_control_filtered_drops_excluded_ee_pose():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    filtered = desc.filtered(exclude_ee_poses=['right'])
+    assert [c.ee_pose for c in filtered.ee_control] == ['left']
+
+
+def test_ee_action_features_axis_order():
+    assert ee_action_features('left') == [
+        'ee.left.x', 'ee.left.y', 'ee.left.z',
+        'ee.left.roll', 'ee.left.pitch', 'ee.left.yaw',
+    ]
+
+
+def test_ee_control_for_returns_matching_specs():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    specs = desc.ee_control_for(['left'])
+    assert [s.ee_pose for s in specs] == ['left']
+
+
+def test_ee_control_for_unknown_name_raises():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    with pytest.raises(ValueError, match='Unknown ee_pose'):
+        desc.ee_control_for(['center'])
+
+
+def test_active_ee_control_excludes_removed_ee_pose():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    filtered = desc.filtered(exclude_ee_poses=['right'])
+    assert [c.ee_pose for c in filtered.active_ee_control] == ['left']

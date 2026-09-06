@@ -174,6 +174,18 @@ ee_poses:
     source_frame: hand_right_end_effector_link
     target_frame: base_footprint
 
+# EE inference mode: which servo backend interface drives each arm when the
+# policy emits ee.{name}.* actions (sobits_teleop servo_target_bridge contract).
+ee_control:
+  - ee_pose: left
+    group: arm_left
+    target_frame: left_target_link
+    enable_topic: arm_left/moveit_track_enabled
+  - ee_pose: right
+    group: arm_right
+    target_frame: right_target_link
+    enable_topic: arm_right/moveit_track_enabled
+
 excluded_joints:
   # Passive mimic joints of the arm parallel linkage (present in
   # joint_states, not commanded by any controller)

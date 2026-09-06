@@ -44,6 +44,14 @@ BASE_KEY_ALIASES: Dict[str, str] = {
     'base_theta': 'theta.vel',
 }
 
+# Absolute EE pose action axes, base_footprint frame, in feature-name order.
+EE_ACTION_AXES = ('x', 'y', 'z', 'roll', 'pitch', 'yaw')
+
+
+def ee_action_features(name: str) -> List[str]:
+    """Dataset action feature names for one EE pose, e.g. 'ee.left.x'."""
+    return [f'ee.{name}.{ax}' for ax in EE_ACTION_AXES]
+
 
 @dataclass
 class JointSpec:
@@ -106,6 +114,14 @@ class EEPoseSpec:
 
 
 @dataclass
+class EEControlSpec:
+    ee_pose: str        # references an ee_poses[].name ('left'/'right')
+    group: str          # joint group superseded by servo control ('arm_left')
+    target_frame: str   # TF child frame streamed to the servo bridge
+    enable_topic: str   # relative topic, e.g. 'arm_left/moveit_track_enabled'
+
+
+@dataclass
 class RobotDescriptor:
     robot_id: str
     joint_states_topic: str
@@ -115,6 +131,7 @@ class RobotDescriptor:
     mobile_base: Optional[MobileBaseSpec] = None
     sensors: Dict[str, List[Any]] = field(default_factory=dict)
     ee_poses: Optional[List[EEPoseSpec]] = None
+    ee_control: List[EEControlSpec] = field(default_factory=list)
     excluded_joints: List[str] = field(default_factory=list)
 
     @property
@@ -155,6 +172,22 @@ class RobotDescriptor:
                 for j in g.joints:
                     ros_names.append(j.ros_name)
         return ros_names
+
+    @property
+    def active_ee_control(self) -> List[EEControlSpec]:
+        known = {e.name for e in (self.ee_poses or [])}
+        return [c for c in self.ee_control if c.ee_pose in known]
+
+    def ee_control_for(self, names: List[str]) -> List[EEControlSpec]:
+        """Return EEControlSpec entries matching the given ee_pose names, in order."""
+        by_pose = {c.ee_pose: c for c in self.ee_control}
+        unknown = [n for n in names if n not in by_pose]
+        if unknown:
+            raise ValueError(
+                f'Unknown ee_pose name(s) in ee_control_for: {unknown}. '
+                f'Available: {sorted(by_pose)}'
+            )
+        return [by_pose[n] for n in names]
 
     def filtered(
         self,
@@ -236,10 +269,12 @@ class RobotDescriptor:
             if self.ee_poses is not None
             else None
         )
+        surviving_ee = {e.name for e in ee_poses} if ee_poses is not None else set()
+        ee_control = [c for c in self.ee_control if c.ee_pose in surviving_ee]
         excluded_joints = list(self.excluded_joints) + removed_ros_names
         return replace(
             self, groups=groups, sensors=sensors, ee_poses=ee_poses,
-            excluded_joints=excluded_joints,
+            ee_control=ee_control, excluded_joints=excluded_joints,
         )
 
     # Maps mobile_base feature keys (x.vel/...) to dataset action feature names.
@@ -344,6 +379,16 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
             for e in ee_list
         ]
 
+    ee_control = [
+        EEControlSpec(
+            ee_pose=c['ee_pose'],
+            group=c['group'],
+            target_frame=c['target_frame'],
+            enable_topic=c['enable_topic'],
+        )
+        for c in (data.get('ee_control') or [])
+    ]
+
     return RobotDescriptor(
         robot_id=data['robot_id'],
         joint_states_topic=data['joint_states_topic'],
@@ -353,6 +398,7 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
         mobile_base=mobile_base,
         sensors=sensors,
         ee_poses=ee_poses,
+        ee_control=ee_control,
         excluded_joints=list(data.get('excluded_joints') or [])
     )
 
@@ -440,5 +486,40 @@ def validate_descriptor(desc: RobotDescriptor) -> List[str]:
                     f"Active camera '{c.name}' must have "
                     'compressed_topic or raw_topic defined.'
                 )
+
+    # 4. ee_control specs must reference real ee_poses/groups, non-empty
+    # frame/topic, and not double-claim an ee_pose or a group.
+    known_ee = {e.name for e in (desc.ee_poses or [])}
+    known_groups = {g.name for g in desc.groups}
+    ee_poses_seen = []
+    groups_seen = []
+    for c in desc.ee_control:
+        if c.ee_pose not in known_ee:
+            errors.append(
+                f"ee_control entry references unknown ee_pose '{c.ee_pose}'."
+            )
+        if c.group not in known_groups:
+            errors.append(
+                f"ee_control entry references unknown group '{c.group}'."
+            )
+        if not c.target_frame:
+            errors.append(
+                f"ee_control entry for ee_pose '{c.ee_pose}' has an empty "
+                'target_frame.'
+            )
+        if not c.enable_topic:
+            errors.append(
+                f"ee_control entry for ee_pose '{c.ee_pose}' has an empty "
+                'enable_topic.'
+            )
+        ee_poses_seen.append(c.ee_pose)
+        groups_seen.append(c.group)
+
+    dup_ee = {n for n in ee_poses_seen if ee_poses_seen.count(n) > 1}
+    if dup_ee:
+        errors.append(f'Duplicate ee_control ee_pose name(s): {sorted(dup_ee)}')
+    dup_groups = {n for n in groups_seen if groups_seen.count(n) > 1}
+    if dup_groups:
+        errors.append(f'Duplicate ee_control group name(s): {sorted(dup_groups)}')
 
     return errors

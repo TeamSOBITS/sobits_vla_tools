@@ -28,7 +28,7 @@
 """Shared pure-Python quaternion/rotation math, no scipy dependency."""
 
 import math
-from typing import Tuple
+from typing import Sequence, Tuple
 
 
 def quat_to_rpy(x: float, y: float, z: float, w: float) -> Tuple[float, float, float]:
@@ -57,3 +57,23 @@ def rpy_to_quat(
         cr * cp * sy - sr * sp * cy,
         cr * cp * cy + sr * sp * sy,
     )
+
+
+def unwrap_rpy(
+    rpy: Sequence[float], prev: Sequence[float]
+) -> Tuple[float, float, float]:
+    """
+    Shift each rpy axis by +-2pi so it lands within pi of prev on that axis.
+
+    Same per-axis single-step correction as
+    sobits_vla_rosbag_conversion sync/poses.py compute_ee_pose_and_delta
+    (fb188e1) -- not a wrap-to-range, a continuity fix against prev.
+    """
+    out = list(rpy)
+    for ax in range(3):
+        diff = out[ax] - prev[ax]
+        if diff > math.pi:
+            out[ax] -= 2 * math.pi
+        elif diff < -math.pi:
+            out[ax] += 2 * math.pi
+    return out[0], out[1], out[2]
