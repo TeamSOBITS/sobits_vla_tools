@@ -371,7 +371,10 @@ class PolicyLoader:
             return False
 
     def load_policy(
-        self, joint_features: List[str], mobile_base_features: List[str]
+        self,
+        joint_features: List[str],
+        mobile_base_features: List[str],
+        ee_features: Optional[List[str]] = None,
     ) -> PolicyBundle:
         module_path, class_name = self.policy_class_path.rsplit('.', 1)
         policy_module = import_module(module_path)
@@ -562,7 +565,7 @@ class PolicyLoader:
                     model_action_feature_names
                 )
             )
-            yaml_features = joint_features + mobile_base_features
+            yaml_features = joint_features + mobile_base_features + (ee_features or [])
             _alias_rev = {v: k for k, v in self._BASE_KEY_ALIASES.items()}
             model_names_set = set(model_action_feature_names)
             missing = [
@@ -594,7 +597,9 @@ class PolicyLoader:
             _policy_cfg = policy.config
             _max_action_dim = getattr(_policy_cfg, 'max_action_dim', None)
             _max_state_dim = getattr(_policy_cfg, 'max_state_dim', None)
-            _actual_action_dim = len(joint_features + mobile_base_features)
+            _actual_action_dim = len(
+                joint_features + mobile_base_features + (ee_features or [])
+            )
             _actual_state_dim = _actual_action_dim
             if _max_action_dim is not None and _max_action_dim < _actual_action_dim:
                 raise RuntimeError(

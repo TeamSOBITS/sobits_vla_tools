@@ -118,7 +118,7 @@ class TestActionChunkBufferAggregate:
 
 def _make_engine(
     joint_features=None, mobile_base_features=None, relative_exclude_features=None,
-    postprocessor=None,
+    postprocessor=None, ee_features=None, model_action_feature_names=None,
 ) -> InferenceEngine:
     """Minimal InferenceEngine with only what _to_action_steps reads set."""
     return InferenceEngine(
@@ -135,13 +135,14 @@ def _make_engine(
         preprocessor=None,
         postprocessor=postprocessor,
         expected_state_dim=None,
-        model_action_feature_names=None,
+        model_action_feature_names=model_action_feature_names,
         model_use_relative_actions=False,
         joint_features=joint_features if joint_features is not None else ['j0', 'j1', 'j2'],
         mobile_base_features=(
             mobile_base_features if mobile_base_features is not None else ['x.vel']
         ),
         relative_exclude_features=relative_exclude_features,
+        ee_features=ee_features,
     )
 
 
@@ -199,6 +200,57 @@ class TestToActionSteps:
         assert steps == []
 
 
+# --- _to_action_steps: ee.* action keys alongside hand joints ---
+
+
+_EE_LEFT_KEYS = ['ee.left.x', 'ee.left.y', 'ee.left.z',
+                 'ee.left.roll', 'ee.left.pitch', 'ee.left.yaw']
+_HAND_JOINTS = ['hand_left_finger_l_mcp_joint', 'hand_left_finger_c_mcp_joint']
+
+
+def _make_ee_engine(model_action_feature_names=None):
+    return _make_engine(
+        joint_features=_HAND_JOINTS,
+        mobile_base_features=[],
+        ee_features=_EE_LEFT_KEYS,
+        model_action_feature_names=model_action_feature_names,
+    )
+
+
+class TestToActionStepsEE:
+
+    def test_dict_input_includes_ee_keys(self):
+        engine = _make_ee_engine()
+        raw = {k: float(i) for i, k in enumerate(_HAND_JOINTS + _EE_LEFT_KEYS)}
+        raw['extra'] = 99.0
+        steps = engine._to_action_steps(raw)
+        assert len(steps) == 1
+        for k in _HAND_JOINTS + _EE_LEFT_KEYS:
+            assert steps[0][k] == raw[k]
+        assert 'extra' not in steps[0]
+
+    def test_1d_numpy_with_model_names(self):
+        names = _HAND_JOINTS + _EE_LEFT_KEYS
+        engine = _make_ee_engine(model_action_feature_names=names)
+        raw = np.array(list(range(len(names))), dtype=np.float32)
+        steps = engine._to_action_steps(raw)
+        assert len(steps) == 1
+        for i, name in enumerate(names):
+            assert steps[0][name] == float(i)
+
+    def test_2d_numpy_chunk_with_model_names(self):
+        names = _HAND_JOINTS + _EE_LEFT_KEYS
+        engine = _make_ee_engine(model_action_feature_names=names)
+        raw = np.stack([
+            np.arange(len(names), dtype=np.float32),
+            np.arange(len(names), dtype=np.float32) * 2,
+        ])
+        steps = engine._to_action_steps(raw)
+        assert len(steps) == 2
+        assert steps[0]['ee.left.x'] == float(len(_HAND_JOINTS))
+        assert steps[1]['ee.left.x'] == float(len(_HAND_JOINTS)) * 2
+
+
 # --- _apply_manual_delta tests ---
 
 
@@ -232,6 +284,19 @@ class TestApplyManualDelta:
         )
         assert abs(steps[0]['j0'] - 1.1) < 1e-9
         assert steps[0]['hand_left_finger_l_mcp_joint'] == 0.3
+
+    def test_ee_keys_delta_convert_like_joints(self):
+        # ee.* channels are seeded into state_vector by ObsBuilder same as
+        # joints, so _apply_manual_delta needs no ee-specific branch.
+        engine = _make_engine(joint_features=[], mobile_base_features=[], ee_features=[
+            'ee.left.x', 'ee.left.roll',
+        ])
+        steps = [{'ee.left.x': 0.02, 'ee.left.roll': -0.01}]
+        engine._apply_manual_delta(
+            steps, state_vector={'ee.left.x': 0.50, 'ee.left.roll': 0.10},
+        )
+        assert abs(steps[0]['ee.left.x'] - 0.52) < 1e-9
+        assert abs(steps[0]['ee.left.roll'] - 0.09) < 1e-9
 
     def test_noop_when_postprocessor_has_absolute_step(self):
         try:

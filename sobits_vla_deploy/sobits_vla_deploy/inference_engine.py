@@ -71,6 +71,7 @@ class InferenceEngine:
         joint_features: List[str],
         mobile_base_features: List[str],
         relative_exclude_features: Optional[List[str]] = None,
+        ee_features: Optional[List[str]] = None,
         logger=None,
     ):
         self.policy = policy
@@ -91,6 +92,7 @@ class InferenceEngine:
         self.joint_features = joint_features
         self.mobile_base_features = mobile_base_features
         self.relative_exclude_features = set(relative_exclude_features or [])
+        self.ee_features = list(ee_features or [])
         self.logger = logger
 
         self.task_label = ''
@@ -501,7 +503,7 @@ class InferenceEngine:
                     step[key] = state_vector[key] + step[key]
 
     def _to_action_steps(self, raw_actions: Any) -> List[Dict[str, float]]:
-        action_keys = self.joint_features + self.mobile_base_features
+        action_keys = self.joint_features + self.mobile_base_features + self.ee_features
         if not action_keys:
             return []
 

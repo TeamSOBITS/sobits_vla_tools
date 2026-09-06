@@ -31,7 +31,8 @@ Schema-driven (`_SCHEMA` in `deploy_node.py`; see
 
 | Group | Covers |
 |---|---|
-| `model.*` | `repo_id`, `policy_class`, `device`, `use_amp`, `use_relative_actions`. |
+| `model.*` | `repo_id`, `policy_class`, `device`, `use_amp`, `use_relative_actions`, `action_space` (`joint` or `ee`). |
+| `ee_servo.*` | `max_lin_step_m`, `max_ang_step_rad` -- per-step clamp on EE servo targets in `action_space: ee` mode. |
 | `runtime.*` | `control_hz`, `actions_per_chunk`, `async_enabled`, `action_interpolation_multiplier`. |
 | `rtc.*` | Real-Time Chunking guidance knobs. |
 | `gamepad.*` | `command_service` (this node advertises `~/command`), `controller`, per-controller `button_mapping`, deadman safety trigger. |
@@ -73,8 +74,21 @@ ros2 launch sobits_vla_deploy vla_experiment.launch.py deploy_config:=deploy_con
 Verified args (`--show-args`, both files): `enable_gpu` (default `true`,
 runs under the `gpu` pixi env — needed for torch/lerobot), `pixi_env`,
 `pixi_manifest`, `robot_name`, `enable_world_reset`, plus per-file overrides
-(`deploy_config`/`config_file`, `controller`, `model_*` for the first;
-`num_episodes`, `episode_timeout_s`, `done_wait_margin_s` for the second).
+(`deploy_config`/`config_file`, `controller`, `model_*`, `enable_servo_backend`
+for the first; `num_episodes`, `episode_timeout_s`, `done_wait_margin_s` for
+the second).
+
+### EE action mode (`model.action_space: ee`)
+
+`enable_servo_backend:=true` brings up `sobits_teleop`'s
+`arm_backend_servo.launch.py` (MoveIt Servo + `servo_target_bridge`) so the
+deploy node can stream `ee.{arm}.*` actions as TF targets instead of joint
+commands. `/<robot_name>/move_group` must already be running — the include
+fetches robot description/kinematics params from it and waits up to 60 s
+before aborting. If the deploy node dies or stops publishing, the bridge
+holds the last commanded TF target until servo's `incoming_command_timeout`
+(0.5 s) pauses motion — it does not freeze instantly. The bridge also clamps
+commanded targets to a 1.10 m reach from its configured origin frame.
 
 ## How to test
 

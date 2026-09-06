@@ -41,7 +41,9 @@ import rclpy  # noqa: E402
 from rclpy.callback_groups import ReentrantCallbackGroup  # noqa: E402
 from rclpy.executors import MultiThreadedExecutor  # noqa: E402
 from rclpy.node import Node  # noqa: E402
-from rclpy.qos import QoSProfile, ReliabilityPolicy  # noqa: E402
+from rclpy.qos import (  # noqa: E402
+    DurabilityPolicy, QoSProfile, ReliabilityPolicy,
+)
 from sensor_msgs.msg import CompressedImage, Image, JointState, Joy  # noqa: E402
 from sobits_interfaces.srv import VlaCommand, VlaResetWorld, VlaUpdateTask  # noqa: E402
 from sobits_vla_common import runtime_deps  # noqa: E402
@@ -50,6 +52,7 @@ from sobits_vla_common.lerobot_compat import apply_deploy_patches  # noqa: E402
 from sobits_vla_common.param_schema import (  # noqa: E402
     declare_from_schema, P, read_schema, Template,
 )
+from sobits_vla_common.robot_descriptor import ee_action_features  # noqa: E402
 from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.action_executor import ActionExecutor  # noqa: E402
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
@@ -57,6 +60,7 @@ from sobits_vla_deploy.episode_logger import EpisodeLogger  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
 from sobits_vla_deploy.obs_builder import ObsBuilder  # noqa: E402
 from sobits_vla_deploy.policy_loader import PolicyLoader  # noqa: E402
+from sobits_vla_deploy.servo_target_publisher import ServoTargetPublisher  # noqa: E402
 from std_msgs.msg import Bool, String  # noqa: E402
 import tf2_ros  # noqa: E402
 from trajectory_msgs.msg import JointTrajectory  # noqa: E402
@@ -75,6 +79,17 @@ _SCHEMA = {
         'use_relative_actions': P(False),
         'default_task_label': P(''),
         'dataset_repo_id': P(''),
+        # 'joint': arm groups command joint trajectories directly (default).
+        # 'ee': the policy emits absolute ee.{arm}.* poses instead of arm
+        # joint angles, streamed to the sobits_teleop servo bridge; arm
+        # groups must be excluded via robot.exclude.groups in that mode.
+        'action_space': P('joint'),
+    },
+    'ee_servo': {
+        # 0.3 m/s at the default 10 Hz control_hz -- caps how far one control
+        # step may move a servo target, independent of the policy's own output.
+        'max_lin_step_m': P(0.03),
+        'max_ang_step_rad': P(0.15),
     },
     'runtime': {
         'control_hz': P(10.0),
@@ -222,7 +237,9 @@ class LeRobotDeployNode(Node):
             logger=self.get_logger(),
         )
 
-        bundle = loader.load_policy(self._joint_features, self._mobile_base_features)
+        bundle = loader.load_policy(
+            self._joint_features, self._mobile_base_features, self._ee_features
+        )
 
         self._policy = bundle.policy
         self._rtc_enabled = bundle.rtc_enabled
@@ -247,12 +264,33 @@ class LeRobotDeployNode(Node):
                     self._model_use_relative_actions,
                 )
             )
+        self._check_action_space_matches_model()
+
+    def _check_action_space_matches_model(self) -> None:
+        """model.action_space must agree with what the checkpoint actually emits."""
+        names = self._model_action_feature_names or []
+        model_has_ee = any(n.startswith('ee.') for n in names)
+        if self._action_space == 'joint' and model_has_ee:
+            raise RuntimeError(
+                'model.action_space is "joint" but the checkpoint {!r} emits '
+                'ee.* action features -- set model.action_space: ee.'.format(
+                    self._model_repo_id
+                )
+            )
+        if self._action_space == 'ee' and not model_has_ee:
+            raise RuntimeError(
+                'model.action_space is "ee" but the checkpoint {!r} emits no '
+                'ee.* action features -- set model.action_space: joint.'.format(
+                    self._model_repo_id
+                )
+            )
 
     def _init_collaborators(self) -> None:
         self._obs_builder = ObsBuilder(
             joint_features=self._joint_features,
             mobile_base_features=self._mobile_base_features,
             camera_names=self._camera_names,
+            ee_state_specs=self._ee_state_specs,
         )
 
         self._play_enabled = False
@@ -285,6 +323,7 @@ class LeRobotDeployNode(Node):
             joint_features=self._joint_features,
             mobile_base_features=self._mobile_base_features,
             relative_exclude_features=self._relative_exclude_features,
+            ee_features=self._ee_features,
             logger=self.get_logger(),
         )
         self._inference_engine.update_task_label(self._task_label)
@@ -409,11 +448,46 @@ class LeRobotDeployNode(Node):
 
         self.add_on_set_parameters_callback(self._on_set_parameters)
 
+        self._init_servo_target_publisher()
+
         self._inference_engine.start(
             obs_builder=self._obs_builder,
             chunk_buffer=self._chunk_buffer,
             tf_buffer=self._tf_buffer,
             ee_poses=[(ee.name, ee.source_frame, ee.target_frame) for ee in self._ee_poses],
+        )
+
+    def _init_servo_target_publisher(self) -> None:
+        """Wire the sobits_teleop servo bridge interface for model.action_space=='ee'."""
+        self._servo_targets: Optional[ServoTargetPublisher] = None
+        if self._action_space != 'ee':
+            return
+
+        enable_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        enable_publishers = {
+            spec.ee_pose: self.create_publisher(
+                Bool, spec.enable_topic, enable_qos, callback_group=self._cb_group,
+            )
+            for spec in self._ee_control
+        }
+        tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+        # ee_poses[].target_frame is the frame the descriptor already measures
+        # EE state in (base_footprint) -- reuse it as the servo TF parent so
+        # observed and commanded poses share one frame.
+        parent_frame = self._ee_poses[0].target_frame if self._ee_poses else 'base_footprint'
+
+        self._servo_targets = ServoTargetPublisher(
+            arms=self._ee_control,
+            parent_frame=parent_frame,
+            tf_broadcaster=tf_broadcaster,
+            enable_publishers=enable_publishers,
+            max_lin_step_m=self._ee_max_lin_step_m,
+            max_ang_step_rad=self._ee_max_ang_step_rad,
+            logger=self.get_logger(),
         )
 
     def _init_logging(self) -> None:
@@ -476,6 +550,8 @@ class LeRobotDeployNode(Node):
         )
 
     def destroy_node(self) -> None:
+        if self._servo_targets is not None:
+            self._servo_targets.disable_tracking()
         self._inference_engine.stop()
         self._episode_logger.shutdown()
         super().destroy_node()
@@ -500,6 +576,15 @@ class LeRobotDeployNode(Node):
         self._model_use_relative_actions_set = (
             'model.use_relative_actions' in (getattr(self, '_parameter_overrides', None) or {})
         )
+        self._action_space = str(params.model.action_space).strip().lower()
+        if self._action_space not in ('joint', 'ee'):
+            raise RuntimeError(
+                'model.action_space must be "joint" or "ee", got {!r}.'.format(
+                    self._action_space
+                )
+            )
+        self._ee_max_lin_step_m = float(params.ee_servo.max_lin_step_m)
+        self._ee_max_ang_step_rad = float(params.ee_servo.max_ang_step_rad)
 
         self._control_hz = float(params.runtime.control_hz)
         self._actions_per_chunk = int(params.runtime.actions_per_chunk)
@@ -614,6 +699,7 @@ class LeRobotDeployNode(Node):
         self._joint_features = []
         self._joint_feature_to_ros = {}
         self._ee_poses = desc.ee_poses or []
+        self._configure_ee_control(desc, active_groups_list)
 
         for group in desc.groups:
             if group.name in active_groups_list:
@@ -673,6 +759,45 @@ class LeRobotDeployNode(Node):
                     self._camera_topics[cam.name] = cam.raw_topic
                     self._camera_compressed[cam.name] = False
                 self._camera_encodings[cam.name] = cam.encoding if cam.encoding else 'rgb8'
+
+    def _configure_ee_control(self, desc, active_groups_list: List[str]) -> None:
+        """
+        Resolve EE-servo wiring for model.action_space=='ee'; no-op in joint mode.
+
+        Each surviving ee_control spec's joint group must already be excluded
+        (via robot.exclude.groups) -- the policy drives that arm through the
+        servo bridge instead, so the joint controller must not also command it.
+        """
+        self._ee_control: List[Any] = []
+        self._ee_features: List[str] = []
+        self._ee_state_specs: List[tuple] = []
+        if self._action_space != 'ee':
+            return
+
+        self._ee_control = desc.active_ee_control
+        if not self._ee_control:
+            raise RuntimeError(
+                'model.action_space is "ee" but no ee_control spec survived '
+                'robot.exclude filtering -- nothing to servo. Check '
+                "robot.exclude.ee_poses against the descriptor's ee_control list."
+            )
+        still_active = [c.group for c in self._ee_control if c.group in active_groups_list]
+        if still_active:
+            raise RuntimeError(
+                'model.action_space is "ee" but joint group(s) {} are still '
+                'active -- add them to robot.exclude.groups so the servo '
+                'bridge and the joint controller do not both drive the same '
+                'arm.'.format(still_active)
+            )
+        self._ee_features = [
+            key for spec in self._ee_control for key in ee_action_features(spec.ee_pose)
+        ]
+        known_ee_poses = {e.name: e for e in self._ee_poses}
+        self._ee_state_specs = [
+            (e.name, e.source_frame, e.target_frame)
+            for spec in self._ee_control
+            for e in [known_ee_poses[spec.ee_pose]]
+        ]
 
     def _load_scene_baselines(self) -> None:
         """
@@ -847,6 +972,8 @@ class LeRobotDeployNode(Node):
             self._cmd_vector.clear()
         self._obs_builder.clear_prev_ee_pose()
         self._inference_engine.clear_single_step_result()
+        if self._servo_targets is not None:
+            self._servo_targets.disable_tracking()
         self.get_logger().info('Episode model state reset.')
         Thread(target=self._do_world_reset, args=(outcome,), daemon=True).start()
 
@@ -940,6 +1067,10 @@ class LeRobotDeployNode(Node):
                 None if self._safety_enabled else self.get_clock().now()
             )
             self._play_enabled = True
+        if self._servo_targets is not None and not self._safety_enabled:
+            # With a deadman trigger, engagement happens on first press instead
+            # (see _publish_next_action) -- PLAY alone must not move the arm.
+            self._servo_targets.engage(self._obs_builder.state_vector)
         Thread(target=self._do_begin_episode, daemon=True).start()
         return True
 
@@ -1116,6 +1247,8 @@ class LeRobotDeployNode(Node):
                         'Safety trigger released — holding commands.'
                     )
                     self._safety_was_pressed = False
+                    if self._servo_targets is not None:
+                        self._servo_targets.disable_tracking()
                 if self._base_pub is not None:
                     self._base_pub.publish(Twist())
                 return
@@ -1125,6 +1258,8 @@ class LeRobotDeployNode(Node):
                 self._chunk_buffer.clear()
                 self._interpolator.reset()
                 self._safety_was_pressed = True
+                if self._servo_targets is not None:
+                    self._servo_targets.engage(self._obs_builder.state_vector)
                 if self._episode_t0 is None:
                     # Deferred episode clock: timing/timeout start now, not
                     # while the scene was staged with the trigger released.
@@ -1176,6 +1311,8 @@ class LeRobotDeployNode(Node):
             cmd_vector=self._cmd_vector,
             now_msg=now,
         )
+        if self._servo_targets is not None:
+            self._servo_targets.publish_step(step, now)
 
         if self._logging_enabled:
             self._log_step(step, joint_log, base_log)

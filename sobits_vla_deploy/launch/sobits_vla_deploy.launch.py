@@ -38,8 +38,8 @@ from sobits_vla_common.launch.utils import (
     default_pixi_manifest, pixi_launch_arguments, pixi_prefix, resolve_pixi_env,
 )
 from sobits_vla_deploy.launch_helpers import (
-    controller_and_teleop_actions, resolve_deploy_config, str_to_bool,
-    world_reset_actions, world_reset_config_path,
+    controller_and_teleop_actions, resolve_deploy_config, servo_backend_actions,
+    str_to_bool, world_reset_actions, world_reset_config_path,
 )
 
 # Required for PI05 bfloat16 model loading on CUDA without OOM.
@@ -124,6 +124,7 @@ def _create_deploy_node(context, *args, **kwargs):
     actions += controller_and_teleop_actions(
         context, robot_name, gamepad_config, use_sim_time,
     )
+    actions += servo_backend_actions(context, robot_name, use_sim_time)
 
     return actions
 
@@ -214,6 +215,15 @@ def generate_launch_description() -> LaunchDescription:
                 'model_use_amp',
                 default_value='',
                 description='Override model.use_amp when non-empty (true/false).',
+            ),
+            DeclareLaunchArgument(
+                'enable_servo_backend',
+                default_value='false',
+                description=(
+                    'Include sobits_teleop arm_backend_servo for EE action mode. '
+                    'Requires /<robot_name>/move_group to be running (include '
+                    'waits up to 60 s, then aborts).'
+                ),
             ),
             OpaqueFunction(function=_create_deploy_node),
         ]
