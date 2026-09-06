@@ -37,8 +37,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pytest  # noqa: E402
 
 from sobits_vla_common.robot_descriptor import (  # noqa: E402
-    _parse_descriptor_file, CameraSpec, ee_action_features, EEPoseSpec, GroupSpec,
-    JointSpec, MobileBaseSpec, RobotDescriptor, validate_descriptor,
+    _parse_descriptor_file, CameraSpec, ee_action_features, EEControlSpec,
+    EEPoseSpec, GroupSpec, JointSpec, MobileBaseSpec, RobotDescriptor,
+    validate_descriptor,
 )
 
 
@@ -293,3 +294,19 @@ def test_active_ee_control_excludes_removed_ee_pose():
         desc = _parse_descriptor_file(path)
     filtered = desc.filtered(exclude_ee_poses=['right'])
     assert [c.ee_pose for c in filtered.active_ee_control] == ['left']
+
+
+def test_filtered_all_groups_excluded_without_ee_control_raises():
+    desc = _make_descriptor()
+    with pytest.raises(ValueError, match='every joint group'):
+        desc.filtered(exclude_groups=['arm', 'gripper'])
+
+
+def test_filtered_all_groups_excluded_allowed_in_pure_ee_mode():
+    desc = replace(_make_descriptor(), ee_control=[EEControlSpec(
+        ee_pose='left', group='arm', target_frame='left_target_link',
+        enable_topic='arm/moveit_track_enabled',
+    )])
+    filtered = desc.filtered(exclude_groups=['arm', 'gripper'])
+    assert filtered.active_groups == []
+    assert [c.ee_pose for c in filtered.ee_control] == ['left']

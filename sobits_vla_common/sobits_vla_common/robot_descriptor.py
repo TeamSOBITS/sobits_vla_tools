@@ -253,17 +253,6 @@ class RobotDescriptor:
                 trimmed.append(replace(g, joints=kept) if len(kept) != len(g.joints) else g)
             groups = trimmed
 
-        if not any(g.active for g in groups):
-            raise ValueError(
-                'exclude.groups would deactivate every joint group; '
-                'at least one must remain active.'
-            )
-
-        sensors = dict(self.sensors)
-        sensors['cameras'] = [
-            replace(c, active=False) if c.name in ex_c else c
-            for c in cameras
-        ]
         ee_poses = (
             [e for e in self.ee_poses if e.name not in ex_e]
             if self.ee_poses is not None
@@ -271,6 +260,21 @@ class RobotDescriptor:
         )
         surviving_ee = {e.name for e in ee_poses} if ee_poses is not None else set()
         ee_control = [c for c in self.ee_control if c.ee_pose in surviving_ee]
+
+        # Zero active joint groups is valid only in pure-EE mode, where every
+        # arm is driven through a surviving ee_control spec instead.
+        if not any(g.active for g in groups) and not ee_control:
+            raise ValueError(
+                'exclude.groups would deactivate every joint group; '
+                'at least one must remain active (or an ee_control spec '
+                'must survive for pure-EE action mode).'
+            )
+
+        sensors = dict(self.sensors)
+        sensors['cameras'] = [
+            replace(c, active=False) if c.name in ex_c else c
+            for c in cameras
+        ]
         excluded_joints = list(self.excluded_joints) + removed_ros_names
         return replace(
             self, groups=groups, sensors=sensors, ee_poses=ee_poses,
