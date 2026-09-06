@@ -310,7 +310,12 @@ class FrameSynthesizer:
                 return False
             state_pose, action_pose = result
             state.extend(state_pose.tolist())
-            action.extend(action_pose.tolist())
+            # Joints get delta-converted by to_relative_action above; EE deltas
+            # are formed here from the already-unwrap-consistent (state, action) pair.
+            if self.use_relative_actions:
+                action.extend((action_pose - state_pose).tolist())
+            else:
+                action.extend(action_pose.tolist())
             prev_ee_action_poses[name] = state_pose
         return True
 

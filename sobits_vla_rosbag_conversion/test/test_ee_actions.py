@@ -136,6 +136,78 @@ class TestSynthesizeEEAction:
         assert abs(action[5] - (state_yaw - 0.05)) < 1e-3
 
 
+class TestAppendEEChannelsRelative:
+    """_append_ee_channels is a plain method; drive it via a stub self (R1: no rclpy)."""
+
+    def _synthesizer(self, use_relative_actions):
+        from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
+        return types.SimpleNamespace(
+            ee_action_specs=[('left', 'ee', 'base')],
+            fps=FPS,
+            use_relative_actions=use_relative_actions,
+            log_warn=lambda msg: None,
+            _append_ee_channels=FrameSynthesizer._append_ee_channels,
+        )
+
+    def _run(self, synth, tree, t_sec, prev):
+        state, action = [], []
+        prev_ee_action_poses = {'left': prev}
+        ok = synth._append_ee_channels(
+            synth, state, action, tree, t_sec, prev_ee_action_poses,
+            {'tf': 0},
+        )
+        return ok, np.array(state, dtype=np.float32), np.array(action, dtype=np.float32)
+
+    def test_relative_mode_appends_delta_state_stays_absolute(self):
+        tree = _StubTFTree({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            ('base', 'ee', STEP_NS): (0.1, 0.2, 0.0, 0.0, 0.0, 0.0),
+        })
+        synth = self._synthesizer(use_relative_actions=True)
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+        np.testing.assert_allclose(state[:3], [0.0, 0.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(action[:3], [0.1, 0.2, 0.0], atol=1e-6)
+
+    def test_integration_invariant_state_plus_action_equals_next_state(self):
+        # state(t) + action(t) == state(t+1) is exactly the delta roundtrip.
+        tree = _StubTFTree({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            ('base', 'ee', STEP_NS): (0.1, -0.05, 0.02, 0.0, 0.0, 0.0),
+        })
+        synth = self._synthesizer(use_relative_actions=True)
+        ok, state_t, action_t = self._run(synth, tree, 0.0, None)
+        assert ok
+        _, state_t1, _ = self._run(synth, tree, 1.0 / FPS, state_t)
+        np.testing.assert_allclose(state_t + action_t, state_t1, atol=1e-5)
+
+    def test_pi_crossing_delta_stays_small(self):
+        # state near +pi, next raw sample near -pi (same physical motion,
+        # wrapped) -- unwrap keeps the delta small, never near 2*pi.
+        near_pi = np.pi - 0.05
+        wrapped_next = -np.pi + 0.05
+        tree = _StubTFTree({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, 0.0, 0.0, near_pi),
+            ('base', 'ee', STEP_NS): (0.0, 0.0, 0.0, 0.0, 0.0, wrapped_next),
+        })
+        synth = self._synthesizer(use_relative_actions=True)
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+        assert abs(action[5] - 0.1) < 1e-3
+        assert abs(action[5]) < np.pi
+
+    def test_absolute_mode_unchanged(self):
+        tree = _StubTFTree({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            ('base', 'ee', STEP_NS): (0.1, 0.0, 0.0, 0.0, 0.0, 0.0),
+        })
+        synth = self._synthesizer(use_relative_actions=False)
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+        np.testing.assert_allclose(state[:3], [0.0, 0.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(action[:3], [0.1, 0.0, 0.0], atol=1e-6)
+
+
 class TestEEActionFeatures:
 
     def test_feature_names_in_order(self):
@@ -280,12 +352,12 @@ class TestResolveEEActionsValidation:
         specs = RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
         assert specs == [('left', 'ee_l', 'base')]
 
-    def test_relative_actions_raises_not_implemented(self):
+    def test_relative_actions_allowed(self):
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
         node = self._node(use_relative_actions=True)
         params = self._params(exclude_groups=['arm_left'])
-        with pytest.raises(NotImplementedError):
-            RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+        specs = RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+        assert specs == [('left', 'ee_l', 'base')]
 
     def test_disabled_returns_empty_without_validating(self):
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode

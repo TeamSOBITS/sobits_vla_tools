@@ -102,7 +102,8 @@ _SCHEMA = {
         'primary': P(''),
     },
     'robot_descriptor_id': P(''),
-    # Absolute EE pose actions synthesized from offline TF (v1: abs only).
+    # EE pose actions synthesized from offline TF; abs or delta per
+    # use_relative_actions (mirrors joint action relativity).
     'ee_actions': {
         'enabled': P(False),
         'arms': P(['']),
@@ -264,10 +265,6 @@ class RosbagConversionNode(Node):
         """Validate ee_actions config against desc; return (name, src, tgt) TF triples."""
         if not params.ee_actions.enabled:
             return []
-        if self.use_relative_actions:
-            raise NotImplementedError(
-                'ee_actions is not supported with use_relative_actions (v1 abs-only).'
-            )
         arms = params.ee_actions.arms
         if not arms:
             raise ValueError('ee_actions.enabled is true but ee_actions.arms is empty.')
