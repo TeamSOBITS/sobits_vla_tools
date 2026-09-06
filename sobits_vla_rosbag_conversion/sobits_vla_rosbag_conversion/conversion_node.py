@@ -110,6 +110,9 @@ _SCHEMA = {
         # rpy = roll/pitch/yaw (6D, per-axis unwrap) | quat = quaternion
         # x,y,z,w (7D, shortest-arc).
         'rotation': P('rpy'),
+        # base = deltas along the reference frame axes | body = along the
+        # EE's own axes at t, UMI-style, reference-frame invariant.
+        'frame': P('base'),
     },
 }
 
@@ -272,6 +275,18 @@ class RosbagConversionNode(Node):
                 f"ee_actions.rotation must be 'rpy' or 'quat', got {rotation!r}"
             )
         self.ee_rotation = rotation
+        frame = params.ee_actions.frame
+        if frame not in ('base', 'body'):
+            raise ValueError(
+                f"ee_actions.frame must be 'base' or 'body', got {frame!r}"
+            )
+        if frame == 'body' and not self.use_relative_actions:
+            raise ValueError(
+                "ee_actions.frame='body' requires use_relative_actions=true -- "
+                'an absolute pose has no body-frame reading. For a reference-'
+                'frame change on absolute poses, use ee_poses target_frame instead.'
+            )
+        self.ee_frame = frame
         if not params.ee_actions.enabled:
             return []
         arms = params.ee_actions.arms
@@ -580,7 +595,7 @@ class RosbagConversionNode(Node):
             depth_camera_topics=self.depth_camera_topics,
             subtask_label_to_idx=self.subtask_label_to_idx,
             ee_action_specs=self.ee_action_specs, ee_rotation=self.ee_rotation,
-            logger=self.get_logger(),
+            ee_frame=self.ee_frame, logger=self.get_logger(),
         )
 
     def _run_episodes(self, dirs: list, all_tasks: list, pipeline: EpisodePipeline) -> None:

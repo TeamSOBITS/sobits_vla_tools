@@ -34,7 +34,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sobits_vla_common.geometry import (  # noqa: E402
-    quat_relative, quat_shortest_arc, quat_to_rpy, rpy_to_quat, unwrap_rpy,
+    quat_relative, quat_rotate_vec, quat_shortest_arc, quat_to_rpy, rpy_to_quat,
+    unwrap_rpy,
 )
 
 
@@ -120,6 +121,37 @@ def test_quat_relative_roundtrip():
         composed = quat_shortest_arc(composed, q_to)
         for a, b in zip(composed, q_to):
             assert math.isclose(a, b, abs_tol=1e-6)
+
+
+def test_quat_rotate_vec_90deg_about_z():
+    q = rpy_to_quat(0.0, 0.0, math.pi / 2.0)
+    x, y, z = quat_rotate_vec(q, (1.0, 0.0, 0.0))
+    assert math.isclose(x, 0.0, abs_tol=1e-9)
+    assert math.isclose(y, 1.0, abs_tol=1e-9)
+    assert math.isclose(z, 0.0, abs_tol=1e-9)
+
+
+def test_quat_rotate_vec_identity():
+    q = rpy_to_quat(0.0, 0.0, 0.0)
+    v = (0.3, -0.7, 1.5)
+    out = quat_rotate_vec(q, v)
+    for a, b in zip(out, v):
+        assert math.isclose(a, b, abs_tol=1e-9)
+
+
+def test_quat_rotate_vec_conjugate_is_inverse_roundtrip():
+    for roll, pitch, yaw in (
+        (0.3, -0.4, 1.2),
+        (-1.5, 0.7, -2.9),
+        (0.0, math.pi / 2.0, 0.0),
+    ):
+        q = rpy_to_quat(roll, pitch, yaw)
+        conj = (-q[0], -q[1], -q[2], q[3])
+        v = (0.5, -1.2, 2.3)
+        rotated = quat_rotate_vec(q, v)
+        back = quat_rotate_vec(conj, rotated)
+        for a, b in zip(back, v):
+            assert math.isclose(a, b, abs_tol=1e-9)
 
 
 def _quat_mul(q1, q2):

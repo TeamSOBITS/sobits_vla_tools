@@ -35,6 +35,7 @@ RobotDescriptor fixtures built in-line rather than real robot yaml.
 """
 
 import importlib.util
+import math
 from pathlib import Path
 import sys
 import types
@@ -56,6 +57,18 @@ _DEPS_AVAILABLE = (
 skip_no_rclpy = pytest.mark.skipif(
     not _DEPS_AVAILABLE, reason='rclpy/lerobot not importable outside the pixi env.'
 )
+
+
+def _quat_mul(q1, q2):
+    """Hamilton product q1 (x)(x) q2, both (x, y, z, w) -- matches rpy_to_quat's convention."""
+    x1, y1, z1, w1 = q1
+    x2, y2, z2, w2 = q2
+    return (
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+    )
 
 
 class _StubTFTree:
@@ -226,15 +239,17 @@ class _StubTFTreeQuat:
 class TestAppendEEChannelsRelative:
     """_append_ee_channels is a plain method; drive it via a stub self (R1: no rclpy)."""
 
-    def _synthesizer(self, use_relative_actions, ee_rotation='rpy'):
+    def _synthesizer(self, use_relative_actions, ee_rotation='rpy', ee_frame='base'):
         from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
         return types.SimpleNamespace(
             ee_action_specs=[('left', 'ee', 'base')],
             fps=FPS,
             use_relative_actions=use_relative_actions,
             ee_rotation=ee_rotation,
+            ee_frame=ee_frame,
             log_warn=lambda msg: None,
             _append_ee_channels=FrameSynthesizer._append_ee_channels,
+            _relative_ee_pose6=staticmethod(FrameSynthesizer._relative_ee_pose6),
             _relative_ee_pose7=staticmethod(FrameSynthesizer._relative_ee_pose7),
         )
 
@@ -300,13 +315,14 @@ class TestAppendEEChannelsRelative:
 class TestAppendEEChannelsRelativeQuat:
     """Quat-mode _append_ee_channels: state absolute 7D, action = [dp, q_rel]."""
 
-    def _synthesizer(self, use_relative_actions):
+    def _synthesizer(self, use_relative_actions, ee_frame='base'):
         from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
         return types.SimpleNamespace(
             ee_action_specs=[('left', 'ee', 'base')],
             fps=FPS,
             use_relative_actions=use_relative_actions,
             ee_rotation='quat',
+            ee_frame=ee_frame,
             log_warn=lambda msg: None,
             _append_ee_channels=FrameSynthesizer._append_ee_channels,
             _relative_ee_pose7=staticmethod(FrameSynthesizer._relative_ee_pose7),
@@ -379,6 +395,149 @@ class TestAppendEEChannelsRelativeQuat:
         assert ok
         np.testing.assert_allclose(action[:3], [0.1, 0.0, 0.0], atol=1e-6)
         np.testing.assert_allclose(action[3:7], [qx, qy, qz, qw], atol=1e-6)
+
+
+class TestAppendEEChannelsBodyFrame:
+    """ee_frame='body': deltas expressed in the EE's own axes at t (state pose)."""
+
+    def _synth_rpy(self, ee_frame='body'):
+        from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
+        return types.SimpleNamespace(
+            ee_action_specs=[('left', 'ee', 'base')],
+            fps=FPS,
+            use_relative_actions=True,
+            ee_rotation='rpy',
+            ee_frame=ee_frame,
+            log_warn=lambda msg: None,
+            _append_ee_channels=FrameSynthesizer._append_ee_channels,
+            _relative_ee_pose6=staticmethod(FrameSynthesizer._relative_ee_pose6),
+            _relative_ee_pose7=staticmethod(FrameSynthesizer._relative_ee_pose7),
+        )
+
+    def _synth_quat(self, ee_frame='body'):
+        from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
+        return types.SimpleNamespace(
+            ee_action_specs=[('left', 'ee', 'base')],
+            fps=FPS,
+            use_relative_actions=True,
+            ee_rotation='quat',
+            ee_frame=ee_frame,
+            log_warn=lambda msg: None,
+            _append_ee_channels=FrameSynthesizer._append_ee_channels,
+            _relative_ee_pose6=staticmethod(FrameSynthesizer._relative_ee_pose6),
+            _relative_ee_pose7=staticmethod(FrameSynthesizer._relative_ee_pose7),
+        )
+
+    def _run(self, synth, tree, t_sec, prev):
+        state, action = [], []
+        prev_ee_action_poses = {'left': prev}
+        ok = synth._append_ee_channels(
+            synth, state, action, tree, t_sec, prev_ee_action_poses,
+            {'tf': 0},
+        )
+        return ok, np.array(state, dtype=np.float32), np.array(action, dtype=np.float32)
+
+    def _quat(self, roll, pitch, yaw):
+        from scipy.spatial.transform import Rotation
+        return tuple(Rotation.from_euler('xyz', [roll, pitch, yaw]).as_quat())
+
+    def test_rpy_body_translation_matches_known_value(self):
+        # state yaw=+90deg, base motion [0, 0.03, 0] -> body delta [0.03, 0, 0]
+        # (R(t)^T rotates the +y base motion onto the EE's own +x axis).
+        yaw = np.pi / 2.0
+        tree = _StubTFTree({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, 0.0, 0.0, yaw),
+            ('base', 'ee', STEP_NS): (0.0, 0.03, 0.0, 0.0, 0.0, yaw),
+        })
+        synth = self._synth_rpy()
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+        np.testing.assert_allclose(action[:3], [0.03, 0.0, 0.0], atol=1e-5)
+        np.testing.assert_allclose(action[3:6], [0.0, 0.0, 0.0], atol=1e-5)
+
+    def test_rpy_body_reconstruction_invariant_translation(self):
+        # p(t+1) == p(t) + R(t) . delta_p
+        yaw = np.pi / 2.0
+        tree = _StubTFTree({
+            ('base', 'ee', 0): (0.1, 0.2, 0.05, 0.0, 0.0, yaw),
+            ('base', 'ee', STEP_NS): (0.1, 0.23, 0.05, 0.0, 0.0, yaw),
+        })
+        synth = self._synth_rpy()
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+        from sobits_vla_common.geometry import quat_rotate_vec, rpy_to_quat
+        state_q = rpy_to_quat(*state[3:6])
+        p_next = np.array(state[:3]) + np.array(quat_rotate_vec(state_q, action[:3]))
+        np.testing.assert_allclose(p_next, [0.1, 0.23, 0.05], atol=1e-5)
+
+    def test_rpy_body_reconstruction_invariant_rotation(self):
+        # q(t) (x) rpy_to_quat(delta_rpy) == q(t+1) up to sign.
+        from sobits_vla_common.geometry import quat_shortest_arc, rpy_to_quat
+        tree = _StubTFTree({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, 0.1, 0.2, 0.3),
+            ('base', 'ee', STEP_NS): (0.0, 0.0, 0.0, 0.15, 0.1, 0.5),
+        })
+        synth = self._synth_rpy()
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+        q_state = rpy_to_quat(*state[3:6])
+        q_delta = rpy_to_quat(*action[3:6])
+        q_next_expected = rpy_to_quat(*(0.15, 0.1, 0.5))
+        composed = _quat_mul(q_state, q_delta)
+        composed = quat_shortest_arc(composed, q_next_expected)
+        for a, b in zip(composed, q_next_expected):
+            assert math.isclose(a, b, abs_tol=1e-5)
+
+    def test_rpy_body_rotation_differs_from_per_axis_subtraction(self):
+        # Proper relative rotation (quat route) != naive per-axis rpy subtraction
+        # once more than one axis is involved -- guards against regressing to it.
+        tree = _StubTFTree({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, 0.2, 0.3, 0.4),
+            ('base', 'ee', STEP_NS): (0.0, 0.0, 0.0, 0.5, -0.1, 0.9),
+        })
+        synth = self._synth_rpy()
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+        naive = np.array((0.5, -0.1, 0.9)) - np.array((0.2, 0.3, 0.4))
+        assert not np.allclose(action[3:6], naive, atol=1e-3)
+
+    def test_quat_body_translation_matches_known_value(self):
+        qx, qy, qz, qw = self._quat(0.0, 0.0, np.pi / 2.0)
+        tree = _StubTFTreeQuat({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, qx, qy, qz, qw),
+            ('base', 'ee', STEP_NS): (0.0, 0.03, 0.0, qx, qy, qz, qw),
+        })
+        synth = self._synth_quat()
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+        np.testing.assert_allclose(action[:3], [0.03, 0.0, 0.0], atol=1e-5)
+
+    def test_quat_body_rotation_unchanged_from_base(self):
+        # Rotation channel is body-frame already (quat_relative); base vs body
+        # must agree bit-for-bit on the quaternion delta.
+        qx0, qy0, qz0, qw0 = self._quat(0.0, 0.0, 0.0)
+        qx1, qy1, qz1, qw1 = self._quat(0.1, -0.2, 0.3)
+        lookups = {
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, qx0, qy0, qz0, qw0),
+            ('base', 'ee', STEP_NS): (0.05, 0.0, 0.0, qx1, qy1, qz1, qw1),
+        }
+        tree_base = _StubTFTreeQuat(lookups)
+        tree_body = _StubTFTreeQuat(lookups)
+        ok_b, _, action_base = self._run(self._synth_quat('base'), tree_base, 0.0, None)
+        ok_body, _, action_body = self._run(self._synth_quat('body'), tree_body, 0.0, None)
+        assert ok_b and ok_body
+        np.testing.assert_allclose(action_base[3:7], action_body[3:7], atol=1e-9)
+
+    def test_base_frame_unchanged_regression(self):
+        # ee_frame='base' must byte-match the pre-existing behaviour.
+        tree = _StubTFTree({
+            ('base', 'ee', 0): (0.0, 0.0, 0.0, 0.0, 0.0, np.pi / 2.0),
+            ('base', 'ee', STEP_NS): (0.0, 0.03, 0.0, 0.0, 0.0, np.pi / 2.0),
+        })
+        synth = self._synth_rpy('base')
+        ok, state, action = self._run(synth, tree, 0.0, None)
+        assert ok
+        np.testing.assert_allclose(action[:3], [0.0, 0.03, 0.0], atol=1e-6)
 
 
 class TestEEActionFeatures:
@@ -531,10 +690,12 @@ class TestResolveEEActionsValidation:
             get_logger=lambda: types.SimpleNamespace(warning=lambda msg: None),
         )
 
-    def _params(self, enabled=True, arms=('left',), exclude_groups=(), rotation='rpy'):
+    def _params(
+        self, enabled=True, arms=('left',), exclude_groups=(), rotation='rpy', frame='base',
+    ):
         return types.SimpleNamespace(
             ee_actions=types.SimpleNamespace(
-                enabled=enabled, arms=list(arms), rotation=rotation,
+                enabled=enabled, arms=list(arms), rotation=rotation, frame=frame,
             ),
             exclude=types.SimpleNamespace(groups=list(exclude_groups)),
         )
@@ -579,6 +740,35 @@ class TestResolveEEActionsValidation:
         params = self._params(exclude_groups=['arm_left'], rotation='axis_angle')
         with pytest.raises(ValueError, match='rotation'):
             RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+
+    def test_body_frame_with_relative_actions_allowed(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        node = self._node(use_relative_actions=True)
+        params = self._params(exclude_groups=['arm_left'], frame='body')
+        specs = RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+        assert specs == [('left', 'ee_l', 'base')]
+        assert node.ee_frame == 'body'
+
+    def test_body_frame_without_relative_actions_raises(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        node = self._node(use_relative_actions=False)
+        params = self._params(exclude_groups=['arm_left'], frame='body')
+        with pytest.raises(ValueError, match='use_relative_actions'):
+            RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+
+    def test_invalid_frame_raises(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        node = self._node()
+        params = self._params(exclude_groups=['arm_left'], frame='world')
+        with pytest.raises(ValueError, match='frame'):
+            RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+
+    def test_base_frame_default_sets_ee_frame_attr(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        node = self._node()
+        params = self._params(exclude_groups=['arm_left'])
+        RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+        assert node.ee_frame == 'base'
 
 
 if __name__ == '__main__':

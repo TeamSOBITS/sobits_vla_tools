@@ -90,6 +90,15 @@ holds the last commanded TF target until servo's `incoming_command_timeout`
 (0.5 s) pauses motion — it does not freeze instantly. The bridge also clamps
 commanded targets to a 1.10 m reach from its configured origin frame.
 
+### Limitations
+
+Deploy's relative-action integration assumes base-frame rpy deltas. The
+conversion pipeline can also emit body-frame and quaternion deltas
+(`sobits_vla_rosbag_conversion`'s `ee_actions.frame`/`ee_actions.rotation`),
+but those are not yet integrable at deploy time, and the dataset does not
+currently record which delta convention was used — track the convention in
+the dataset name until metadata support exists.
+
 ## How to test
 
 ```

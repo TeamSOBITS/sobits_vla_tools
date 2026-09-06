@@ -96,6 +96,27 @@ def quat_shortest_arc(
     return q[0], q[1], q[2], q[3]
 
 
+def quat_rotate_vec(
+    q: Sequence[float], v: Sequence[float]
+) -> Tuple[float, float, float]:
+    """
+    Rotate 3-vector v by unit quaternion q (x, y, z, w): q (x)(x) [v,0] (x)(x) q^-1.
+
+    Rotating by the conjugate of q (negate x,y,z) gives the inverse rotation --
+    used to express a delta in the frame's own axes, R^T . v.
+    """
+    x, y, z, w = q
+    vx, vy, vz = v
+    # t = 2 * cross(q_xyz, v); result = v + w*t + cross(q_xyz, t).
+    tx = 2.0 * (y * vz - z * vy)
+    ty = 2.0 * (z * vx - x * vz)
+    tz = 2.0 * (x * vy - y * vx)
+    rx = vx + w * tx + (y * tz - z * ty)
+    ry = vy + w * ty + (z * tx - x * tz)
+    rz = vz + w * tz + (x * ty - y * tx)
+    return rx, ry, rz
+
+
 def quat_relative(
     q_from: Sequence[float], q_to: Sequence[float]
 ) -> Tuple[float, float, float, float]:
