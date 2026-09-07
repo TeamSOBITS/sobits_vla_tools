@@ -71,10 +71,11 @@ class TestConfigBuilderRejectsOldKey:
 
     def test_old_key_empty_does_not_raise_from_deprecation_check(self):
         from sobits_vla_training.config_builder import build_train_config
-        # No descriptor_id -> the descriptor branch (and its deprecation
-        # check) never runs; this only proves an empty old key is inert.
+        # An empty old key must be inert: reaching the later dataset.repo_id
+        # guard proves the deprecation check passed without raising.
         params = _base_params(**{'robot.exclude.ee_poses': []})
-        build_train_config(params, output_dir=Path('/tmp/does-not-matter'))
+        with pytest.raises(ValueError, match='dataset.repo_id must be set'):
+            build_train_config(params, output_dir=Path('/tmp/does-not-matter'))
 
 
 class TestPreflightRejectsOldKey:
