@@ -387,3 +387,105 @@ def test_filtered_all_groups_excluded_allowed_in_pure_ee_mode():
     filtered = desc.filtered(exclude_groups=['arm', 'gripper'])
     assert filtered.active_groups == []
     assert [c.ee_pose for c in filtered.ee_control] == ['left']
+
+
+# ── active: false on ee[] entries ───────────────────────────────────────────
+
+def _descriptor_two_ee(left_active=True, right_active=True):
+    arm_left = GroupSpec(
+        name='arm_left', command_topic='/arm_left/cmd', command_action=None,
+        state_topic='', max_joint_delta=0.0, active=True,
+        joints=[_joint('arm_left_j1')],
+    )
+    arm_right = GroupSpec(
+        name='arm_right', command_topic='/arm_right/cmd', command_action=None,
+        state_topic='', max_joint_delta=0.0, active=True,
+        joints=[_joint('arm_right_j1')],
+    )
+    return RobotDescriptor(
+        robot_id='test_robot', joint_states_topic='/joint_states',
+        groups=[arm_left, arm_right],
+        ee_poses=[
+            EEPoseSpec(
+                name='left', source_frame='hand_left', target_frame='base',
+                active=left_active,
+            ),
+            EEPoseSpec(
+                name='right', source_frame='hand_right', target_frame='base',
+                active=right_active,
+            ),
+        ],
+        ee_control=[
+            EEControlSpec(
+                ee_pose='left', group='arm_left',
+                target_frame='left_target', enable_topic='arm_left/enabled',
+            ),
+            EEControlSpec(
+                ee_pose='right', group='arm_right',
+                target_frame='right_target', enable_topic='arm_right/enabled',
+            ),
+        ],
+    )
+
+
+def test_active_false_ee_entry_dropped_by_filtered_with_no_other_args():
+    desc = _descriptor_two_ee(left_active=True, right_active=False)
+    filtered = desc.filtered()
+    assert [e.name for e in filtered.ee_poses] == ['left']
+    assert [c.ee_pose for c in filtered.ee_control] == ['left']
+
+
+def test_active_true_ee_entries_untouched_by_filtered_no_args_shortcut():
+    """No inactive ee + no excludes -> the identity shortcut still applies."""
+    desc = _make_descriptor()
+    assert desc.filtered() is desc
+
+
+def test_active_false_ee_entry_combines_with_explicit_exclude_ee():
+    desc = _descriptor_two_ee(left_active=False, right_active=True)
+    filtered = desc.filtered(exclude_ee=['right'])
+    assert filtered.ee_poses == []
+    assert filtered.ee_control == []
+
+
+# ── derived_ee_action_arms ───────────────────────────────────────────────────
+
+def test_derived_ee_action_arms_empty_when_all_groups_active():
+    desc = _descriptor_two_ee()
+    assert desc.derived_ee_action_arms() == []
+
+
+def test_derived_ee_action_arms_both_when_all_groups_excluded():
+    desc = _descriptor_two_ee().filtered(exclude_groups=['arm_left', 'arm_right'])
+    assert sorted(desc.derived_ee_action_arms()) == ['left', 'right']
+
+
+def test_derived_ee_action_arms_only_arm_whose_group_excluded():
+    desc = _descriptor_two_ee().filtered(exclude_groups=['arm_left'])
+    assert desc.derived_ee_action_arms() == ['left']
+
+
+def test_derived_ee_action_arms_excludes_inactive_ee_even_if_group_excluded():
+    desc = _descriptor_two_ee(right_active=False).filtered(
+        exclude_groups=['arm_left', 'arm_right']
+    )
+    assert desc.derived_ee_action_arms() == ['left']
+
+
+def test_derived_ee_action_arms_excludes_ee_pose_excluded_via_exclude_ee():
+    desc = _descriptor_two_ee().filtered(
+        exclude_groups=['arm_left', 'arm_right'], exclude_ee=['right'],
+    )
+    assert desc.derived_ee_action_arms() == ['left']
+
+
+def test_derived_ee_action_arms_none_without_ee_control():
+    arm = GroupSpec(
+        name='arm', command_topic='/arm/cmd', command_action=None, state_topic='',
+        max_joint_delta=0.0, active=False, joints=[_joint('j1')],
+    )
+    desc = RobotDescriptor(
+        robot_id='test_robot', joint_states_topic='/joint_states', groups=[arm],
+        ee_poses=[EEPoseSpec(name='left', source_frame='hand_left', target_frame='base')],
+    )
+    assert desc.derived_ee_action_arms() == []

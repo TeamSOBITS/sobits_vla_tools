@@ -123,34 +123,37 @@ def resolve_output_dir(out_dir_raw: str, hub_repo_id: str) -> Path:
     return (model_root / raw_path).resolve()
 
 
-def _ee_action_dim(desc, params: dict[str, Any], active_groups: list[str]) -> int:
+def _ee_action_dim(desc, params: dict[str, Any]) -> int:
     """
     Dataset action/state dim contributed by EE channels, or 0 in joint mode.
 
-    robot.ee_action_arms names ee_poses whose EE pose (6D rpy or 7D quat,
-    per robot.ee_rotation) replaces their arm's joint features in the
-    dataset. Their ee_control group must already be excluded from
-    active_groups -- an EE arm still reporting joint features would
-    double-count the dim.
+    robot.ee_action_arms is an optional override of
+    RobotDescriptor.derived_ee_action_arms() -- empty (default) derives the
+    arm list from the descriptor (active ee entries whose control.group is
+    not active); an explicit list is validated against that same rule
+    instead of replacing it, so an EE arm still reporting joint features
+    (group not excluded) cannot silently double-count the dim.
     """
     from sobits_vla_common.robot_descriptor import ee_action_features
-
-    arms = [a for a in params.get('robot.ee_action_arms', []) if a]
-    if not arms:
-        return 0
 
     rotation = params.get('robot.ee_rotation', 'rpy') or 'rpy'
     if rotation not in ('rpy', 'quat'):
         raise ValueError(f"robot.ee_rotation must be 'rpy' or 'quat', got {rotation!r}")
 
-    specs = desc.ee_control_for(arms)
-    still_active = [s for s in specs if s.group in active_groups]
-    if still_active:
-        raise ValueError(
-            'robot.ee_action_arms names arm(s) whose group is not excluded: '
-            f'{[s.group for s in still_active]}. Add them to '
-            'robot.exclude.groups so joint and EE features do not both count.'
-        )
+    arms = [a for a in params.get('robot.ee_action_arms', []) if a]
+    if arms:
+        derived = set(desc.derived_ee_action_arms())
+        specs = desc.ee_control_for(arms)
+        invalid = [s.ee_pose for s in specs if s.ee_pose not in derived]
+        if invalid:
+            still_active = [s.group for s in specs if s.ee_pose in invalid]
+            raise ValueError(
+                f'robot.ee_action_arms names arm(s) {invalid} whose group is not '
+                f'excluded: {still_active}. Add them to robot.exclude.groups so '
+                'joint and EE features do not both count.'
+            )
+    else:
+        specs = desc.ee_control_for(desc.derived_ee_action_arms())
 
     return sum(len(ee_action_features(s.ee_pose, rotation=rotation)) for s in specs)
 
@@ -219,7 +222,7 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
         if desc.mobile_base and active_mobile_base:
             n_base = len(desc.mobile_base.features)
 
-        n_ee = _ee_action_dim(desc, params, active_groups)
+        n_ee = _ee_action_dim(desc, params)
 
         total_dim = len(active_joint_features) + n_ee + n_base
 

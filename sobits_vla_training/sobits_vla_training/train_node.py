@@ -177,8 +177,10 @@ _SCHEMA = {
             # rejected loudly in config_builder/preflight instead.
             'ee_poses': P(['']),
         },
-        # ee_pose names whose EE channels (ee.<name>.{x,y,z,roll,pitch,yaw})
-        # replace joint features in the dataset; empty = joint mode.
+        # ee_pose names whose EE channels replace joint features in the
+        # dataset. Empty (default) DERIVES the list from the descriptor
+        # (RobotDescriptor.derived_ee_action_arms); joint mode derives to [].
+        # An explicit list overrides derivation but is validated against it.
         'ee_action_arms': P(['']),
         # Must match the rotation representation the dataset was converted
         # with (conversion_node.py ee_actions.rotation): rpy (6D) | quat (7D).

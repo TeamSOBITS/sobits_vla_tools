@@ -171,6 +171,7 @@ sensors:
 # servo_target_bridge contract).
 ee:
   - name: left
+    active: true
     ee_link: hand_left_end_effector_link
     reference_frame: base_footprint
     control:
@@ -178,6 +179,7 @@ ee:
       command_frame: left_target_link
       enable_topic: arm_left/moveit_track_enabled
   - name: right
+    active: true
     ee_link: hand_right_end_effector_link
     reference_frame: base_footprint
     control:

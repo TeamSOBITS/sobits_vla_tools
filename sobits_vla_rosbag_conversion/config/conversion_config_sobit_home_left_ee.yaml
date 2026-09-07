@@ -52,9 +52,8 @@
     # Synthesize absolute EE pose actions from offline TF for the left arm,
     # replacing its joint-space action/state with ee.left.* (see ee_control
     # in the robot descriptor for the servo-bridge frame this corresponds to).
-    ee_actions:
-      enabled: true
-      arms: ["left"]
+    # EE actions derive from exclude.groups vs the descriptor's active ee entries.
+    ee_actions: {}
 
     # primary = sync trigger camera (one frame assembled per primary image;
     # other cameras are sampled at the nearest timestamp).

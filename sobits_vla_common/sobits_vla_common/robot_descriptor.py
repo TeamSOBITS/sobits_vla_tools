@@ -125,6 +125,9 @@ class EEPoseSpec:
     name: str
     source_frame: str
     target_frame: str
+    # Mirrors GroupSpec.active: filtered() treats active=False like an
+    # excluded entry (see its docstring) -- it drops out of ee_poses.
+    active: bool = True
 
 
 @dataclass
@@ -203,6 +206,28 @@ class RobotDescriptor:
             )
         return [by_pose[n] for n in names]
 
+    def derived_ee_action_arms(self) -> List[str]:
+        """
+        ee_pose names whose EE channels should become dataset ACTION features.
+
+        Single source of truth for the derivation rule shared by conversion
+        (ee_actions.arms) and training (robot.ee_action_arms): an ee entry
+        contributes an EE action iff it survived filtering (active, not
+        excluded via exclude.ee -- filtered() already dropped anything else
+        from ee_poses) AND its ee_control.group is NOT active (excluded via
+        exclude.groups or active: false on the group) -- i.e. the group is
+        no longer commanding that arm via joint features, so the EE channels
+        replace them instead of duplicating them. An active ee_pose whose
+        group is still active is state/observation-only (existing
+        joint-dataset behaviour) and is correctly excluded here. An ee_pose
+        with no ee_control block at all cannot drive an action either.
+        """
+        active_group_names = {g.name for g in self.active_groups}
+        return [
+            c.ee_pose for c in self.ee_control
+            if c.group not in active_group_names
+        ]
+
     def filtered(
         self,
         exclude_groups: Optional[List[str]] = None,
@@ -222,12 +247,19 @@ class RobotDescriptor:
         ros_names fold into ``excluded_joints`` the same way; a group left
         with no joints is dropped entirely. Unknown names raise ValueError so
         a typo fails loudly instead of silently converting a wrong morphology.
+
+        An ee[] entry with ``active: false`` in the yaml is dropped from
+        ``ee_poses`` here too, exactly as if it had been named in
+        ``exclude_ee`` -- there is exactly one code path that removes ee
+        entries, so consumers iterating ``desc.ee_poses`` never need to
+        separately check an active flag.
         """
         ex_g = list(exclude_groups or [])
         ex_c = list(exclude_cameras or [])
         ex_e = list(exclude_ee or [])
         ex_j = list(exclude_joints or [])
-        if not (ex_g or ex_c or ex_e or ex_j):
+        inactive_ee = [e.name for e in (self.ee_poses or []) if not e.active]
+        if not (ex_g or ex_c or ex_e or ex_j or inactive_ee):
             return self
 
         cameras = self.sensors.get('cameras', [])
@@ -267,8 +299,9 @@ class RobotDescriptor:
                 trimmed.append(replace(g, joints=kept) if len(kept) != len(g.joints) else g)
             groups = trimmed
 
+        ex_e_all = set(ex_e) | set(inactive_ee)
         ee_poses = (
-            [e for e in self.ee_poses if e.name not in ex_e]
+            [e for e in self.ee_poses if e.name not in ex_e_all]
             if self.ee_poses is not None
             else None
         )
@@ -402,6 +435,7 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
                 name=e['name'],
                 source_frame=e['ee_link'],
                 target_frame=e['reference_frame'],
+                active=bool(e.get('active', True)),
             ))
             c = e.get('control')
             if c:

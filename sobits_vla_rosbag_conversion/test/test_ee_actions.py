@@ -664,74 +664,127 @@ class TestEEControlValidation:
 class TestResolveEEActionsValidation:
     """_resolve_ee_actions is a plain method; drive it via stub self/params (no ROS needed)."""
 
-    def _descriptor(self):
+    def _descriptor(self, two_arms=False, exclude_groups=()):
+        """
+        Build a descriptor and apply .filtered(exclude_groups=...) up front.
+
+        Mirrors production: conversion_node.__init__ always calls
+        desc.filtered(...) before passing desc to _resolve_ee_actions, so
+        derived_ee_action_arms() (which reads desc.active_groups) sees the
+        post-exclude state, not the raw descriptor.
+        """
         from sobits_vla_common.robot_descriptor import (
             EEControlSpec, EEPoseSpec, GroupSpec, JointSpec, RobotDescriptor,
         )
-        arm = GroupSpec(
+        arm_left = GroupSpec(
             name='arm_left', command_topic='/cmd', command_action=None,
             state_topic='', max_joint_delta=0.0, active=True,
             joints=[JointSpec(ros_name='j1', feature='arm_left_j1')],
         )
-        return RobotDescriptor(
+        groups = [arm_left]
+        ee_poses = [EEPoseSpec(name='left', source_frame='ee_l', target_frame='base')]
+        ee_control = [EEControlSpec(
+            ee_pose='left', group='arm_left',
+            target_frame='left_target', enable_topic='arm_left/enabled',
+        )]
+        if two_arms:
+            arm_right = GroupSpec(
+                name='arm_right', command_topic='/cmd_r', command_action=None,
+                state_topic='', max_joint_delta=0.0, active=True,
+                joints=[JointSpec(ros_name='j2', feature='arm_right_j1')],
+            )
+            groups.append(arm_right)
+            ee_poses.append(
+                EEPoseSpec(name='right', source_frame='ee_r', target_frame='base')
+            )
+            ee_control.append(EEControlSpec(
+                ee_pose='right', group='arm_right',
+                target_frame='right_target', enable_topic='arm_right/enabled',
+            ))
+        desc = RobotDescriptor(
             robot_id='test_robot', joint_states_topic='/joint_states',
-            groups=[arm],
-            ee_poses=[EEPoseSpec(name='left', source_frame='ee_l', target_frame='base')],
-            ee_control=[EEControlSpec(
-                ee_pose='left', group='arm_left',
-                target_frame='left_target', enable_topic='arm_left/enabled',
-            )],
+            groups=groups, ee_poses=ee_poses, ee_control=ee_control,
         )
+        if exclude_groups:
+            desc = desc.filtered(exclude_groups=list(exclude_groups))
+        return desc
 
     def _node(self, use_relative_actions=False, skip_static_threshold=0.0):
         return types.SimpleNamespace(
             use_relative_actions=use_relative_actions,
             skip_static_threshold=skip_static_threshold,
-            get_logger=lambda: types.SimpleNamespace(warning=lambda msg: None),
+            get_logger=lambda: types.SimpleNamespace(
+                warning=lambda msg: None, info=lambda msg: None,
+            ),
         )
 
-    def _params(
-        self, enabled=True, arms=('left',), exclude_groups=(), rotation='rpy', frame='base',
-    ):
+    def _params(self, arms=(), exclude_groups=(), rotation='rpy', frame='base'):
         return types.SimpleNamespace(
             ee_actions=types.SimpleNamespace(
-                enabled=enabled, arms=list(arms), rotation=rotation, frame=frame,
+                arms=list(arms), rotation=rotation, frame=frame,
             ),
             exclude=types.SimpleNamespace(groups=list(exclude_groups)),
         )
 
-    def test_raises_when_superseded_group_not_excluded(self):
+    def test_explicit_arm_raises_when_superseded_group_not_excluded(self):
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
         node = self._node()
-        params = self._params(exclude_groups=[])  # arm_left NOT excluded
-        with pytest.raises(ValueError, match='exclude.groups'):
+        params = self._params(arms=['left'], exclude_groups=[])  # arm_left NOT excluded
+        with pytest.raises(ValueError, match='derivation rule'):
             RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
 
-    def test_passes_when_superseded_group_excluded(self):
+    def test_explicit_arm_passes_when_superseded_group_excluded(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        node = self._node()
+        params = self._params(arms=['left'], exclude_groups=['arm_left'])
+        desc = self._descriptor(exclude_groups=['arm_left'])
+        specs = RosbagConversionNode._resolve_ee_actions(node, desc, params)
+        assert specs == [('left', 'ee_l', 'base')]
+
+    def test_derives_when_group_excluded_and_arms_unset(self):
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
         node = self._node()
         params = self._params(exclude_groups=['arm_left'])
-        specs = RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+        desc = self._descriptor(exclude_groups=['arm_left'])
+        specs = RosbagConversionNode._resolve_ee_actions(node, desc, params)
         assert specs == [('left', 'ee_l', 'base')]
+
+    def test_derives_both_arms_when_all_groups_excluded(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        node = self._node()
+        params = self._params(exclude_groups=['arm_left', 'arm_right'])
+        desc = self._descriptor(two_arms=True, exclude_groups=['arm_left', 'arm_right'])
+        specs = RosbagConversionNode._resolve_ee_actions(node, desc, params)
+        assert sorted(s[0] for s in specs) == ['left', 'right']
+
+    def test_derives_only_arm_whose_group_is_excluded(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        node = self._node()
+        params = self._params(exclude_groups=['arm_left'])
+        desc = self._descriptor(two_arms=True, exclude_groups=['arm_left'])
+        specs = RosbagConversionNode._resolve_ee_actions(node, desc, params)
+        assert [s[0] for s in specs] == ['left']
 
     def test_relative_actions_allowed(self):
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
         node = self._node(use_relative_actions=True)
         params = self._params(exclude_groups=['arm_left'])
-        specs = RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+        desc = self._descriptor(exclude_groups=['arm_left'])
+        specs = RosbagConversionNode._resolve_ee_actions(node, desc, params)
         assert specs == [('left', 'ee_l', 'base')]
 
-    def test_disabled_returns_empty_without_validating(self):
+    def test_no_active_ee_returns_empty_without_validating(self):
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
         node = self._node()
-        params = self._params(enabled=False, arms=(), exclude_groups=[])
+        params = self._params(exclude_groups=[])  # arm_left still active -> nothing derives
         assert RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params) == []
 
     def test_quat_rotation_sets_ee_rotation_attr(self):
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
         node = self._node()
         params = self._params(exclude_groups=['arm_left'], rotation='quat')
-        RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+        desc = self._descriptor(exclude_groups=['arm_left'])
+        RosbagConversionNode._resolve_ee_actions(node, desc, params)
         assert node.ee_rotation == 'quat'
 
     def test_invalid_rotation_raises(self):
@@ -745,7 +798,8 @@ class TestResolveEEActionsValidation:
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
         node = self._node(use_relative_actions=True)
         params = self._params(exclude_groups=['arm_left'], frame='body')
-        specs = RosbagConversionNode._resolve_ee_actions(node, self._descriptor(), params)
+        desc = self._descriptor(exclude_groups=['arm_left'])
+        specs = RosbagConversionNode._resolve_ee_actions(node, desc, params)
         assert specs == [('left', 'ee_l', 'base')]
         assert node.ee_frame == 'body'
 
@@ -772,22 +826,34 @@ class TestResolveEEActionsValidation:
 
 
 @skip_no_rclpy
-class TestDeprecatedExcludeEEPoses:
+class TestDeprecatedParams:
     """_check_deprecated_params is a staticmethod; no ROS node needed."""
 
-    def _params(self, ee_poses=()):
+    def _params(self, ee_poses=(), ee_actions_enabled=''):
         return types.SimpleNamespace(
             exclude=types.SimpleNamespace(ee_poses=list(ee_poses)),
+            ee_actions=types.SimpleNamespace(enabled=ee_actions_enabled),
         )
 
-    def test_old_key_set_raises(self):
+    def test_old_exclude_key_set_raises(self):
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
         with pytest.raises(ValueError, match='exclude.ee_poses was renamed'):
             RosbagConversionNode._check_deprecated_params(self._params(ee_poses=['left']))
 
-    def test_old_key_empty_is_allowed(self):
+    def test_old_exclude_key_empty_is_allowed(self):
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
         RosbagConversionNode._check_deprecated_params(self._params(ee_poses=[]))
+
+    def test_old_ee_actions_enabled_key_set_raises(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        with pytest.raises(ValueError, match='ee_actions.enabled was removed'):
+            RosbagConversionNode._check_deprecated_params(
+                self._params(ee_actions_enabled='true')
+            )
+
+    def test_old_ee_actions_enabled_key_empty_is_allowed(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        RosbagConversionNode._check_deprecated_params(self._params(ee_actions_enabled=''))
 
 
 if __name__ == '__main__':

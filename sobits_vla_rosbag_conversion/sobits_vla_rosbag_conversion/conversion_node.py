@@ -108,9 +108,19 @@ _SCHEMA = {
     },
     'robot_descriptor_id': P(''),
     # EE pose actions synthesized from offline TF; abs or delta per
-    # use_relative_actions (mirrors joint action relativity).
+    # use_relative_actions. Which arms get one is now DERIVED from the
+    # descriptor (RobotDescriptor.derived_ee_action_arms): an active ee[]
+    # entry whose control.group is NOT active (see that method's docstring).
     'ee_actions': {
-        'enabled': P(False),
+        # Deprecated: 'enabled' was removed; derives from the descriptor now.
+        # Declared as a STRING so any yaml presence -- true or false alike --
+        # fails loudly via rclpy's InvalidParameterTypeException on a yaml
+        # bool under a string param (empirically verified; see
+        # _check_deprecated_params). A bool-declared param would silently
+        # accept either value and could not tell "set" from "default".
+        'enabled': P(''),
+        # Optional override of the derived arm list ('' = derive; see above).
+        # Each named arm is still validated against the same derivation rule.
         'arms': P(['']),
         # rpy = roll/pitch/yaw (6D, per-axis unwrap) | quat = quaternion
         # x,y,z,w (7D, shortest-arc).
@@ -150,9 +160,21 @@ class RosbagConversionNode(Node):
 
     @staticmethod
     def _check_deprecated_params(params) -> None:
-        """Reject a non-empty exclude.ee_poses -- renamed to exclude.ee."""
+        """Reject exclude.ee_poses (renamed) and ee_actions.enabled (removed)."""
         if params.exclude.ee_poses:
             raise ValueError('exclude.ee_poses was renamed to exclude.ee')
+        # 'enabled' is declared as a string (see _SCHEMA); a yaml bool under
+        # it already fails at declare_parameter time with
+        # InvalidParameterTypeException, before this method ever runs. This
+        # check only catches the (currently unreachable but cheap-to-guard)
+        # case of a non-bool string value, and gives a clearer message than
+        # letting the InvalidParameterTypeException surface unexplained.
+        if params.ee_actions.enabled:
+            raise ValueError(
+                'ee_actions.enabled was removed; EE actions derive from the '
+                "descriptor's ee active flags plus exclude.groups (override "
+                'with ee_actions.arms)'
+            )
 
     def __init__(self):
         super().__init__('rosbag_conversion_node')
@@ -281,7 +303,14 @@ class RosbagConversionNode(Node):
         self.timer = self.create_timer(1.0, self.timer_callback)
 
     def _resolve_ee_actions(self, desc, params) -> list:
-        """Validate ee_actions config against desc; return (name, src, tgt) TF triples."""
+        """
+        Resolve which arms get EE actions; return (name, src, tgt) TF triples.
+
+        ee_actions.arms is now an optional override: empty (default) derives
+        the arm list from the descriptor (RobotDescriptor.derived_ee_action_arms
+        -- active ee entries whose control.group is not active), an explicit
+        list is validated against that same rule instead of replacing it.
+        """
         rotation = params.ee_actions.rotation
         if rotation not in ('rpy', 'quat'):
             raise ValueError(
@@ -300,32 +329,44 @@ class RosbagConversionNode(Node):
                 'frame change on absolute poses, use ee_poses target_frame instead.'
             )
         self.ee_frame = frame
-        if not params.ee_actions.enabled:
-            return []
-        arms = params.ee_actions.arms
-        if not arms:
-            raise ValueError('ee_actions.enabled is true but ee_actions.arms is empty.')
-        # desc.filtered() already drops ee_control entries whose ee_pose was
-        # excluded, so an unknown/excluded arm surfaces here as a ValueError.
-        try:
-            specs = desc.ee_control_for(arms)
-        except ValueError as exc:
-            raise ValueError(
-                f'{exc} (an ee_actions arm must have a surviving ee_poses entry -- '
-                'check exclude.ee.)'
-            ) from exc
 
-        excluded_groups = set(params.exclude.groups)
-        for spec in specs:
-            if spec.group not in excluded_groups:
+        arms = params.ee_actions.arms
+        if arms:
+            # Explicit override: each named arm must independently satisfy the
+            # derivation rule (surviving ee_control entry whose group is not
+            # active), or the config is asking for something the descriptor
+            # cannot support (double-counted or non-existent arm).
+            derived = set(desc.derived_ee_action_arms())
+            try:
+                specs = desc.ee_control_for(arms)
+            except ValueError as exc:
                 raise ValueError(
-                    f"ee_actions arm '{spec.ee_pose}' supersedes joint group "
-                    f"'{spec.group}', which must be listed in exclude.groups "
-                    'to avoid emitting both joint and EE actions for the same arm.'
+                    f'{exc} (an ee_actions arm must have a surviving ee_poses entry -- '
+                    'check exclude.ee.)'
+                ) from exc
+            invalid = [spec.ee_pose for spec in specs if spec.ee_pose not in derived]
+            if invalid:
+                raise ValueError(
+                    f'ee_actions.arms names arm(s) {invalid} that do not satisfy the '
+                    'EE-action derivation rule: the arm must be active (not excluded '
+                    'via exclude.ee, not active: false) and its control.group must '
+                    'NOT be active (exclude it via exclude.groups, or mark it '
+                    'active: false in the descriptor).'
                 )
+        else:
+            derived_names = desc.derived_ee_action_arms()
+            specs = desc.ee_control_for(derived_names)
+            if derived_names:
+                self.get_logger().info(
+                    f'ee_actions.arms not set -- derived from descriptor: {derived_names}'
+                )
+
+        if not specs:
+            return []
+
         if self.skip_static_threshold > 0.0:
             self.get_logger().warning(
-                'skip_static_threshold > 0 with ee_actions enabled: static detection '
+                'skip_static_threshold > 0 with ee_actions active: static detection '
                 'only looks at joint velocities, so arm-only motion via EE actions '
                 'will not be detected as non-static.'
             )

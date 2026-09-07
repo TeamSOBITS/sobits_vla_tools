@@ -52,33 +52,37 @@ def load_dataset_info(repo_id: str) -> dict | None:
         return None
 
 
-def _expected_ee_actions(desc, params: dict, active_groups: list) -> list[str]:
+def _expected_ee_actions(desc, params: dict) -> list[str]:
     """
     Dataset action feature names for robot.ee_action_arms, or [] in joint mode.
 
-    Mirrors config_builder._ee_action_dim's group-exclusion rule: an EE arm's
-    ee_control group must already be excluded from active_groups, or joint
-    and EE features would both land in expected_actions. robot.ee_rotation
-    selects rpy (6D) vs quat (7D) names, matching the dataset's conversion.
+    Mirrors config_builder._ee_action_dim: robot.ee_action_arms is an
+    optional override of RobotDescriptor.derived_ee_action_arms() (empty
+    derives from the descriptor; an explicit list is validated against the
+    same active-ee/excluded-group rule, or joint and EE features would both
+    land in expected_actions). robot.ee_rotation selects rpy (6D) vs quat
+    (7D) names, matching the dataset's conversion.
     """
     from sobits_vla_common.robot_descriptor import ee_action_features
-
-    arms = [a for a in params.get('robot.ee_action_arms', []) if a]
-    if not arms:
-        return []
 
     rotation = params.get('robot.ee_rotation', 'rpy') or 'rpy'
     if rotation not in ('rpy', 'quat'):
         raise ValueError(f"robot.ee_rotation must be 'rpy' or 'quat', got {rotation!r}")
 
-    specs = desc.ee_control_for(arms)
-    still_active = [s for s in specs if s.group in active_groups]
-    if still_active:
-        raise ValueError(
-            'robot.ee_action_arms names arm(s) whose group is not excluded: '
-            f'{[s.group for s in still_active]}. Add them to '
-            'robot.exclude.groups so joint and EE features do not both count.'
-        )
+    arms = [a for a in params.get('robot.ee_action_arms', []) if a]
+    if arms:
+        derived = set(desc.derived_ee_action_arms())
+        specs = desc.ee_control_for(arms)
+        invalid = [s.ee_pose for s in specs if s.ee_pose not in derived]
+        if invalid:
+            still_active = [s.group for s in specs if s.ee_pose in invalid]
+            raise ValueError(
+                f'robot.ee_action_arms names arm(s) {invalid} whose group is not '
+                f'excluded: {still_active}. Add them to robot.exclude.groups so '
+                'joint and EE features do not both count.'
+            )
+    else:
+        specs = desc.ee_control_for(desc.derived_ee_action_arms())
 
     features = []
     for s in specs:
@@ -176,8 +180,7 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
             for g in desc.active_groups:
                 active_joint_features.extend([j.feature for j in g.joints])
 
-            active_groups = [g.name for g in desc.active_groups]
-            ee_features = _expected_ee_actions(desc, params, active_groups)
+            ee_features = _expected_ee_actions(desc, params)
 
             active_base_features = []
             if desc.mobile_base and active_mobile_base:
