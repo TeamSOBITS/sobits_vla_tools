@@ -1,7 +1,7 @@
 /**:
   ros__parameters:
     model:
-      # EE-abs-actions model: policy emits ee.left.{x,y,z,roll,pitch,yaw}
+      # EE-abs-actions model: policy emits ee.left.{x,y,z,rx,ry,rz} (rotvec)
       # (base_footprint) instead of arm_left joint angles.
       repo_id: "team-sobits/sobit_home_left_ee_abs"
       policy_class: "lerobot.policies.pi05.modeling_pi05.PI05Policy"
@@ -9,8 +9,8 @@
       use_amp: false
       use_relative_actions: false
       action_space: ee
-      # Legacy rpy checkpoint; new conversions default to rotvec (ee.left.{rx,ry,rz}).
-      ee_rotation: rpy
+      # Must match the checkpoint's ee.* names (rotvec default; rpy for legacy models).
+      ee_rotation: rotvec
       default_task_label: "Pick up the block"
 
     ee_servo:
