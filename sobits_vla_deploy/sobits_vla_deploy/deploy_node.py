@@ -481,7 +481,6 @@ class LeRobotDeployNode(Node):
             obs_builder=self._obs_builder,
             chunk_buffer=self._chunk_buffer,
             tf_buffer=self._tf_buffer,
-            ee_poses=[(ee.name, ee.source_frame, ee.target_frame) for ee in self._ee_poses],
         )
 
     def _init_servo_target_publisher(self) -> None:

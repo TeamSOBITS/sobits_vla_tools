@@ -56,7 +56,7 @@ class BagReader:
         cmd_vel_topic: str,
         odom_topic: str,
         joint_states_topic: str,
-        ee_pose_enabled: bool,
+        tf_enabled: bool,
         has_mobile_base: bool,
         has_cmd_vel_y: bool,
         has_cmd_vel_z: bool,
@@ -91,7 +91,7 @@ class BagReader:
                         joint_vel = {}
                     joint_states_series.append((t_sec, joint_pos, joint_vel))
 
-                elif ee_pose_enabled and topic in ('/tf', '/tf_static'):
+                elif tf_enabled and topic in ('/tf', '/tf_static'):
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     tf_messages.append((t_bag, msg, topic))
 

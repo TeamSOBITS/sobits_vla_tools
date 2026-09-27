@@ -87,14 +87,14 @@ class TestBuildStatsReport:
             'rosbag_directory': '/bags', 'fps': 10, 'vcodec': 'h264',
             'sync_threshold': 0.1, 'downsample_tolerance': 0.015,
             'skip_static_threshold': 0.0, 'action_convention': {'action_mode': 'absolute'},
-            'ee_pose_enabled': False, 'cameras_skip': False,
+            'tf_enabled': False, 'cameras_skip': False,
         }
         report = build_stats_report('my_dataset', params, results, [], [])
 
         assert list(report.keys()) == [
             'dataset_name', 'rosbag_directory', 'fps', 'vcodec', 'sync_threshold',
             'downsample_tolerance', 'skip_static_threshold', 'action_convention',
-            'ee_pose_enabled', 'cameras_skip', 'total_episodes', 'total_frames',
+            'tf_enabled', 'cameras_skip', 'total_episodes', 'total_frames',
             'skipped_bags', 'fps_warnings', 'episodes',
         ]
         assert report['dataset_name'] == 'my_dataset'

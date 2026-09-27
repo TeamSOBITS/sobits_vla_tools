@@ -252,18 +252,6 @@ class RosbagConversionNode(Node):
         # Catches groups omitted entirely, which all_excluded_ros_names above misses.
         self.active_ros_names = set(desc.active_ros_names)
 
-        # Driven purely by exclude.ee: emitted when any frame survives,
-        # skipped when all are excluded.
-        if desc.ee_poses:
-            self.ee_pose_enabled = True
-            self.ee_configs = [
-                (ee.name, ee.source_frame, ee.target_frame)
-                for ee in desc.ee_poses
-            ]
-        else:
-            self.ee_pose_enabled = False
-            self.ee_configs = []
-
         self.ee_action_specs = self._resolve_ee_actions(desc, params)
 
         # Exclude every camera name for a state/action-only dataset.
@@ -311,6 +299,11 @@ class RosbagConversionNode(Node):
 
         # One-shot timer to start conversion after the node is ready
         self.timer = self.create_timer(1.0, self.timer_callback)
+
+    @property
+    def tf_enabled(self) -> bool:
+        """Read /tf + build the TF tree only when EE actions need it (their sole consumer)."""
+        return bool(self.ee_action_specs)
 
     def _resolve_ee_actions(self, desc, params) -> list:
         """
@@ -600,11 +593,6 @@ class RosbagConversionNode(Node):
                 'dtype': 'float32', 'shape': (total_dim,), 'names': state_names,
             },
         }
-        if self.ee_pose_enabled:
-            ee_names = ['x', 'y', 'z', 'roll', 'pitch', 'yaw']
-            for ee_name, _, _ in self.ee_configs:
-                key = f'observation.ee_pose.{ee_name}' if ee_name else 'observation.ee_pose'
-                features[key] = {'dtype': 'float32', 'shape': (6,), 'names': ee_names}
         if self.has_subtasks:
             features['subtask_index'] = {
                 'dtype': 'int64', 'shape': (1,), 'names': ['subtask_index'],
@@ -654,8 +642,8 @@ class RosbagConversionNode(Node):
             downsample_tolerance=self.downsample_tolerance,
             skip_static_threshold=self.skip_static_threshold,
             action_features=self.action_features, has_mobile_base=self.has_mobile_base,
-            base_keys=self.base_keys, ee_pose_enabled=self.ee_pose_enabled,
-            ee_configs=self.ee_configs, skip_cameras=self.skip_cameras,
+            base_keys=self.base_keys, tf_enabled=self.tf_enabled,
+            skip_cameras=self.skip_cameras,
             primary_camera=self.primary_camera, camera_topics=self.camera_topics,
             depth_camera_topics=self.depth_camera_topics,
             subtask_label_to_idx=self.subtask_label_to_idx,
@@ -736,7 +724,7 @@ class RosbagConversionNode(Node):
             self.camera_topics, self.depth_camera_topics, self.topic_to_cam,
             self.depth_topic_to_cam, self.joint_states_topic, self.part_command_topics,
             self.cmd_vel_topic, self.odom_topic, self.has_mobile_base, self.has_cmd_vel_y,
-            self.has_cmd_vel_z, self.ee_pose_enabled, self.fps, synthesizer, writer,
+            self.has_cmd_vel_z, self.tf_enabled, self.fps, synthesizer, writer,
             logger=self.get_logger(),
         )
 
@@ -750,7 +738,7 @@ class RosbagConversionNode(Node):
             'downsample_tolerance': self.downsample_tolerance,
             'skip_static_threshold': self.skip_static_threshold,
             'action_convention': self._action_convention(),
-            'ee_pose_enabled': self.ee_pose_enabled,
+            'tf_enabled': self.tf_enabled,
             'cameras_skip': self.skip_cameras,
         }
         episode_dicts = [episode_stat_dict(r) for r in self._episode_results]

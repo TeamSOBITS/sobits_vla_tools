@@ -48,8 +48,7 @@ class FrameSynthesizer:
         action_features: list,
         has_mobile_base: bool,
         base_keys: list,
-        ee_pose_enabled: bool,
-        ee_configs: list,
+        tf_enabled: bool,
         skip_cameras: bool,
         primary_camera: str,
         camera_topics: dict,
@@ -66,8 +65,7 @@ class FrameSynthesizer:
         self.action_features = action_features
         self.has_mobile_base = has_mobile_base
         self.base_keys = base_keys
-        self.ee_pose_enabled = ee_pose_enabled
-        self.ee_configs = ee_configs
+        self.tf_enabled = tf_enabled
         self.skip_cameras = skip_cameras
         self.primary_camera = primary_camera
         self.camera_topics = camera_topics
@@ -100,7 +98,6 @@ class FrameSynthesizer:
         sync_deltas = []
         last_frame_time = 0.0
         min_frame_interval = 1.0 / self.fps if self.fps > 0 else 0.0
-        prev_ee_poses = {name: None for name, _, _ in self.ee_configs}
         prev_ee_action_poses = {name: None for name, _, _ in self.ee_action_specs}
         tf_tree = ctx['tf_tree']
 
@@ -138,12 +135,7 @@ class FrameSynthesizer:
             if frame_data is None:
                 continue
 
-            state, action, frame = frame_data
-            if tf_tree is not None:
-                ok = self._attach_ee_poses(frame, tf_tree, t_sec, prev_ee_poses, counters)
-                if not ok:
-                    continue
-
+            _, _, frame = frame_data
             self._attach_images(frame, images, depth_images)
             self._attach_subtask(frame, subtasks_map, t_sec)
 
@@ -161,7 +153,7 @@ class FrameSynthesizer:
         cam_series = bag_series['cam_series']
         tf_messages = bag_series['tf_messages']
 
-        tf_tree = OfflineTFTree() if self.ee_pose_enabled else None
+        tf_tree = OfflineTFTree() if self.tf_enabled else None
         if tf_tree is not None:
             for _, msg, topic in tf_messages:
                 tf_tree.ingest(msg, is_static=(topic == '/tf_static'))
@@ -337,24 +329,6 @@ class FrameSynthesizer:
                 ctx['odom_series'], t_sec, times=ctx['odom_times']
             ))
         return joint_diff, cmd_vel_diff, odom_diff
-
-    def _attach_ee_poses(self, frame, tf_tree, t_sec, prev_ee_poses, counters) -> bool:
-        stamp_ns = int(t_sec * 1e9)
-        for ee_name, ee_src, ee_tgt in self.ee_configs:
-            ee_mat = sync_poses.resolve_ee_pose(tf_tree, ee_src, ee_tgt, stamp_ns)
-            if ee_mat is None:
-                counters['tf'] += 1
-                if counters['tf'] <= 5:
-                    self.log_warn(
-                        f"TF lookup failed: '{ee_src}' → '{ee_tgt}' "
-                        f'at t={t_sec:.3f}s. Skipping frame.'
-                    )
-                return False
-            ee_abs = sync_poses.compute_ee_pose(ee_mat, prev_ee_poses[ee_name])
-            key = f'observation.ee_pose.{ee_name}' if ee_name else 'observation.ee_pose'
-            frame[key] = torch.from_numpy(ee_abs.copy())
-            prev_ee_poses[ee_name] = ee_abs.copy()
-        return True
 
     def _attach_images(self, frame, images, depth_images) -> None:
         if not self.skip_cameras:

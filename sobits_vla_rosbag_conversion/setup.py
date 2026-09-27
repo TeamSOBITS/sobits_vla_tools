@@ -43,9 +43,6 @@ setup(
         (f'share/{package_name}/config',  glob('config/*.yaml')),
         (f'share/{package_name}/lerobotdataset', glob('lerobotdataset/.gitignore')),
     ],
-    # Standalone tool, not importable from the package dir: installed as a
-    # script (lib/<pkg>/ via setup.cfg), not a console_scripts entry point.
-    scripts=['scripts/visualize_ee_pose.py'],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='VALENTIN Keith',

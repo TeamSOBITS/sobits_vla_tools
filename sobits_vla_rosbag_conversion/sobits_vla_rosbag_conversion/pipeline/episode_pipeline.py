@@ -79,7 +79,7 @@ class EpisodePipeline:
         has_mobile_base: bool,
         has_cmd_vel_y: bool,
         has_cmd_vel_z: bool,
-        ee_pose_enabled: bool,
+        tf_enabled: bool,
         fps: float,
         synthesizer,
         writer,
@@ -96,7 +96,7 @@ class EpisodePipeline:
         self._has_mobile_base = has_mobile_base
         self._has_cmd_vel_y = has_cmd_vel_y
         self._has_cmd_vel_z = has_cmd_vel_z
-        self._ee_pose_enabled = ee_pose_enabled
+        self._tf_enabled = tf_enabled
         self._fps = fps
         self._synthesizer = synthesizer
         self._writer = writer
@@ -114,7 +114,7 @@ class EpisodePipeline:
             wanted.add(self._cmd_vel_topic)
         if self._has_mobile_base and self._odom_topic:
             wanted.add(self._odom_topic)
-        if self._ee_pose_enabled:
+        if self._tf_enabled:
             wanted |= {'/tf', '/tf_static'}
         return wanted
 
@@ -130,7 +130,7 @@ class EpisodePipeline:
         if topic in self._depth_topic_to_cam:
             return f'depth camera image ({self._depth_topic_to_cam[topic]})'
         if topic in ('/tf', '/tf_static'):
-            return 'TF transforms (ee_pose)'
+            return 'TF transforms (EE actions)'
         return 'unknown'
 
     def _missing_topic_code(self, topic: str) -> str:
@@ -218,7 +218,7 @@ class EpisodePipeline:
             cmd_vel_topic=self._cmd_vel_topic,
             odom_topic=self._odom_topic,
             joint_states_topic=self._joint_states_topic,
-            ee_pose_enabled=self._ee_pose_enabled,
+            tf_enabled=self._tf_enabled,
             has_mobile_base=self._has_mobile_base,
             has_cmd_vel_y=self._has_cmd_vel_y,
             has_cmd_vel_z=self._has_cmd_vel_z,

@@ -187,7 +187,6 @@ class ObsBuilder:
     def snapshot_observation(
         self,
         tf_buffer,
-        ee_poses: List[Tuple[str, str, str]],
         expected_state_dim: Optional[int],
         model_action_feature_names: Optional[List[str]],
     ) -> Optional[Dict[str, Any]]:
@@ -226,14 +225,6 @@ class ObsBuilder:
             return obs
 
         frame = build_dataset_frame(self.obs_features, obs, 'observation')
-
-        # Absolute rpy, as conversion still writes observation.ee_pose.<arm>; policies
-        # ignore it unless it is one of their input features.
-        for name, source_frame, target_frame in ee_poses:
-            ee_pose = self.get_ee_pose(tf_buffer, target_frame, source_frame)
-            frame[f'observation.ee_pose.{name}'] = (
-                ee_pose if ee_pose is not None else np.zeros(6, dtype=np.float32)
-            )
 
         state_dim = (
             frame['observation.state'].shape[-1]

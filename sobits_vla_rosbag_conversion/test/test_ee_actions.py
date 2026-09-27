@@ -361,7 +361,7 @@ class TestBuildFeaturesWithEE:
             'ee_action_specs': [('left', 'ee_l', 'base')],
             'ee_rotation': 'rotvec',
             'has_mobile_base': True, 'has_cmd_vel_y': False, 'has_cmd_vel_z': False,
-            'ee_pose_enabled': False, 'ee_configs': [], 'has_subtasks': False,
+            'has_subtasks': False,
             'skip_cameras': True, 'camera_topics': {}, 'camera_shapes': {},
             'depth_camera_topics': {}, 'depth_camera_shapes': {},
         }
@@ -380,12 +380,18 @@ class TestBuildFeaturesWithEE:
         ]
         assert features['observation.state']['names'] == features['action']['names']
 
-    def test_ee_pose_side_channel_has_no_delta(self):
+    def test_no_ee_pose_side_channel(self):
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
-        node = self._stub_node(ee_pose_enabled=True, ee_configs=[('left', 'ee_l', 'base')])
+        node = self._stub_node()
         features = RosbagConversionNode._build_features(node, all_tasks=[])
-        assert 'observation.ee_pose.left' in features
+        assert not any(k.startswith('observation.ee_pose') for k in features)
         assert not any(k.endswith('.delta') for k in features)
+
+    def test_tf_enabled_only_with_ee_actions(self):
+        from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode
+        tf_enabled = RosbagConversionNode.tf_enabled.fget
+        assert tf_enabled(self._stub_node()) is True
+        assert tf_enabled(self._stub_node(ee_action_specs=[])) is False
 
     def test_dim_matches_joint_plus_ee_plus_base(self):
         from sobits_vla_rosbag_conversion.conversion_node import RosbagConversionNode

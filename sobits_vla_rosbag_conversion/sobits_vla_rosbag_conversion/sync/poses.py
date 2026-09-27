@@ -41,14 +41,6 @@ def resolve_ee_pose(tf_tree, ee_src, ee_tgt, stamp_ns):
     return tf_tree.resolve(ee_tgt, ee_src, stamp_ns)
 
 
-def compute_ee_pose(ee_mat, prev):
-    """Convert a TF matrix to an abs pose6d (rpy), unwrapped per axis against prev (fb188e1)."""
-    ee_abs = mat_to_pose6d(ee_mat)
-    if prev is not None:
-        ee_abs[3:6] = unwrap_rpy(ee_abs[3:6], prev[3:6])
-    return ee_abs
-
-
 def synthesize_ee_action(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_pose):
     """
     (state_pose6, action_pose6) or None when the state lookup fails.

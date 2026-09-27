@@ -14,7 +14,6 @@ descriptor, and writes a HuggingFace `LeRobotDataset` that
 | Executable | Role |
 |---|---|
 | `ros2bag_to_lerobotdataset` | Console-script name (stable); runs `sobits_vla_rosbag_conversion.conversion_node:main`, node name `rosbag_conversion_node`. One-shot: converts on startup, then exits. |
-| `scripts/visualize_ee_pose.py` | Standalone plotting script, not a console entry point. |
 
 `conversion_node.py` is the thin ROS wrapper; the actual conversion logic
 lives in `pipeline/` (`discovery.py`, `validator.py`, `episode_pipeline.py`,

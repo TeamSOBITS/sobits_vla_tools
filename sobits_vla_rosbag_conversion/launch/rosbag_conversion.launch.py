@@ -38,7 +38,7 @@ from sobits_vla_common.launch.utils import (
     resolve_pixi_env,
 )
 
-# Conversion imports pandas/scipy/matplotlib/rosbags/torch -> shared pixi env;
+# Conversion imports pandas/scipy/rosbags/torch -> shared pixi env;
 # only the accelerator varies, GPU by default. Override with enable_gpu:=false
 _DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
