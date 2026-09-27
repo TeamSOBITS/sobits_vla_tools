@@ -47,9 +47,30 @@ BagMetadataManager::BagMetadataManager(
 {
 }
 
-void BagMetadataManager::createOrValidate(
-  const std::map<std::string,
-  std::pair<uint32_t, uint32_t>> & camera_dimensions)
+void BagMetadataManager::writeCameraProperties(
+  YAML::Node & yaml_node,
+  const CameraDimensionsMap & camera_dimensions) const
+{
+  for (const auto & sensor_type : robot_info_.sensor_types) {
+    auto it_names = robot_info_.sensor_names.find(sensor_type);
+    if (it_names == robot_info_.sensor_names.end()) {
+      continue;
+    }
+    for (const auto & sensor_name : it_names->second) {
+      auto it = camera_dimensions.find(sensor_name);
+      if (it == camera_dimensions.end()) {
+        continue;
+      }
+      auto props = yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name];
+      props["width"] = it->second.width;
+      props["height"] = it->second.height;
+      props["topic"] = it->second.topic;
+      props["source"] = it->second.source;
+    }
+  }
+}
+
+void BagMetadataManager::createOrValidate(const CameraDimensionsMap & camera_dimensions)
 {
   std::string yaml_file_path = recording_dir_ + "/recorded_bags_meta.yaml";
 
@@ -263,29 +284,12 @@ void BagMetadataManager::createOrValidate(
       YAML::Node(YAML::NodeType::Sequence);
 
     auto it_names = robot_info_.sensor_names.find(sensor_type);
-    std::vector<std::string> sensor_names = (it_names !=
-      robot_info_.sensor_names.end()) ? it_names->second : std::vector<std::string>();
-    auto it_info = robot_info_.sensor_info_topics.find(sensor_type);
-    std::vector<std::string> info_topics = (it_info !=
-      robot_info_.sensor_info_topics.end()) ? it_info->second : std::vector<std::string>();
-
-    for (size_t i = 0; i < sensor_names.size(); ++i) {
-      const auto & sensor_name = sensor_names[i];
-      yaml_node["robot_info"]["sensors"][sensor_type]["names"].push_back(sensor_name);
-
-      std::string matched_info_topic = (i < info_topics.size()) ? info_topics[i] : "";
-      if (!matched_info_topic.empty()) {
-        auto it = camera_dimensions.find(matched_info_topic);
-        if (it != camera_dimensions.end()) {
-          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["width"] =
-            it->second.first;
-          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["height"] =
-            it->second.second;
-          yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["topic"] =
-            matched_info_topic;
-        }
+    if (it_names != robot_info_.sensor_names.end()) {
+      for (const auto & sensor_name : it_names->second) {
+        yaml_node["robot_info"]["sensors"][sensor_type]["names"].push_back(sensor_name);
       }
     }
+    auto it_info = robot_info_.sensor_info_topics.find(sensor_type);
     auto it_models = robot_info_.sensor_models.find(sensor_type);
     if (it_models != robot_info_.sensor_models.end()) {
       for (const auto & sensor_model : it_models->second) {
@@ -311,6 +315,7 @@ void BagMetadataManager::createOrValidate(
       }
     }
   }
+  writeCameraProperties(yaml_node, camera_dimensions);
 
   yaml_node["user_info"]["name"] = user_info_.name;
   yaml_node["user_info"]["email"] = user_info_.email;
@@ -339,7 +344,7 @@ void BagMetadataManager::updateRosbagYaml(
   const std::string & current_task_name,
   const std::string & current_task_path,
   const std::string & gamepad_name,
-  const std::map<std::string, std::pair<uint32_t, uint32_t>> & camera_dimensions)
+  const CameraDimensionsMap & camera_dimensions)
 {
   RCLCPP_INFO(node_->get_logger(), "Updating rosbag YAML file...");
 
@@ -368,32 +373,7 @@ void BagMetadataManager::updateRosbagYaml(
   yaml_node["recorded_bags"]["tasks"][current_task_label]["bag_dir"] = stored_task_path;
   yaml_node["recorded_bags"]["tasks"][current_task_label]["gamepad"] = gamepad_name;
 
-  for (const auto & sensor_type : robot_info_.sensor_types) {
-    auto it_names = robot_info_.sensor_names.find(sensor_type);
-    std::vector<std::string> sensor_names = (it_names !=
-      robot_info_.sensor_names.end()) ? it_names->second : std::vector<std::string>();
-    auto it_info = robot_info_.sensor_info_topics.find(sensor_type);
-    std::vector<std::string> info_topics = (it_info !=
-      robot_info_.sensor_info_topics.end()) ? it_info->second : std::vector<std::string>();
-
-    for (size_t i = 0; i < sensor_names.size(); ++i) {
-      const auto & sensor_name = sensor_names[i];
-      std::string matched_info_topic = (i < info_topics.size()) ? info_topics[i] : "";
-      if (matched_info_topic.empty()) {
-        continue;
-      }
-      auto it = camera_dimensions.find(matched_info_topic);
-      if (it == camera_dimensions.end()) {
-        continue;
-      }
-      yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["width"] =
-        it->second.first;
-      yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["height"] =
-        it->second.second;
-      yaml_node["robot_info"]["sensors"][sensor_type]["properties"][sensor_name]["topic"] =
-        matched_info_topic;
-    }
-  }
+  writeCameraProperties(yaml_node, camera_dimensions);
 
   try {
     std::ofstream yaml_file(yaml_file_path);
@@ -432,7 +412,7 @@ void BagMetadataManager::updateEpisodeYaml(
       yaml_node = YAML::LoadFile(yaml_file_path);
     } else {
       RCLCPP_WARN(node_->get_logger(), "YAML file not found, creating a new one");
-      std::map<std::string, std::pair<uint32_t, uint32_t>> dummy;
+      CameraDimensionsMap dummy;
       createOrValidate(dummy);
       yaml_node = YAML::LoadFile(yaml_file_path);
     }
