@@ -36,6 +36,12 @@ import subprocess
 import numpy as np
 import pandas as pd
 
+try:  # HF datasets draws a bar per save_episode map(); under launch it is a blank line.
+    import datasets
+    datasets.disable_progress_bars()
+except (ImportError, AttributeError):
+    pass
+
 try:
     # lerobot's encoder ends every call with restore_default_callback(), handing
     # logging back to ffmpeg's INFO-level stderr writer (muxer chatter per episode).

@@ -58,6 +58,17 @@ resolved via `output_root('sobits_vla_rosbag_conversion', 'lerobotdataset')`
 ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py robot:=sobit_home
 ```
 
+`ros2 launch` relays the node's output one complete line at a time, so
+progress is printed as a line every 10 s (`episodes: 40%|... 80/200`), never
+as an in-place bar. For live bars run the node directly in a terminal:
+
+```
+P=$(ros2 pkg prefix sobits_vla_rosbag_conversion)
+pixi run -e gpu python $P/lib/sobits_vla_rosbag_conversion/ros2bag_to_lerobotdataset \
+  --ros-args --params-file $P/share/sobits_vla_rosbag_conversion/config/conversion_config_sobit_home_left_ee.yaml \
+  -p overwrite:=true
+```
+
 Verified args (`--show-args`): `robot`, `config_file`, `rosbag_directory`,
 `recorded_bags_meta_file`, `dataset_name`, `vcodec`, `overwrite`,
 `enable_gpu` (default `true`), `pixi_env`, `pixi_manifest`. `enable_gpu:=true`
