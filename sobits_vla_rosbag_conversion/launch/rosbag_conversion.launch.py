@@ -148,6 +148,8 @@ def generate_launch_description_impl(context, *args, **kwargs):
         executable='ros2bag_to_lerobotdataset',
         name='rosbag_conversion_node',
         output='screen',
+        # A pty: tqdm bars self-disable on a pipe and rcutils/Python block-buffer logs.
+        emulate_tty=True,
         prefix=prefix or None,
         parameters=parameters,
     )
