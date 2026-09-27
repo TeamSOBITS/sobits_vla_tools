@@ -34,22 +34,62 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def load_dataset_info(repo_id: str) -> dict | None:
-    """Read info.json from local cache or HF hub without instantiating LeRobotDataset."""
+def _local_dataset_root(repo_id: str) -> Path | None:
+    """Local dataset root (HF_LEROBOT_HOME/repo_id, else repo_id as a path), or None."""
     try:
         from sobits_vla_common.lerobot_adapter import HF_LEROBOT_HOME
-        candidate = HF_LEROBOT_HOME / repo_id / 'meta' / 'info.json'
-        if not candidate.exists():
-            candidate = Path(repo_id) / 'meta' / 'info.json'
-        if not candidate.exists():
+        candidates = [Path(HF_LEROBOT_HOME) / repo_id, Path(repo_id)]
+    except Exception:
+        candidates = [Path(repo_id)]
+    for root in candidates:
+        if (root / 'meta').is_dir():
+            return root
+    return None
+
+
+def load_dataset_meta_file(repo_id: str, name: str) -> dict | None:
+    """Read meta/<name> (JSON) from local cache or HF hub without instantiating LeRobotDataset."""
+    try:
+        root = _local_dataset_root(repo_id)
+        candidate = root / 'meta' / name if root is not None else None
+        if candidate is None or not candidate.exists():
             from huggingface_hub import hf_hub_download
             candidate = Path(
-                hf_hub_download(repo_id, 'meta/info.json', repo_type='dataset')
+                hf_hub_download(repo_id, f'meta/{name}', repo_type='dataset')
             )
         with open(candidate) as f:
             return json.load(f)
     except Exception:
         return None
+
+
+def load_dataset_info(repo_id: str) -> dict | None:
+    """Read meta/info.json; see load_dataset_meta_file."""
+    return load_dataset_meta_file(repo_id, 'info.json')
+
+
+def _load_conversion_stats(repo_id: str) -> dict | None:
+    """Local-only conversion_stats.yaml (written at the dataset root, never pushed)."""
+    root = _local_dataset_root(repo_id)
+    path = root / 'conversion_stats.yaml' if root is not None else None
+    if path is None or not path.exists():
+        return None
+    try:
+        import yaml
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return None
+
+
+def _robot_ee_rotation(params: dict) -> str:
+    from sobits_vla_common.robot_descriptor import EE_ROTATION_AXES, EE_ROTATION_DEFAULT
+
+    rotation = params.get('robot.ee_rotation', EE_ROTATION_DEFAULT) or EE_ROTATION_DEFAULT
+    if rotation not in EE_ROTATION_AXES:
+        raise ValueError(
+            f'robot.ee_rotation must be one of {sorted(EE_ROTATION_AXES)}, got {rotation!r}')
+    return rotation
 
 
 def _expected_ee_actions(desc, params: dict) -> list[str]:
@@ -60,14 +100,12 @@ def _expected_ee_actions(desc, params: dict) -> list[str]:
     optional override of RobotDescriptor.derived_ee_action_arms() (empty
     derives from the descriptor; an explicit list is validated against the
     same active-ee/excluded-group rule, or joint and EE features would both
-    land in expected_actions). robot.ee_rotation selects rpy (6D) vs quat
-    (7D) names, matching the dataset's conversion.
+    land in expected_actions). robot.ee_rotation selects rotvec/rpy (6D) vs
+    quat (7D) names, matching the dataset's conversion.
     """
     from sobits_vla_common.robot_descriptor import ee_action_features
 
-    rotation = params.get('robot.ee_rotation', 'rpy') or 'rpy'
-    if rotation not in ('rpy', 'quat'):
-        raise ValueError(f"robot.ee_rotation must be 'rpy' or 'quat', got {rotation!r}")
+    rotation = _robot_ee_rotation(params)
 
     arms = [a for a in params.get('robot.ee_action_arms', []) if a]
     if arms:
@@ -88,6 +126,86 @@ def _expected_ee_actions(desc, params: dict) -> list[str]:
     for s in specs:
         features.extend(ee_action_features(s.ee_pose, rotation=rotation))
     return features
+
+
+# Legacy delta detection: an absolute EE action tracks its state, so the means
+# agree within a fraction of the state spread (+2 cm floor for idle arms).
+_DELTA_STD_FRACTION = 0.5
+_DELTA_FLOOR_M = 0.02
+
+
+def _delta_axes_from_stats(stats: dict, action_names: list, state_names: list) -> list:
+    """EE translation action names whose mean is far from the state mean (per-step deltas)."""
+    try:
+        a_mean = stats['action']['mean']
+        s_mean = stats['observation.state']['mean']
+        s_std = stats['observation.state']['std']
+    except (KeyError, TypeError):
+        return []
+    flagged = []
+    for i, name in enumerate(action_names):
+        if not (name.startswith('ee.') and name.rsplit('.', 1)[-1] in ('x', 'y', 'z')):
+            continue
+        if name not in state_names:
+            continue
+        j = state_names.index(name)
+        if abs(a_mean[i] - s_mean[j]) > _DELTA_STD_FRACTION * s_std[j] + _DELTA_FLOOR_M:
+            flagged.append(name)
+    return flagged
+
+
+def _check_action_convention(
+    repo_id: str, info: dict, params: dict, log_warn, log_info,
+) -> None:
+    """Refuse datasets whose action encoding does not match what training assumes."""
+    from sobits_vla_common.robot_descriptor import ee_rotation_from_names
+
+    features = info.get('features', {})
+    action_names = features.get('action', {}).get('names') or []
+    state_names = features.get('observation.state', {}).get('names') or []
+    has_ee = any(n.startswith('ee.') for n in action_names)
+
+    sidecar = load_dataset_meta_file(repo_id, 'sobits_vla_info.json') or {}
+    conv_stats = _load_conversion_stats(repo_id) or {}
+    convention = sidecar.get('action_convention') or conv_stats.get('action_convention')
+
+    if convention:
+        mode = convention.get('action_mode', 'absolute')
+        if mode != 'absolute':
+            raise RuntimeError(
+                f"Dataset '{repo_id}' has action_mode={mode!r}; training expects absolute "
+                'actions. Reconvert it (relative is now a training-time option).'
+            )
+        rotation = convention.get('ee_rotation') or ee_rotation_from_names(action_names)
+    else:
+        rotation = ee_rotation_from_names(action_names)
+        if conv_stats.get('use_relative_actions', False):
+            raise RuntimeError(
+                f"Dataset '{repo_id}' was converted with use_relative_actions=true "
+                '(per-step deltas). Reconvert it as absolute.'
+            )
+        if has_ee:
+            stats = load_dataset_meta_file(repo_id, 'stats.json') or {}
+            delta_axes = _delta_axes_from_stats(stats, action_names, state_names)
+            if delta_axes:
+                raise RuntimeError(
+                    f"Dataset '{repo_id}' EE actions {delta_axes} look like per-step deltas "
+                    '(action mean far from state mean). Reconvert it as absolute.'
+                )
+        rot_note = f' with {rotation} rotation' if rotation else ''
+        log_warn(
+            f"Legacy dataset without action_convention: '{repo_id}'; "
+            f'assuming absolute actions{rot_note}.'
+        )
+
+    if has_ee:
+        expected = _robot_ee_rotation(params)
+        if rotation != expected:
+            raise RuntimeError(
+                f"Dataset '{repo_id}' EE rotation is {rotation!r} but robot.ee_rotation is "
+                f'{expected!r}. Set robot.ee_rotation to match or reconvert.'
+            )
+    log_info(f"Action convention pre-flight passed for '{repo_id}'.")
 
 
 def run_preflight_checks(params: dict, ros_logger=None) -> None:
@@ -214,8 +332,18 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
                 raise
             log_warn(f'Failed to run robot-descriptor-based pre-flight checks: {exc}')
 
+    _check_action_convention(repo_id, info, params, log_warn, log_info)
+
+    ee_names = [a for a in action_names if a.startswith('ee.')]
+    ee_relative = bool(params.get('robot.ee_relative_actions', False))
+    if ee_names and po.get('use_relative_actions', False) and not ee_relative:
+        raise RuntimeError(
+            f"Dataset '{repo_id}' has EE actions {ee_names}: per-component relative EE is "
+            'refused; set robot.ee_relative_actions (SE(3) relative) instead.'
+        )
+
     # relative_exclude_joints validation (config_builder derives this from the
-    # descriptor; warn only if it still looks wrong against the dataset).
+    # descriptor and appends ee.* names when ee_relative_actions is on).
     if po.get('use_relative_actions', False):
         exclude = po.get('relative_exclude_joints', [])
         if not exclude:
@@ -223,6 +351,8 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
                 'use_relative_actions=true but relative_exclude_joints is empty — '
                 'all features, including mobile-base velocities, would be delta-converted. '
                 'Set robot.descriptor_id or an explicit override.'
+                + (" ee.* names are excluded from LeRobot's per-component step "
+                   'automatically (robot.ee_relative_actions).' if ee_names else '')
             )
         elif action_names:
             unknown = [j for j in exclude if j not in action_names]
