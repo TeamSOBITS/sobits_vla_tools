@@ -101,6 +101,13 @@ def mat_to_pose6d(mat: np.ndarray) -> np.ndarray:
     return np.concatenate([xyz, rpy])
 
 
+def mat_to_pose6d_rotvec(mat: np.ndarray) -> np.ndarray:
+    """Convert 4x4 homogeneous matrix to [x, y, z, rx, ry, rz] axis-angle (float32)."""
+    xyz = mat[:3, 3].astype(np.float32)
+    rotvec = Rotation.from_matrix(mat[:3, :3]).as_rotvec().astype(np.float32)
+    return np.concatenate([xyz, rotvec])
+
+
 def mat_to_pose7d(mat: np.ndarray) -> np.ndarray:
     """Convert 4x4 homogeneous matrix to [x, y, z, qx, qy, qz, qw] (float32)."""
     xyz = mat[:3, 3].astype(np.float32)

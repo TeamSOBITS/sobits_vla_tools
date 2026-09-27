@@ -26,9 +26,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import numpy as np
-from sobits_vla_common.geometry import (
-    quat_relative, quat_rotate_vec, quat_shortest_arc, quat_to_rpy, rpy_to_quat,
-)
+from sobits_vla_common.robot_descriptor import EE_ROTATION_DEFAULT
 from sobits_vla_rosbag_conversion.offline_tf_tree import OfflineTFTree
 from sobits_vla_rosbag_conversion.sync import images as sync_images
 from sobits_vla_rosbag_conversion.sync import joints as sync_joints
@@ -36,13 +34,6 @@ from sobits_vla_rosbag_conversion.sync import poses as sync_poses
 from sobits_vla_rosbag_conversion.sync.core import get_closest_t, should_downsample
 import torch
 from tqdm import tqdm
-
-
-def _body_translation(state_q, state_xyz, action_xyz):
-    """R(t)^T . (p(t+1) - p(t)): translation delta in the EE's own axes at t."""
-    p_diff = (action_xyz - state_xyz).tolist()
-    conj = (-state_q[0], -state_q[1], -state_q[2], state_q[3])
-    return quat_rotate_vec(conj, p_diff)
 
 
 class FrameSynthesizer:
@@ -53,7 +44,6 @@ class FrameSynthesizer:
         fps: int,
         sync_threshold: float,
         downsample_tolerance: float,
-        use_relative_actions: bool,
         skip_static_threshold: float,
         action_features: list,
         has_mobile_base: bool,
@@ -66,14 +56,12 @@ class FrameSynthesizer:
         subtask_label_to_idx: dict,
         depth_camera_topics: dict | None = None,
         ee_action_specs: list = [],
-        ee_rotation: str = 'rpy',
-        ee_frame: str = 'base',
+        ee_rotation: str = EE_ROTATION_DEFAULT,
         logger=None,
     ):
         self.fps = fps
         self.sync_threshold = sync_threshold
         self.downsample_tolerance = downsample_tolerance
-        self.use_relative_actions = use_relative_actions
         self.skip_static_threshold = skip_static_threshold
         self.action_features = action_features
         self.has_mobile_base = has_mobile_base
@@ -87,7 +75,6 @@ class FrameSynthesizer:
         self.subtask_label_to_idx = subtask_label_to_idx
         self.ee_action_specs = ee_action_specs
         self.ee_rotation = ee_rotation
-        self.ee_frame = ee_frame
         self.logger = logger
 
     def log_warn(self, msg: str):
@@ -283,8 +270,6 @@ class FrameSynthesizer:
             t_sec, self.fps, self.action_features, ctx['cmd_series_by_feature'],
             ctx['cmd_series_by_feature_times'], ctx['joint_pos_series'], ctx['joint_pos_times'],
         )
-        if self.use_relative_actions:
-            action = sync_joints.to_relative_action(action, state)
 
         if self.ee_action_specs:
             ok = self._append_ee_channels(
@@ -307,17 +292,23 @@ class FrameSynthesizer:
     def _append_ee_channels(
         self, state, action, tf_tree, t_sec, prev_ee_action_poses, counters
     ) -> bool:
-        """Extend state/action in place with EE state/action pose per spec; False = skip frame."""
+        """Extend state/action in place with absolute EE poses per spec; False = skip frame."""
         t_ns = int(t_sec * 1e9)
-        synth_fn = (
-            sync_poses.synthesize_ee_action_quat if self.ee_rotation == 'quat'
-            else sync_poses.synthesize_ee_action
-        )
         for spec in self.ee_action_specs:
             name, ee_src, ee_tgt = spec
-            result = synth_fn(
-                tf_tree, ee_src, ee_tgt, t_ns, self.fps, prev_ee_action_poses[name]
-            )
+            # rpy unwrap / quat shortest-arc need the previous state; rotvec is canonical.
+            if self.ee_rotation == 'rotvec':
+                result = sync_poses.synthesize_ee_action_rotvec(
+                    tf_tree, ee_src, ee_tgt, t_ns, self.fps
+                )
+            else:
+                synth_fn = (
+                    sync_poses.synthesize_ee_action_quat if self.ee_rotation == 'quat'
+                    else sync_poses.synthesize_ee_action
+                )
+                result = synth_fn(
+                    tf_tree, ee_src, ee_tgt, t_ns, self.fps, prev_ee_action_poses[name]
+                )
             if result is None:
                 counters['tf'] += 1
                 if counters['tf'] <= 5:
@@ -328,44 +319,9 @@ class FrameSynthesizer:
                 return False
             state_pose, action_pose = result
             state.extend(state_pose.tolist())
-            # Joints get delta-converted by to_relative_action above; EE deltas
-            # are formed here from the already-unwrap/shortest-arc-consistent
-            # (state, action) pair.
-            if self.use_relative_actions:
-                if self.ee_rotation == 'quat':
-                    action.extend(self._relative_ee_pose7(state_pose, action_pose, self.ee_frame))
-                else:
-                    action.extend(self._relative_ee_pose6(state_pose, action_pose, self.ee_frame))
-            else:
-                action.extend(action_pose.tolist())
+            action.extend(action_pose.tolist())
             prev_ee_action_poses[name] = state_pose
         return True
-
-    @staticmethod
-    def _relative_ee_pose6(state_pose, action_pose, ee_frame: str) -> list:
-        """Relative 6D EE action: [dx,dy,dz, droll,dpitch,dyaw] per ee_frame."""
-        if ee_frame == 'base':
-            return (action_pose - state_pose).tolist()
-        state_q = rpy_to_quat(*state_pose[3:6])
-        delta_xyz = _body_translation(state_q, state_pose[:3], action_pose[:3])
-        action_q = rpy_to_quat(*action_pose[3:6])
-        delta_rpy = quat_to_rpy(*quat_relative(state_q, action_q))
-        return list(delta_xyz) + list(delta_rpy)
-
-    @staticmethod
-    def _relative_ee_pose7(state_pose, action_pose, ee_frame: str) -> list:
-        """Relative 7D EE action: [dx,dy,dz, dqx,dqy,dqz,dqw] per ee_frame."""
-        state_q = tuple(state_pose[3:7])
-        # state/action quats already come out shortest-arc-continuous from
-        # synthesize_ee_action_quat; re-align action against state here too
-        # since quat_relative's result is only meaningful for the shorter arc.
-        action_q = quat_shortest_arc(action_pose[3:7], state_q)
-        delta_q = quat_relative(state_q, action_q)
-        if ee_frame == 'base':
-            delta_xyz = (action_pose[:3] - state_pose[:3]).tolist()
-        else:
-            delta_xyz = list(_body_translation(state_q, state_pose[:3], action_pose[:3]))
-        return delta_xyz + list(delta_q)
 
     def _sync_component_diffs(self, t_sec, ctx):
         joint_diff = abs(t_sec - get_closest_t(
@@ -394,10 +350,9 @@ class FrameSynthesizer:
                         f'at t={t_sec:.3f}s. Skipping frame.'
                     )
                 return False
-            ee_abs, ee_rel = sync_poses.compute_ee_pose_and_delta(ee_mat, prev_ee_poses[ee_name])
+            ee_abs = sync_poses.compute_ee_pose(ee_mat, prev_ee_poses[ee_name])
             key = f'observation.ee_pose.{ee_name}' if ee_name else 'observation.ee_pose'
             frame[key] = torch.from_numpy(ee_abs.copy())
-            frame[f'{key}.delta'] = torch.from_numpy(ee_rel)
             prev_ee_poses[ee_name] = ee_abs.copy()
         return True
 

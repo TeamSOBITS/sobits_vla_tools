@@ -44,27 +44,42 @@ BASE_KEY_ALIASES: Dict[str, str] = {
     'base_theta': 'theta.vel',
 }
 
-# Absolute EE pose action axes, base_footprint frame, in feature-name order.
+# EE pose axes in feature-name order, expressed in each arm's reference_frame.
+# Datasets store absolute poses; relative-to-observation is a training processor.
+# rpy = scipy 'xyz' extrinsic (ROS RPY); rotvec = axis-angle, no wrap/gimbal.
 EE_ACTION_AXES = ('x', 'y', 'z', 'roll', 'pitch', 'yaw')
-
-# Quaternion variant: translation + quaternion (x, y, z, w), in feature-name order.
+EE_ACTION_AXES_ROTVEC = ('x', 'y', 'z', 'rx', 'ry', 'rz')
 EE_ACTION_AXES_QUAT = ('x', 'y', 'z', 'qx', 'qy', 'qz', 'qw')
 
+EE_ROTATION_AXES: Dict[str, tuple] = {
+    'rotvec': EE_ACTION_AXES_ROTVEC,
+    'rpy': EE_ACTION_AXES,
+    'quat': EE_ACTION_AXES_QUAT,
+}
+EE_ROTATION_DEFAULT = 'rotvec'
 
-def ee_action_features(name: str, rotation: str = 'rpy') -> List[str]:
+
+def ee_action_features(name: str, rotation: str = EE_ROTATION_DEFAULT) -> List[str]:
     """
     Dataset action feature names for one EE pose, e.g. 'ee.left.x'.
 
-    rotation='rpy' (default) -> 6D (x,y,z,roll,pitch,yaw); 'quat' -> 7D
-    (x,y,z,qx,qy,qz,qw). Any other value raises ValueError.
+    rotation='rotvec' (default) -> 6D (x,y,z,rx,ry,rz); 'rpy' -> 6D
+    (x,y,z,roll,pitch,yaw); 'quat' -> 7D (x,y,z,qx,qy,qz,qw).
     """
-    if rotation == 'rpy':
-        axes = EE_ACTION_AXES
-    elif rotation == 'quat':
-        axes = EE_ACTION_AXES_QUAT
-    else:
-        raise ValueError(f"rotation must be 'rpy' or 'quat', got {rotation!r}")
+    try:
+        axes = EE_ROTATION_AXES[rotation]
+    except KeyError:
+        raise ValueError(
+            f'rotation must be one of {sorted(EE_ROTATION_AXES)}, got {rotation!r}') from None
     return [f'ee.{name}.{ax}' for ax in axes]
+
+
+def ee_rotation_from_names(names: List[str]) -> str:
+    """Infer the EE rotation representation from dataset feature names; '' if no ee.* names."""
+    for rotation, axes in EE_ROTATION_AXES.items():
+        if any(n.startswith('ee.') and n.endswith('.' + axes[-1]) for n in names):
+            return rotation
+    return ''
 
 
 @dataclass

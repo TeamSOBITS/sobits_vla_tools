@@ -327,14 +327,17 @@ def test_ee_control_filtered_drops_excluded_ee_pose():
 
 
 def test_ee_action_features_axis_order():
-    assert ee_action_features('left') == [
+    assert ee_action_features('left', rotation='rpy') == [
         'ee.left.x', 'ee.left.y', 'ee.left.z',
         'ee.left.roll', 'ee.left.pitch', 'ee.left.yaw',
     ]
 
 
-def test_ee_action_features_default_matches_explicit_rpy():
-    assert ee_action_features('left') == ee_action_features('left', rotation='rpy')
+def test_ee_action_features_default_is_rotvec():
+    assert ee_action_features('left') == [
+        'ee.left.x', 'ee.left.y', 'ee.left.z',
+        'ee.left.rx', 'ee.left.ry', 'ee.left.rz',
+    ]
 
 
 def test_ee_action_features_quat_axis_order():

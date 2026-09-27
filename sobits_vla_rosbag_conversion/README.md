@@ -27,10 +27,19 @@ composed by the `FrameSynthesizer` facade in `frame_synthesizer.py`. None of
 Schema-driven (`_SCHEMA` in `conversion_node.py`, no dynamic sections):
 `rosbag_directory`, `recorded_bags_meta_file`, `dataset_name`,
 `output_directory`, `fps`, `vcodec`, `sync_threshold`,
-`downsample_tolerance`, `push_to_hub`, `use_relative_actions`,
-`skip_static_threshold`, `exclude.{groups,cameras,ee}` (trims the
-shared descriptor), `cameras.primary`, `robot_descriptor_id`. See
+`downsample_tolerance`, `push_to_hub`, `skip_static_threshold`,
+`exclude.{groups,cameras,ee}` (trims the shared descriptor),
+`cameras.primary`, `robot_descriptor_id`, `ee_actions.{arms,rotation}`. See
 `sobits_vla_rosbag_conversion/sobits_vla_rosbag_conversion/conversion_node.py:77`.
+
+Actions are always **absolute**. `ee_actions.rotation` picks the EE rotation
+encoding: `rotvec` (default, `ee.<arm>.{x,y,z,rx,ry,rz}`), `rpy` (scipy `xyz`
+extrinsic, `...roll,pitch,yaw`) or `quat` (`...qx,qy,qz,qw`); poses are in each
+ee entry's `target_frame`. `use_relative_actions: true` and `ee_actions.frame`
+were removed and now raise: relative actions are a training-time option
+(`robot.ee_relative_actions`, `policy_overrides.use_relative_actions`). The
+convention is recorded as `action_convention` in `meta/sobits_vla_info.json`
+and `conversion_stats.yaml`.
 
 ## Topics / services
 

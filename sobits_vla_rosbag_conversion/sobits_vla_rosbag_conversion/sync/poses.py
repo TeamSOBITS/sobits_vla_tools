@@ -25,11 +25,12 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""EE-pose synthesis via TF lookups, per-axis unwrap (fb188e1), and delta."""
+"""EE-pose synthesis via TF lookups: rotvec, rpy (per-axis unwrap, fb188e1) or quat."""
 
-import numpy as np
 from sobits_vla_common.geometry import quat_shortest_arc, unwrap_rpy
-from sobits_vla_rosbag_conversion.offline_tf_tree import mat_to_pose6d, mat_to_pose7d
+from sobits_vla_rosbag_conversion.offline_tf_tree import (
+    mat_to_pose6d, mat_to_pose6d_rotvec, mat_to_pose7d,
+)
 
 # Not sobits_vla_common.gz_utils.wrap_pi: that wraps an absolute angle to
 # (-pi, pi]; this unwraps a delta against the previous sample (fb188e1).
@@ -40,27 +41,12 @@ def resolve_ee_pose(tf_tree, ee_src, ee_tgt, stamp_ns):
     return tf_tree.resolve(ee_tgt, ee_src, stamp_ns)
 
 
-def compute_ee_pose_and_delta(ee_mat, prev):
-    """
-    Convert a TF matrix to abs pose6d + delta vs the previous sample.
-
-    Unwraps each rotation axis against prev before differencing, so a
-    genuine continuous rotation crossing +-pi doesn't alias into a huge
-    single-step jump in the delta (fb188e1) -- must not be replaced by a
-    plain wrap-to-range helper, the two are not equivalent.
-    """
+def compute_ee_pose(ee_mat, prev):
+    """Convert a TF matrix to an abs pose6d (rpy), unwrapped per axis against prev (fb188e1)."""
     ee_abs = mat_to_pose6d(ee_mat)
     if prev is not None:
-        for ax in range(3, 6):
-            diff = ee_abs[ax] - prev[ax]
-            if diff > np.pi:
-                ee_abs[ax] -= 2 * np.pi
-            elif diff < -np.pi:
-                ee_abs[ax] += 2 * np.pi
-        ee_rel = ee_abs - prev
-    else:
-        ee_rel = np.zeros(6, dtype=np.float32)
-    return ee_abs, ee_rel
+        ee_abs[3:6] = unwrap_rpy(ee_abs[3:6], prev[3:6])
+    return ee_abs
 
 
 def synthesize_ee_action(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_pose):
@@ -89,6 +75,28 @@ def synthesize_ee_action(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_pose):
         action_pose = mat_to_pose6d(action_mat)
         rpy = unwrap_rpy(action_pose[3:6], state_pose[3:6])
         action_pose[3:6] = rpy
+
+    return state_pose, action_pose
+
+
+def synthesize_ee_action_rotvec(tf_tree, ee_src, ee_tgt, t_ns, fps):
+    """
+    (state_pose6, action_pose6) rotvec [x, y, z, rx, ry, rz], or None on state lookup failure.
+
+    Same shift-forward and unresolvable-future fallback as synthesize_ee_action.
+    No unwrap: scipy's rotvec is canonical (|rotvec| <= pi) and each pose is absolute.
+    """
+    state_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, t_ns)
+    if state_mat is None:
+        return None
+    state_pose = mat_to_pose6d_rotvec(state_mat)
+
+    future_ns = t_ns + int(round((1.0 / fps) * 1e9)) if fps > 0 else t_ns
+    action_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, future_ns)
+    if action_mat is None:
+        action_pose = state_pose.copy()
+    else:
+        action_pose = mat_to_pose6d_rotvec(action_mat)
 
     return state_pose, action_pose
 

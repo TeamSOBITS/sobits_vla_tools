@@ -43,7 +43,7 @@ from sobits_vla_common import runtime_deps
 from sobits_vla_common.lerobot_compat import apply_conversion_patches
 from sobits_vla_common.output_root import output_root
 from sobits_vla_common.param_schema import declare_from_schema, P, read_schema
-from sobits_vla_common.robot_descriptor import ee_action_features
+from sobits_vla_common.robot_descriptor import ee_action_features, EE_ROTATION_AXES
 from sobits_vla_rosbag_conversion.dataset_writer import DatasetWriter
 from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
 from sobits_vla_rosbag_conversion.pipeline.discovery import candidate_bag_dirs, discover_episodes
@@ -89,6 +89,8 @@ _SCHEMA = {
     'push_to_hub': P(False),
     'hub_private': P(False),
     'overwrite': P(False),
+    # Removed: datasets are absolute-only; true raises (relative is a training
+    # processor). Kept declared so an old yaml fails loudly instead of silently.
     'use_relative_actions': P(False),
     'skip_static_threshold': P(0.0),
     # Per-config trim of the shared robot descriptor.
@@ -107,10 +109,8 @@ _SCHEMA = {
         'primary': P(''),
     },
     'robot_descriptor_id': P(''),
-    # EE pose actions synthesized from offline TF; abs or delta per
-    # use_relative_actions. Which arms get one is now DERIVED from the
-    # descriptor (RobotDescriptor.derived_ee_action_arms): an active ee[]
-    # entry whose control.group is NOT active (see that method's docstring).
+    # Absolute EE pose actions from offline TF. Arms derive from the descriptor: an active
+    # ee[] entry whose control.group is NOT active (RobotDescriptor.derived_ee_action_arms).
     'ee_actions': {
         # Deprecated: 'enabled' was removed; derives from the descriptor now.
         # Declared as a STRING so any yaml presence -- true or false alike --
@@ -122,12 +122,12 @@ _SCHEMA = {
         # Optional override of the derived arm list ('' = derive; see above).
         # Each named arm is still validated against the same derivation rule.
         'arms': P(['']),
-        # rpy = roll/pitch/yaw (6D, per-axis unwrap) | quat = quaternion
-        # x,y,z,w (7D, shortest-arc).
-        'rotation': P('rpy'),
-        # base = deltas along the reference frame axes | body = along the
-        # EE's own axes at t, UMI-style, reference-frame invariant.
-        'frame': P('base'),
+        # rotvec = axis-angle rx,ry,rz (6D) | rpy = roll/pitch/yaw (6D, per-axis
+        # unwrap) | quat = quaternion x,y,z,w (7D, shortest-arc).
+        'rotation': P('rotvec'),
+        # Removed with relative actions (absolute poses have no body frame);
+        # declared as a string so any non-empty value is rejected loudly.
+        'frame': P(''),
     },
 }
 
@@ -160,7 +160,7 @@ class RosbagConversionNode(Node):
 
     @staticmethod
     def _check_deprecated_params(params) -> None:
-        """Reject exclude.ee_poses (renamed) and ee_actions.enabled (removed)."""
+        """Reject renamed/removed exclude.ee_poses, ee_actions.{enabled,frame}, relative."""
         if params.exclude.ee_poses:
             raise ValueError('exclude.ee_poses was renamed to exclude.ee')
         # 'enabled' is declared as a string (see _SCHEMA); a yaml bool under
@@ -174,6 +174,17 @@ class RosbagConversionNode(Node):
                 'ee_actions.enabled was removed; EE actions derive from the '
                 "descriptor's ee active flags plus exclude.groups (override "
                 'with ee_actions.arms)'
+            )
+        if params.use_relative_actions:
+            raise ValueError(
+                'use_relative_actions was removed: datasets store absolute actions. '
+                'Enable relative actions at training time instead (robot.ee_relative_actions '
+                'for EE poses, policy_overrides.use_relative_actions for joints).'
+            )
+        if params.ee_actions.frame:
+            raise ValueError(
+                'ee_actions.frame was removed with relative actions: absolute EE poses '
+                "are expressed in each ee entry's target_frame (robot descriptor)."
             )
 
     def __init__(self):
@@ -215,7 +226,6 @@ class RosbagConversionNode(Node):
         self.push_to_hub = params.push_to_hub
         self.hub_private = params.hub_private
         self.overwrite = params.overwrite
-        self.use_relative_actions = params.use_relative_actions
         self.skip_static_threshold = params.skip_static_threshold
         self.robot_descriptor_id = params.robot_descriptor_id
 
@@ -312,23 +322,12 @@ class RosbagConversionNode(Node):
         list is validated against that same rule instead of replacing it.
         """
         rotation = params.ee_actions.rotation
-        if rotation not in ('rpy', 'quat'):
+        if rotation not in EE_ROTATION_AXES:
             raise ValueError(
-                f"ee_actions.rotation must be 'rpy' or 'quat', got {rotation!r}"
+                f'ee_actions.rotation must be one of {sorted(EE_ROTATION_AXES)}, '
+                f'got {rotation!r}'
             )
         self.ee_rotation = rotation
-        frame = params.ee_actions.frame
-        if frame not in ('base', 'body'):
-            raise ValueError(
-                f"ee_actions.frame must be 'base' or 'body', got {frame!r}"
-            )
-        if frame == 'body' and not self.use_relative_actions:
-            raise ValueError(
-                "ee_actions.frame='body' requires use_relative_actions=true -- "
-                'an absolute pose has no body-frame reading. For a reference-'
-                'frame change on absolute poses, use ee_poses target_frame instead.'
-            )
-        self.ee_frame = frame
 
         arms = params.ee_actions.arms
         if arms:
@@ -606,7 +605,6 @@ class RosbagConversionNode(Node):
             for ee_name, _, _ in self.ee_configs:
                 key = f'observation.ee_pose.{ee_name}' if ee_name else 'observation.ee_pose'
                 features[key] = {'dtype': 'float32', 'shape': (6,), 'names': ee_names}
-                features[f'{key}.delta'] = {'dtype': 'float32', 'shape': (6,), 'names': ee_names}
         if self.has_subtasks:
             features['subtask_index'] = {
                 'dtype': 'int64', 'shape': (1,), 'names': ['subtask_index'],
@@ -625,6 +623,19 @@ class RosbagConversionNode(Node):
             }
         return features
 
+    def _action_convention(self) -> dict:
+        """Describe how action/state are encoded; persisted in the sidecar and stats."""
+        convention = {'action_mode': 'absolute'}
+        if self.ee_action_specs:
+            convention['ee_rotation'] = self.ee_rotation
+            if self.ee_rotation == 'rpy':
+                convention['rpy_convention'] = 'xyz_extrinsic'
+            convention['ee_frames'] = {
+                name: {'source': src, 'target': tgt}
+                for name, src, tgt in self.ee_action_specs
+            }
+        return convention
+
     def _make_writer(self, features: dict, robot_info: dict, all_users: list) -> DatasetWriter:
         return DatasetWriter(
             dataset_name=self.dataset_name, fps=self.fps, features=features,
@@ -633,14 +644,14 @@ class RosbagConversionNode(Node):
             vcodec=self.vcodec, overwrite=self.overwrite, robot_info=robot_info,
             user_info=all_users, has_subtasks=self.has_subtasks,
             all_subtasks_list=self.all_subtasks_list, push_to_hub=self.push_to_hub,
-            hub_private=self.hub_private, logger=self.get_logger(),
+            hub_private=self.hub_private, action_convention=self._action_convention(),
+            logger=self.get_logger(),
         )
 
     def _make_synthesizer(self) -> FrameSynthesizer:
         return FrameSynthesizer(
             fps=self.fps, sync_threshold=self.sync_threshold,
             downsample_tolerance=self.downsample_tolerance,
-            use_relative_actions=self.use_relative_actions,
             skip_static_threshold=self.skip_static_threshold,
             action_features=self.action_features, has_mobile_base=self.has_mobile_base,
             base_keys=self.base_keys, ee_pose_enabled=self.ee_pose_enabled,
@@ -649,7 +660,7 @@ class RosbagConversionNode(Node):
             depth_camera_topics=self.depth_camera_topics,
             subtask_label_to_idx=self.subtask_label_to_idx,
             ee_action_specs=self.ee_action_specs, ee_rotation=self.ee_rotation,
-            ee_frame=self.ee_frame, logger=self.get_logger(),
+            logger=self.get_logger(),
         )
 
     def _run_episodes(self, dirs: list, all_tasks: list, pipeline: EpisodePipeline) -> None:
@@ -738,7 +749,7 @@ class RosbagConversionNode(Node):
             'sync_threshold': self.sync_threshold,
             'downsample_tolerance': self.downsample_tolerance,
             'skip_static_threshold': self.skip_static_threshold,
-            'use_relative_actions': self.use_relative_actions,
+            'action_convention': self._action_convention(),
             'ee_pose_enabled': self.ee_pose_enabled,
             'cameras_skip': self.skip_cameras,
         }

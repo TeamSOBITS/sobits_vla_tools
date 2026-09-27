@@ -31,8 +31,6 @@
     hub_private: false
     overwrite: true
 
-    use_relative_actions: false
-
     # Skip frames where no joint exceeds this velocity (rad/s). 0.0 = disabled.
     skip_static_threshold: 0.0
 
@@ -53,7 +51,9 @@
     # replacing its joint-space action/state with ee.left.* (see ee_control
     # in the robot descriptor for the servo-bridge frame this corresponds to).
     # EE actions derive from exclude.groups vs the descriptor's active ee entries.
-    ee_actions: {}
+    ee_actions:
+      # Absolute pose, axis-angle rotation; relative is training's robot.ee_relative_actions.
+      rotation: rotvec
 
     # primary = sync trigger camera (one frame assembled per primary image;
     # other cameras are sampled at the nearest timestamp).
