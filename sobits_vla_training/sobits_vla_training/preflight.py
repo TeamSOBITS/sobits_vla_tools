@@ -205,7 +205,29 @@ def _check_action_convention(
                 f"Dataset '{repo_id}' EE rotation is {rotation!r} but robot.ee_rotation is "
                 f'{expected!r}. Set robot.ee_rotation to match or reconvert.'
             )
+        _check_ee_frames(repo_id, (convention or {}).get('ee_frames') or {}, params)
     log_info(f"Action convention pre-flight passed for '{repo_id}'.")
+
+
+def _check_ee_frames(repo_id: str, ee_frames: dict, params: dict) -> None:
+    """Refuse a dataset whose EE poses were measured in other frames than the descriptor's."""
+    desc_id = params.get('robot.descriptor_id', '')
+    if not ee_frames or not desc_id:
+        return
+    from sobits_vla_common.robot_descriptor import load_robot_descriptor
+    by_name = {e.name: e for e in (load_robot_descriptor(desc_id).ee_poses or [])}
+    for arm, frames in ee_frames.items():
+        spec = by_name.get(arm)
+        if spec is None:
+            continue
+        got = (frames.get('source'), frames.get('target'))
+        want = (spec.source_frame, spec.target_frame)
+        if got != want:
+            raise RuntimeError(
+                f"Dataset '{repo_id}' measures ee.{arm} as {got[0]} in {got[1]}, but "
+                f"descriptor '{desc_id}' now uses {want[0]} in {want[1]}. Reconvert the "
+                'dataset (a policy trained on it would command targets in the wrong frame).'
+            )
 
 
 def run_preflight_checks(params: dict, ros_logger=None) -> None:

@@ -186,3 +186,25 @@ class TestPerComponentEERelative:
 
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))
+
+
+class TestEEFrames:
+    """_check_ee_frames: the dataset's EE frames must match the descriptor's current ones."""
+
+    LEFT = {'source': 'hand_left_end_effector_link', 'target': 'body_lift_link'}
+
+    def _check(self, frames):
+        from sobits_vla_training.preflight import _check_ee_frames
+        _check_ee_frames(REPO, frames, {'robot.descriptor_id': 'sobit_home'})
+
+    def test_matching_frames_pass(self):
+        self._check({'left': dict(self.LEFT)})
+
+    def test_old_base_footprint_dataset_fails(self):
+        with pytest.raises(RuntimeError, match='base_footprint.*body_lift_link'):
+            self._check({'left': dict(self.LEFT, target='base_footprint')})
+
+    def test_unknown_arm_and_no_descriptor_are_ignored(self):
+        self._check({'ghost': dict(self.LEFT, target='base_footprint')})
+        from sobits_vla_training.preflight import _check_ee_frames
+        _check_ee_frames(REPO, {'left': dict(self.LEFT, target='x')}, {'robot.descriptor_id': ''})
