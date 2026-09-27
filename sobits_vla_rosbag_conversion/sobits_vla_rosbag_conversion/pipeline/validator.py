@@ -181,6 +181,8 @@ def _fill_shapes_from_camera_info(shapes, unresolved_set, info_topics, candidate
                 if not info_topic_to_cam:
                     break
                 connections = [c for c in reader.connections if c.topic in info_topic_to_cam]
+                if not connections:
+                    continue  # rosbags reads the WHOLE bag on an empty filter
                 for connection, _, rawdata in reader.messages(connections=connections):
                     cam_name = info_topic_to_cam.get(connection.topic)
                     if not cam_name or cam_name not in unresolved_set:
@@ -207,6 +209,8 @@ def _fill_shapes_from_images(shapes, unresolved_set, topics, candidate_bag_dirs,
                 if not topic_to_cam:
                     break
                 connections = [c for c in reader.connections if c.topic in topic_to_cam]
+                if not connections:
+                    continue  # rosbags reads the WHOLE bag on an empty filter
                 for connection, _, rawdata in reader.messages(connections=connections):
                     cam_name = topic_to_cam.get(connection.topic)
                     if not cam_name or cam_name not in unresolved_set:
