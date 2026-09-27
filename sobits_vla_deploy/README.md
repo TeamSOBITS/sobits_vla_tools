@@ -31,7 +31,7 @@ Schema-driven (`_SCHEMA` in `deploy_node.py`; see
 
 | Group | Covers |
 |---|---|
-| `model.*` | `repo_id`, `policy_class`, `device`, `use_amp`, `use_relative_actions`, `action_space` (`joint` or `ee`). |
+| `model.*` | `repo_id`, `policy_class`, `device`, `use_amp`, `use_relative_actions`, `action_space` (`joint` or `ee`), `ee_rotation` (`rotvec` or `rpy`, must match the checkpoint's `ee.*` names). |
 | `ee_servo.*` | `max_lin_step_m`, `max_ang_step_rad` -- per-step clamp on EE servo targets in `action_space: ee` mode. |
 | `runtime.*` | `control_hz`, `actions_per_chunk`, `async_enabled`, `action_interpolation_multiplier`. |
 | `rtc.*` | Real-Time Chunking guidance knobs. |
@@ -90,14 +90,33 @@ holds the last commanded TF target until servo's `incoming_command_timeout`
 (0.5 s) pauses motion — it does not freeze instantly. The bridge also clamps
 commanded targets to a 1.10 m reach from its configured origin frame.
 
+`model.ee_rotation` (`rotvec`, default, or `rpy`) must match the checkpoint's
+`ee.*` feature names; the loader refuses a mismatch, and `quat` checkpoints
+are not deployable (ObsBuilder and the servo publisher handle rotvec and rpy
+only).
+
+#### Relative EE actions
+
+Datasets store absolute EE poses. A checkpoint trained with
+`robot.ee_relative_actions: true` (sobits_vla_training) carries the sobits
+`sobits_ee_relative_actions` / `sobits_ee_absolute_actions` processor pair,
+so each predicted step is a pose relative to the observation pose
+(UMI-style, `A_k = inv(T_obs) · T_k`) and `postprocessor()` composes it back
+as `T_obs · A_k` on the observation the preprocessor cached. Nothing needs
+to be set in the deploy config; the loader re-pairs the steps and refuses:
+
+- LeRobot's per-component `use_relative_actions` on `ee.*` names that are
+  not in `relative_exclude_joints` (a rotation cannot be subtracted per
+  component);
+- an EE relative step without a preprocessor, or an unpaired step;
+- `rtc.enabled` with any relative model — the RTC prefix from the previous
+  chunk is anchored on the previous observation and is not re-anchored yet.
+
 ### Limitations
 
-Deploy's relative-action integration assumes base-frame rpy deltas. The
-conversion pipeline can also emit body-frame and quaternion deltas
-(`sobits_vla_rosbag_conversion`'s `ee_actions.frame`/`ee_actions.rotation`),
-but those are not yet integrable at deploy time, and the dataset does not
-currently record which delta convention was used — track the convention in
-the dataset name until metadata support exists.
+Composed targets are absolute in `base_footprint`; if the base drives during
+a chunk they go stale (same as absolute mode). RTC is unavailable with
+relative models until the prefix is re-anchored.
 
 ## How to test
 

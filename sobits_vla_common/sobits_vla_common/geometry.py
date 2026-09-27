@@ -66,8 +66,8 @@ def unwrap_rpy(
     Shift each rpy axis by +-2pi so it lands within pi of prev on that axis.
 
     Same per-axis single-step correction as
-    sobits_vla_rosbag_conversion sync/poses.py compute_ee_pose_and_delta
-    (fb188e1) -- not a wrap-to-range, a continuity fix against prev.
+    sobits_vla_rosbag_conversion sync/poses.py compute_ee_pose (fb188e1)
+    -- not a wrap-to-range, a continuity fix against prev.
     """
     out = list(rpy)
     for ax in range(3):
