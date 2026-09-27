@@ -52,6 +52,9 @@ _processor_registry_patched = False
 _pi0fast_peft_targets_patched = False
 _pi05_from_pretrained_patched = False
 _vla_jepa_image_resize_patched = False
+_ee_relative_registered = False
+
+_EE_WRAPPED = '_sobits_ee_relative_wrapped'
 
 
 def _resize_image_features(batch: dict, image_keys, target: tuple) -> dict:
@@ -465,12 +468,144 @@ def _patch_vla_jepa_image_resize() -> None:
         _vla_jepa_image_resize_patched = True
 
 
+def _register_ee_relative_steps() -> None:
+    """Import the EE step module so its registry names exist before any pipeline JSON loads."""
+    global _ee_relative_registered
+    if _ee_relative_registered:
+        return
+    # Always this exact module path: the registry raises on a re-register from another path.
+    import sobits_vla_common.ee_relative_processor  # noqa: F401
+    _ee_relative_registered = True
+
+
+def _lerobot_relative_mask(action_names, exclude_joints) -> list:
+    """Mirror lerobot's RelativeActionsProcessorStep._build_mask (substring match)."""
+    tokens = [str(n).lower() for n in exclude_joints or [] if n]
+    if not tokens:
+        return [True] * len(action_names)
+    return [not any(t in str(n).lower() for t in tokens) for n in action_names]
+
+
+def _relative_stats_inputs(spec: dict):
+    """(joint_mask, ee_groups) for the combined transform the training preprocessor runs."""
+    from sobits_vla_common.ee_relative import ee_groups_from_names
+
+    action_names = list(spec['action_names'])
+    groups = (ee_groups_from_names(action_names, list(spec['state_names']))
+              if spec['ee_relative'] else [])
+    if spec['joint_relative']:
+        mask = _lerobot_relative_mask(action_names, spec['joint_exclude'])
+    else:
+        mask = [False] * len(action_names)
+    overlap = [action_names[i] for g in groups for i in g.action_idx if mask[i]]
+    if overlap:
+        raise RuntimeError(
+            f'relative_exclude_joints does not cover EE dims {overlap}; lerobot would convert '
+            'them per-component on top of the SE(3) step.')
+    return mask, groups
+
+
+def _replace_action_stats(datasets, cfg, spec: dict) -> None:
+    """Swap meta.stats['action'] for relative-space stats computed from the raw frames."""
+    import numpy as np
+    from sobits_vla_common.ee_relative_stats import compute_relative_action_stats
+
+    dataset = datasets[0]
+    hf = getattr(dataset, 'hf_dataset', None)
+    if hf is None:
+        raise RuntimeError(
+            f'relative action stats need a single LeRobotDataset, got {type(dataset).__name__}')
+    delta = getattr(cfg.policy, 'action_delta_indices', None)
+    chunk_size = len(delta) if delta else 1
+    mask, groups = _relative_stats_inputs(spec)
+    # Same column access as lerobot's compute_relative_action_stats (train split frames).
+    stats = compute_relative_action_stats(
+        np.array(hf['action'], dtype=np.float32),
+        np.array(hf['observation.state'], dtype=np.float32),
+        np.array(hf['episode_index']),
+        chunk_size, mask, groups)
+    metas = {id(d.meta): d.meta for d in datasets if d is not None}
+    for meta in metas.values():
+        meta.stats['action'] = {k: np.asarray(v) for k, v in stats.items()}
+
+
+def _groot_native_relative(preprocessor, postprocessor) -> bool:
+    """Report whether GR00T's pack/decode steps apply checkpoint-native relative actions."""
+    if any(getattr(s, 'use_relative_action', False) for s in postprocessor.steps):
+        return True
+    return any(
+        callable(getattr(s, '_uses_relative_action_groups', None))
+        and s._uses_relative_action_groups() for s in preprocessor.steps)
+
+
+def _unwrapped(fn):
+    return fn.__wrapped__ if getattr(fn, _EE_WRAPPED, False) else fn
+
+
+def install_ee_relative_training(spec: dict) -> None:
+    """
+    Patch lerobot_train so relative stats and EE steps apply to this training run.
+
+    spec keys: ee_relative, joint_relative (bool), joint_exclude, action_names,
+    state_names (list[str]), ee_rotation (str). Re-installing replaces the spec.
+    """
+    import lerobot.scripts.lerobot_train as lt
+    from sobits_vla_common.robot_descriptor import ee_rotation_from_names
+
+    _register_ee_relative_steps()
+    spec = dict(spec)
+    if spec['ee_relative']:
+        names_rotation = ee_rotation_from_names(list(spec['action_names']))
+        if not names_rotation:
+            raise RuntimeError(
+                'robot.ee_relative_actions is on but the dataset has no ee.* actions')
+        if names_rotation != spec['ee_rotation']:
+            raise RuntimeError(
+                f'dataset EE rotation {names_rotation!r} != robot.ee_rotation '
+                f'{spec["ee_rotation"]!r}')
+    if spec['ee_relative'] or spec['joint_relative']:
+        _relative_stats_inputs(spec)
+
+    orig_datasets = _unwrapped(lt.make_train_eval_datasets)
+    orig_processors = _unwrapped(lt.make_pre_post_processors)
+
+    def make_train_eval_datasets(cfg, *args, **kwargs):
+        dataset, eval_dataset = orig_datasets(cfg, *args, **kwargs)
+        if spec['ee_relative'] or spec['joint_relative']:
+            _replace_action_stats((dataset, eval_dataset), cfg, spec)
+            logger.info('Replaced action stats with relative-space stats '
+                        f'(ee={spec["ee_relative"]}, joints={spec["joint_relative"]}).')
+        return dataset, eval_dataset
+
+    def make_pre_post_processors(*args, **kwargs):
+        from sobits_vla_common.ee_relative_processor import insert_ee_relative_steps
+
+        preprocessor, postprocessor = orig_processors(*args, **kwargs)
+        if spec['ee_relative']:
+            if _groot_native_relative(preprocessor, postprocessor):
+                raise RuntimeError(
+                    'robot.ee_relative_actions cannot combine with GR00T native relative actions '
+                    '(checkpoint use_relative_action); they ignore relative_exclude_joints.')
+            insert_ee_relative_steps(
+                preprocessor, postprocessor, spec['action_names'], spec['state_names'])
+            logger.info('Inserted SE(3) EE relative/absolute processor steps.')
+        return preprocessor, postprocessor
+
+    for wrapper, orig in ((make_train_eval_datasets, orig_datasets),
+                          (make_pre_post_processors, orig_processors)):
+        wrapper.__wrapped__ = orig
+        setattr(wrapper, _EE_WRAPPED, True)
+    lt.make_train_eval_datasets = make_train_eval_datasets
+    lt.make_pre_post_processors = make_pre_post_processors
+
+
 def apply_training_patches() -> None:
     _patch_bool_quantile_normalization()
     _patch_pi05_action_dim_padding()
     _patch_processor_registry()
     _patch_pi0fast_peft_targets()
     _patch_vla_jepa_image_resize()
+    _register_ee_relative_steps()
 
 
 def apply_deploy_patches() -> None:
@@ -478,3 +613,4 @@ def apply_deploy_patches() -> None:
     _patch_processor_registry()
     _patch_pi05_from_pretrained()
     _patch_vla_jepa_image_resize()
+    _register_ee_relative_steps()

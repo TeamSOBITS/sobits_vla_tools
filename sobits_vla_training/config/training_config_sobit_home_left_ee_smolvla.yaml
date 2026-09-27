@@ -29,6 +29,9 @@
       # ee_action_arms derives: left's 6 EE channels replace arm_left's joint
       # features because arm_left is excluded above and left's ee entry is
       # active (right is excluded via exclude.ee, so it never derives).
+      # true: train ee.* as SE(3) poses relative to the observed EE pose;
+      # action stats are recomputed in that space automatically.
+      ee_relative_actions: false
 
     dataset:
       repo_id: "team-sobits/sobit_home-pnp_ball_bowl-left-ee-abs"

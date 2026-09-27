@@ -30,6 +30,7 @@
 import json
 import os
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -43,9 +44,9 @@ from sobits_vla_common.ee_relative_processor import (  # noqa: E402
     EERelativeActionsProcessorStep, insert_ee_relative_steps, reconnect_ee_relative_steps,
 )
 from sobits_vla_common.lerobot_adapter import (  # noqa: E402
-    FeatureType, NormalizationMode, NormalizerProcessorStep, OBS_STATE,
-    policy_action_to_transition, PolicyFeature, PolicyProcessorPipeline,
-    transition_to_policy_action, UnnormalizerProcessorStep,
+    AbsoluteActionsProcessorStep, FeatureType, NormalizationMode, NormalizerProcessorStep,
+    OBS_STATE, policy_action_to_transition, PolicyFeature, PolicyProcessorPipeline,
+    RelativeActionsProcessorStep, transition_to_policy_action, UnnormalizerProcessorStep,
 )
 from sobits_vla_common.robot_descriptor import ee_action_features  # noqa: E402
 import torch  # noqa: E402
@@ -119,6 +120,37 @@ def test_insert_requires_normalizer_and_ee_names():
             PolicyProcessorPipeline(steps=[], name='p'), post, NAMES, NAMES)
     with pytest.raises(ValueError, match='ee'):
         insert_ee_relative_steps(pre, post, ['j0', 'j1'], ['j0', 'j1'])
+
+
+class GrootN17PackInputsStep:
+    """Name-matched stand-in for GR00T's pack (normalize) step."""
+
+
+class GrootN17ActionDecodeStep:
+    """Name-matched stand-in for GR00T's decode (unnormalize) step."""
+
+
+def test_insert_anchors_on_lerobot_relative_pair():
+    pre, post = _pipelines()
+    lr_rel = RelativeActionsProcessorStep(enabled=True)
+    pre.steps = [lr_rel] + list(pre.steps)
+    post.steps = list(post.steps) + [
+        AbsoluteActionsProcessorStep(enabled=True, relative_step=lr_rel)]
+    insert_ee_relative_steps(pre, post, NAMES, NAMES)
+    assert _types(pre) == [RelativeActionsProcessorStep, EERelativeActionsProcessorStep,
+                           NormalizerProcessorStep]
+    assert _types(post) == [UnnormalizerProcessorStep, EEAbsoluteActionsProcessorStep,
+                            AbsoluteActionsProcessorStep]
+
+
+def test_insert_anchors_on_groot_pack_and_decode():
+    pre = SimpleNamespace(steps=['rename', 'batch', GrootN17PackInputsStep(), 'vlm'])
+    post = SimpleNamespace(steps=[GrootN17ActionDecodeStep(), 'to_cpu'])
+    insert_ee_relative_steps(pre, post, NAMES, NAMES)
+    assert isinstance(pre.steps[2], EERelativeActionsProcessorStep)
+    assert isinstance(pre.steps[3], GrootN17PackInputsStep)
+    assert isinstance(post.steps[1], EEAbsoluteActionsProcessorStep)
+    assert post.steps[2] == 'to_cpu'
 
 
 def test_relative_step_converts_ee_only():

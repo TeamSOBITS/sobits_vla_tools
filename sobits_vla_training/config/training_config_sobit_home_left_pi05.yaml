@@ -150,11 +150,10 @@
       tokenizer_max_length: 200
 
       # --- Relative actions ---
-      # Disabled: absolute joint-space for this task. Enabling it ALSO requires
-      # recomputing dataset stats in relative space first (lerobot-edit-dataset
-      # --operation.type recompute_stats --operation.relative_action true ...),
-      # excluding base_x/base_y/base_theta which are VELOCITIES. Training
-      # relative actions against absolute-space stats yields a broken policy.
+      # Disabled: absolute joint-space for this task. When enabled, action stats
+      # are recomputed in relative space at train start (no lerobot-edit-dataset
+      # step); base_x/base_y/base_theta VELOCITIES stay absolute via the
+      # descriptor-derived relative_exclude_joints.
       use_relative_actions: false
 
       # --- Optimisation ---

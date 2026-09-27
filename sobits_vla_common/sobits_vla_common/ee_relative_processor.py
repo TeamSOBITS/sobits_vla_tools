@@ -44,13 +44,17 @@ from sobits_vla_common.ee_relative import (
     ee_groups_from_names, EEGroup, to_absolute_ee, to_relative_ee,
 )
 from sobits_vla_common.lerobot_adapter import (
-    NormalizerProcessorStep, OBS_STATE, PipelineFeatureType, PolicyFeature, ProcessorStep,
-    ProcessorStepRegistry, TransitionKey, UnnormalizerProcessorStep,
+    AbsoluteActionsProcessorStep, NormalizerProcessorStep, OBS_STATE, PipelineFeatureType,
+    PolicyFeature, ProcessorStep, ProcessorStepRegistry, RelativeActionsProcessorStep,
+    TransitionKey, UnnormalizerProcessorStep,
 )
 import torch
 
 EE_RELATIVE_STEP_NAME = 'sobits_ee_relative_actions'
 EE_ABSOLUTE_STEP_NAME = 'sobits_ee_absolute_actions'
+# GR00T normalizes inside these steps; matched by name so groot stays an optional import.
+_GROOT_PACK_STEPS = ('GrootN17PackInputsStep',)
+_GROOT_DECODE_STEPS = ('GrootN17ActionDecodeStep', 'GrootActionUnpackUnnormalizeStep')
 
 
 @ProcessorStepRegistry.register(EE_RELATIVE_STEP_NAME)
@@ -150,14 +154,45 @@ class EEAbsoluteActionsProcessorStep(ProcessorStep):
         return features
 
 
+def _first_index(steps, pred) -> Optional[int]:
+    return next((i for i, s in enumerate(steps) if pred(s)), None)
+
+
+def _is_named(step, names) -> bool:
+    return type(step).__name__ in names
+
+
+def _pre_anchor(steps) -> Optional[int]:
+    """Index for the relative step: after LeRobot's relative, else before (GR00T) normalization."""
+    i = _first_index(steps, lambda s: isinstance(s, RelativeActionsProcessorStep))
+    if i is not None:
+        return i + 1
+    i = _first_index(steps, lambda s: isinstance(s, NormalizerProcessorStep))
+    if i is not None:
+        return i
+    return _first_index(steps, lambda s: _is_named(s, _GROOT_PACK_STEPS))
+
+
+def _post_anchor(steps) -> Optional[int]:
+    """Index for the absolute step: before LeRobot's absolute, else after (GR00T) unnormalize."""
+    i = _first_index(steps, lambda s: isinstance(s, AbsoluteActionsProcessorStep))
+    if i is not None:
+        return i
+    i = _first_index(steps, lambda s: isinstance(s, UnnormalizerProcessorStep))
+    if i is None:
+        i = _first_index(steps, lambda s: _is_named(s, _GROOT_DECODE_STEPS))
+    return None if i is None else i + 1
+
+
 def insert_ee_relative_steps(
     preprocessor, postprocessor, action_names: Sequence[str], state_names: Sequence[str],
 ) -> Tuple[EERelativeActionsProcessorStep, EEAbsoluteActionsProcessorStep]:
     """
     Add the EE relative/absolute pair around (un)normalization; idempotent.
 
-    Relative goes right before the first NormalizerProcessorStep, absolute right
-    after the first UnnormalizerProcessorStep. Any existing pair is replaced.
+    Relative goes right after LeRobot's RelativeActionsProcessorStep if present, else
+    right before the first NormalizerProcessorStep (GR00T: before its pack step).
+    Absolute mirrors that on the output side. Any existing pair is replaced.
     """
     relative = EERelativeActionsProcessorStep(
         enabled=True, action_names=list(action_names), state_names=list(state_names))
@@ -168,18 +203,16 @@ def insert_ee_relative_steps(
                  if not isinstance(s, EERelativeActionsProcessorStep)]
     post_steps = [s for s in postprocessor.steps
                   if not isinstance(s, EEAbsoluteActionsProcessorStep)]
-    norm_i = next(
-        (i for i, s in enumerate(pre_steps) if isinstance(s, NormalizerProcessorStep)), None)
-    unnorm_i = next(
-        (i for i, s in enumerate(post_steps) if isinstance(s, UnnormalizerProcessorStep)), None)
-    if norm_i is None:
+    pre_i = _pre_anchor(pre_steps)
+    post_i = _post_anchor(post_steps)
+    if pre_i is None:
         raise ValueError('preprocessor has no NormalizerProcessorStep to insert before')
-    if unnorm_i is None:
+    if post_i is None:
         raise ValueError('postprocessor has no UnnormalizerProcessorStep to insert after')
 
     absolute = EEAbsoluteActionsProcessorStep(enabled=True, relative_step=relative)
-    pre_steps.insert(norm_i, relative)
-    post_steps.insert(unnorm_i + 1, absolute)
+    pre_steps.insert(pre_i, relative)
+    post_steps.insert(post_i, absolute)
     preprocessor.steps = pre_steps
     postprocessor.steps = post_steps
     return relative, absolute

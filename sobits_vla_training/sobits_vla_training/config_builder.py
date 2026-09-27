@@ -134,11 +134,14 @@ def _ee_action_dim(desc, params: dict[str, Any]) -> int:
     instead of replacing it, so an EE arm still reporting joint features
     (group not excluded) cannot silently double-count the dim.
     """
-    from sobits_vla_common.robot_descriptor import ee_action_features
+    from sobits_vla_common.robot_descriptor import (
+        ee_action_features, EE_ROTATION_AXES, EE_ROTATION_DEFAULT,
+    )
 
-    rotation = params.get('robot.ee_rotation', 'rpy') or 'rpy'
-    if rotation not in ('rpy', 'quat'):
-        raise ValueError(f"robot.ee_rotation must be 'rpy' or 'quat', got {rotation!r}")
+    rotation = params.get('robot.ee_rotation', EE_ROTATION_DEFAULT) or EE_ROTATION_DEFAULT
+    if rotation not in EE_ROTATION_AXES:
+        raise ValueError(
+            f'robot.ee_rotation must be one of {sorted(EE_ROTATION_AXES)}, got {rotation!r}')
 
     arms = [a for a in params.get('robot.ee_action_arms', []) if a]
     if arms:
@@ -239,6 +242,14 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
                 active_groups=active_groups,
                 active_mobile_base=active_mobile_base,
             )
+
+        # SE(3) EE step owns the ee.* dims; full names keep lerobot's substring mask off them.
+        if params.get('robot.ee_relative_actions', False) and policy_overrides.get(
+                'use_relative_actions', False):
+            from sobits_vla_training.preflight import _expected_ee_actions
+            exclude = list(policy_overrides.get('relative_exclude_joints') or [])
+            exclude += [n for n in _expected_ee_actions(desc, params) if n not in exclude]
+            policy_overrides['relative_exclude_joints'] = exclude
 
     raw_pretrained = params.get('checkpoint.pretrained_path', '')
     if raw_pretrained:
