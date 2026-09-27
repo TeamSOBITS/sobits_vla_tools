@@ -34,7 +34,7 @@ _EE_ANGLE_AXES = set(EE_ACTION_AXES[3:])
 
 
 def _is_ee_angle_key(key: str) -> bool:
-    """True for 'ee.<arm>.{roll,pitch,yaw}' keys -- rotvec axes need no unwrap."""
+    """Return True for 'ee.<arm>.{roll,pitch,yaw}' keys; rotvec axes need no unwrap."""
     parts = key.split('.')
     return len(parts) == 3 and parts[0] == 'ee' and parts[2] in _EE_ANGLE_AXES
 
