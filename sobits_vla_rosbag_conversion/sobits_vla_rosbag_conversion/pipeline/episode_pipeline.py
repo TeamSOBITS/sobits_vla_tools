@@ -40,7 +40,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 from sobits_vla_rosbag_conversion.bag_reader import BagReader
-from tqdm import tqdm
+from sobits_vla_rosbag_conversion.progress import progress
 
 
 @dataclass
@@ -249,8 +249,7 @@ class EpisodePipeline:
                 }
 
         # Writing includes the video encode -- usually the slow phase.
-        for _, frame in tqdm(frames, desc='  writing frames', unit='f',
-                             disable=None, leave=False):
+        for _, frame in progress(frames, desc='  writing frames', unit='f', leave=False):
             self._writer.add_frame(frame)
         self._writer.save_episode()
 

@@ -28,12 +28,12 @@
 import numpy as np
 from sobits_vla_common.robot_descriptor import EE_ROTATION_DEFAULT
 from sobits_vla_rosbag_conversion.offline_tf_tree import OfflineTFTree
+from sobits_vla_rosbag_conversion.progress import progress
 from sobits_vla_rosbag_conversion.sync import images as sync_images
 from sobits_vla_rosbag_conversion.sync import joints as sync_joints
 from sobits_vla_rosbag_conversion.sync import poses as sync_poses
 from sobits_vla_rosbag_conversion.sync.core import get_closest_t, should_downsample
 import torch
-from tqdm import tqdm
 
 
 class FrameSynthesizer:
@@ -103,9 +103,8 @@ class FrameSynthesizer:
 
         # Inner bar: frames within the current episode; leave=False keeps the
         # episode-level bar as the only persistent line. Auto-off on non-TTY.
-        frame_iter = tqdm(
-            ctx['primary_series'], desc='  frames', unit='f',
-            disable=None, leave=False,
+        frame_iter = progress(
+            ctx['primary_series'], desc='  frames', unit='f', leave=False,
         )
         for t_sec, msg_prim, _primary_raw, _primary_conn in frame_iter:
             if should_downsample(

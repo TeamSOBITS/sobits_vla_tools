@@ -35,6 +35,12 @@ import subprocess
 
 import numpy as np
 import pandas as pd
+
+try:  # lerobot encodes through PyAV; its muxer logs at INFO on every episode.
+    import av.logging
+    av.logging.set_level(av.logging.ERROR)
+except ImportError:
+    pass
 from sobits_vla_common.lerobot_adapter import (
     depth_encoder_defaults,
     HF_LEROBOT_HOME,

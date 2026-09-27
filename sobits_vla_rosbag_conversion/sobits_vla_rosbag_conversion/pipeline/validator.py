@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from rosbags.highlevel import AnyReader
-from tqdm import tqdm
+from sobits_vla_rosbag_conversion.progress import progress
 
 
 def _log(logger, level: str, msg: str) -> None:
@@ -167,8 +167,8 @@ def _shapes_from_properties(topics, all_cam_props):
 
 def _fill_shapes_from_camera_info(shapes, unresolved_set, info_topics, candidate_bag_dirs):
     # First pass over the bags: only runs when metadata lacks the shapes.
-    for bag_dir in tqdm(candidate_bag_dirs, desc='sniffing camera_info',
-                        unit='bag', disable=None, leave=False):
+    for bag_dir in progress(candidate_bag_dirs, desc='sniffing camera_info',
+                            unit='bag', leave=False):
         if not unresolved_set:
             break
         try:
@@ -197,8 +197,8 @@ def _fill_shapes_from_camera_info(shapes, unresolved_set, info_topics, candidate
 
 
 def _fill_shapes_from_images(shapes, unresolved_set, topics, candidate_bag_dirs, decode_fn):
-    for bag_dir in tqdm(candidate_bag_dirs, desc='sniffing image shapes',
-                        unit='bag', disable=None, leave=False):
+    for bag_dir in progress(candidate_bag_dirs, desc='sniffing image shapes',
+                            unit='bag', leave=False):
         if not unresolved_set:
             break
         try:

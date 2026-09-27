@@ -148,8 +148,10 @@ def generate_launch_description_impl(context, *args, **kwargs):
         executable='ros2bag_to_lerobotdataset',
         name='rosbag_conversion_node',
         output='screen',
-        # A pty: tqdm bars self-disable on a pipe and rcutils/Python block-buffer logs.
+        # A pty keeps rcutils/Python line-buffered; launch relays complete lines only,
+        # so progress bars become periodic lines (sobits_vla_rosbag_conversion.progress).
         emulate_tty=True,
+        additional_env={'SOBITS_VLA_PROGRESS': 'lines'},
         prefix=prefix or None,
         parameters=parameters,
     )

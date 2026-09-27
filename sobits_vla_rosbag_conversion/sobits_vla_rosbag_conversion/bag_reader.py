@@ -30,7 +30,7 @@
 from pathlib import Path
 
 from rosbags.highlevel import AnyReader
-from tqdm import tqdm
+from sobits_vla_rosbag_conversion.progress import progress
 
 
 class BagReader:
@@ -72,9 +72,9 @@ class BagReader:
         with AnyReader([self.bag_path]) as reader:
             connections = [c for c in reader.connections if c.topic in wanted_topics]
             total = sum(getattr(c, 'msgcount', 0) for c in connections) or None
-            msg_iter = tqdm(
+            msg_iter = progress(
                 reader.messages(connections=connections), total=total,
-                desc='  reading bag', unit='msg', disable=None, leave=False,
+                desc='  reading bag', unit='msg', leave=False,
             )
             for connection, timestamp, rawdata in msg_iter:
                 topic = connection.topic
