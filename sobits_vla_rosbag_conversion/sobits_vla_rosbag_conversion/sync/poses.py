@@ -68,8 +68,10 @@ def synthesize_ee_action(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_pose):
     (state_pose6, action_pose6) or None when the state lookup fails.
 
     state = observed EE pose at t, action = pose at t + 1/fps (shift-forward),
-    both unwrapped per-axis against prev_state_pose (fb188e1); action falls
-    back to state when the future lookup fails (end of bag => zero motion).
+    both unwrapped per-axis against prev_state_pose (fb188e1). OfflineTFTree is
+    a zero-order hold, so past the last sample the action is the last recorded
+    pose; the fallback to state only fires when a frame is missing from the
+    chain (unresolvable future), not at end of bag.
     """
     state_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, t_ns)
     if state_mat is None:
@@ -97,8 +99,8 @@ def synthesize_ee_action_quat(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_qua
 
     Quaternion analogue of synthesize_ee_action: 7D = [x, y, z, qx, qy, qz,
     qw]. state = observed EE pose at t, action = pose at t + 1/fps
-    (shift-forward); action falls back to state when the future lookup
-    fails (end of bag => zero motion). Continuity is enforced via
+    (shift-forward); action falls back to state only when the future lookup
+    is unresolvable (missing frame), see synthesize_ee_action. Continuity via
     shortest-arc alignment (quat_shortest_arc) instead of per-axis unwrap:
     state's quat is aligned against prev_state_quat (or left as-is when
     prev is None), and action's quat is aligned against state's quat.

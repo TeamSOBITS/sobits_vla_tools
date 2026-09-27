@@ -106,7 +106,7 @@ class TestSynthesizeEEAction:
         np.testing.assert_allclose(state[:3], [0.0, 0.0, 0.0], atol=1e-6)
         np.testing.assert_allclose(action[:3], [0.1, 0.0, 0.0], atol=1e-6)
 
-    def test_end_of_bag_falls_back_to_state(self):
+    def test_unresolvable_future_falls_back_to_state(self):
         tree = _StubTFTree({
             ('base', 'ee', 0): (0.2, 0.3, 0.0, 0.0, 0.0, 0.0),
         })
@@ -177,7 +177,7 @@ class TestSynthesizeEEActionQuat:
         tree = _StubTFTreeQuat({})
         assert synthesize_ee_action_quat(tree, 'ee', 'base', 0, FPS, None) is None
 
-    def test_end_of_bag_falls_back_to_state(self):
+    def test_unresolvable_future_falls_back_to_state(self):
         qx, qy, qz, qw = self._quat_lookup(0.0, 0.0, 0.3)
         tree = _StubTFTreeQuat({
             ('base', 'ee', 0): (0.2, 0.3, 0.0, qx, qy, qz, qw),
