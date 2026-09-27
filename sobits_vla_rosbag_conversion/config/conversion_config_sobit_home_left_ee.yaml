@@ -1,16 +1,17 @@
 /**:
   ros__parameters:
-    # Empty = defaults to sobits_vla_rosbag_collection/rosbags/, which now also
-    # holds the pnp_real_tea_trash_2 bind-mount, so point at it explicitly.
-    rosbag_directory: "/home/rg-station-04-keith/colcon_ws/src/sobits_vla_tools/sobits_vla_rosbag_collection/rosbags/pnp_real_tea_trash_2"
+    # Empty = defaults to sobits_vla_rosbag_collection/rosbags/, which also holds
+    # other bind-mounted sets, so point at the one to convert explicitly.
+    # pnp_sim_pear_bowl = KEITH-SSD sobit-x/sobit_home/pnp_sim_pear_bowl bound
+    # into rosbags/ (200 sim episodes over 5 sessions, 2026-08-13).
+    rosbag_directory: "/home/rg-station-04-keith/colcon_ws/src/sobits_vla_tools/sobits_vla_rosbag_collection/rosbags/pnp_sim_pear_bowl"
 
-    # The 111-episode meta. Set explicitly because rosbag_directory is searched
-    # recursively and the 11 session subdirs still hold their own metas, which
-    # would add their episodes on top.
-    recorded_bags_meta_file: "/home/rg-station-04-keith/colcon_ws/src/sobits_vla_tools/sobits_vla_rosbag_collection/rosbags/pnp_real_tea_trash_2/recorded_bags_meta.yaml"
+    # The merged 200-episode meta (5 bag_dirs). Set explicitly because
+    # rosbag_directory is searched recursively for metas.
+    recorded_bags_meta_file: "/home/rg-station-04-keith/colcon_ws/src/sobits_vla_tools/sobits_vla_rosbag_collection/rosbags/pnp_sim_pear_bowl/recorded_bags_meta.yaml"
 
     # HuggingFace repo ID for the output dataset.
-    dataset_name: "team-sobits/sobit_home_left_real-pnp_tea_trash_2-ee-abs"
+    dataset_name: "team-sobits/sobit_home_left_sim-pnp_pear_bowl-ee-abs-200ep"
 
     # The dataset is written to <output_directory>/<dataset_name>.
     # Empty = <package_src>/lerobotdataset/<dataset_name>
