@@ -84,15 +84,15 @@ class TestServoTargetPublisher:
         state = {'ee.left.' + a: v for a, v in zip(
             ['x', 'y', 'z', 'roll', 'pitch', 'yaw'], [0.5, 0.1, 0.3, 0.0, 0.0, 1.0],
         )}
-        pub.engage(state)
+        assert pub.engage(state) is True
         assert pub.engaged
         assert publishers['left'].published == [True]
         assert pub._last_target['left'] == [0.5, 0.1, 0.3, 0.0, 0.0, 1.0]
 
     def test_engage_skips_arm_with_missing_keys(self):
         pub, _bc, publishers = _make_servo_publisher()
-        pub.engage({})  # no ee.left.* keys at all
-        assert pub.engaged
+        assert pub.engage({}) is False  # no ee.left.* keys at all
+        assert not pub.engaged
         assert 'left' not in pub._last_target
         assert publishers['left'].published == []
 
@@ -110,8 +110,9 @@ class TestServoTargetPublisher:
 
     def test_engage_all_zero_state_leaves_arm_disabled(self):
         pub, bc, publishers = _make_servo_publisher()
-        pub.engage(_ee_axes('ee.left'))  # all-zero: EE state never measured
-        assert pub.engaged
+        # All-zero state: nothing seeded, so engage must report False too.
+        assert pub.engage(_ee_axes('ee.left')) is False
+        assert not pub.engaged
         assert 'left' not in pub._last_target
         assert publishers['left'].published == []  # enable never latched true
         pub.publish_step(_ee_axes('ee.left', x=0.4, z=0.3), now_msg='t0')

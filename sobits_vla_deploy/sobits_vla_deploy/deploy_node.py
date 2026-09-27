@@ -503,6 +503,8 @@ class LeRobotDeployNode(Node):
                 'EE state TF refresh failed at engage -- arms with no prior '
                 'measurement stay disabled until the trigger is re-pressed.'
             )
+            self._servo_targets.disable_tracking()
+            return
         self._servo_targets.engage(self._obs_builder.state_vector)
 
     def _init_logging(self) -> None:

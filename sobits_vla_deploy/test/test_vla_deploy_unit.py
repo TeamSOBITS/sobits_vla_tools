@@ -113,6 +113,7 @@ class TestActionChunkBufferAggregate:
         assert torch.allclose(result[0], torch.tensor([1.0, 2.0]))
 
 
+
 # --- _to_action_steps tests (the live copy, InferenceEngine) ---
 
 
@@ -394,6 +395,7 @@ class TestActionInterpolator:
             ActionInterpolator(0)
 
 
+
 # --- EpisodeLogger.evaluate_termination ---
 
 
@@ -575,3 +577,77 @@ class TestCheckNoDeprecatedExcludeEEPoses:
 
     def test_old_key_empty_is_allowed(self):
         LeRobotDeployNode._check_no_deprecated_exclude_ee_poses([])
+
+
+# --- _refresh_and_engage_servo: unit-tested against a stub node ---
+
+
+class _StubLogger:
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, msg):
+        self.warnings.append(msg)
+
+
+class _StubObsBuilder:
+    def __init__(self, refresh_ok, state_vector=None):
+        self._refresh_ok = refresh_ok
+        self.state_vector = state_vector or {}
+        self.refresh_calls = 0
+
+    def refresh_ee_state(self, tf_buffer):
+        self.refresh_calls += 1
+        return self._refresh_ok
+
+
+class _StubServoTargets:
+    def __init__(self):
+        self.engage_calls = []
+        self.disable_calls = 0
+
+    def engage(self, state_vector):
+        self.engage_calls.append(state_vector)
+        return bool(state_vector)
+
+    def disable_tracking(self):
+        self.disable_calls += 1
+
+
+class _StubNode:
+    """Bare stand-in exposing only what _refresh_and_engage_servo reads."""
+
+    def __init__(self, obs_builder, servo_targets):
+        self._obs_builder = obs_builder
+        self._tf_buffer = object()
+        self._servo_targets = servo_targets
+        self._logger = _StubLogger()
+
+    def get_logger(self):
+        return self._logger
+
+
+class TestRefreshAndEngageServo:
+
+    def test_refresh_failure_disables_and_never_engages(self):
+        obs_builder = _StubObsBuilder(refresh_ok=False, state_vector={'ee.left.x': 1.0})
+        servo_targets = _StubServoTargets()
+        node = _StubNode(obs_builder, servo_targets)
+
+        LeRobotDeployNode._refresh_and_engage_servo(node)
+
+        assert obs_builder.refresh_calls == 1
+        assert servo_targets.disable_calls == 1
+        assert servo_targets.engage_calls == []  # never seeded from stale state
+        assert node._logger.warnings  # warns about the failed refresh
+
+    def test_refresh_success_engages_with_state_vector(self):
+        state = {'ee.left.x': 0.5}
+        obs_builder = _StubObsBuilder(refresh_ok=True, state_vector=state)
+        servo_targets = _StubServoTargets()
+        node = _StubNode(obs_builder, servo_targets)
+
+        LeRobotDeployNode._refresh_and_engage_servo(node)
+
+        assert servo_targets.engage_calls == [state]
+        assert servo_targets.disable_calls == 0

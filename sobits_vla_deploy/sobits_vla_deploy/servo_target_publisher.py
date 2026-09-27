@@ -73,12 +73,14 @@ class ServoTargetPublisher:
     def engaged(self) -> bool:
         return self._engaged
 
-    def engage(self, state_vector: Dict[str, float]) -> None:
+    def engage(self, state_vector: Dict[str, float]) -> bool:
         """
         Seed each arm's last-target from state_vector and latch enable=true.
 
         Seeding from the current measured EE pose prevents a first-step jump
-        to whatever stale target a prior episode left behind.
+        to whatever stale target a prior episode left behind. Returns whether
+        any arm was actually seeded, so callers can tell a no-op engage apart
+        from a real one.
         """
         self._last_target = {}
         for spec in self.arms:
@@ -105,7 +107,8 @@ class ServoTargetPublisher:
             pub = self.enable_publishers.get(spec.ee_pose)
             if pub is not None:
                 pub.publish(Bool(data=True))
-        self._engaged = True
+        self._engaged = bool(self._last_target)
+        return self._engaged
 
     def publish_step(self, step: Dict[str, float], now_msg) -> None:
         """Clamp+broadcast one control step's EE targets. No-op if not engaged."""
