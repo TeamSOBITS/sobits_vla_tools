@@ -25,7 +25,18 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import math
 from typing import Dict, List, Optional
+
+from sobits_vla_common.robot_descriptor import EE_ACTION_AXES
+
+_EE_ANGLE_AXES = set(EE_ACTION_AXES[3:])
+
+
+def _is_ee_angle_key(key: str) -> bool:
+    """True for 'ee.<arm>.{roll,pitch,yaw}' keys -- rotvec axes need no unwrap."""
+    parts = key.split('.')
+    return len(parts) == 3 and parts[0] == 'ee' and parts[2] in _EE_ANGLE_AXES
 
 
 class ActionInterpolator:
@@ -56,7 +67,17 @@ class ActionInterpolator:
             self._buffer = []
             for i in range(1, self.multiplier + 1):
                 t = i / self.multiplier
-                interp = {k: prev.get(k, v) + t * (v - prev.get(k, v)) for k, v in action.items()}
+                interp = {}
+                for k, v in action.items():
+                    pv = prev.get(k, v)
+                    if _is_ee_angle_key(k):
+                        # Shift v by +-2pi so interpolation crosses the short way, not through 0.
+                        diff = v - pv
+                        if diff > math.pi:
+                            v -= 2 * math.pi
+                        elif diff < -math.pi:
+                            v += 2 * math.pi
+                    interp[k] = pv + t * (v - pv)
                 self._buffer.append(interp)
         else:
             # First step: no previous action yet, run at base rate.

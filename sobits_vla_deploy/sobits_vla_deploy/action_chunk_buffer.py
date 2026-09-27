@@ -26,8 +26,19 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from collections import deque
+import math
 from threading import Lock
 from typing import Any, Dict, List, Optional
+
+from sobits_vla_common.robot_descriptor import EE_ACTION_AXES
+
+_EE_ANGLE_AXES = set(EE_ACTION_AXES[3:])
+
+
+def _is_ee_angle_key(key: str) -> bool:
+    """True for 'ee.<arm>.{roll,pitch,yaw}' keys -- rotvec axes need no unwrap."""
+    parts = key.split('.')
+    return len(parts) == 3 and parts[0] == 'ee' and parts[2] in _EE_ANGLE_AXES
 
 
 class ActionChunkBuffer:
@@ -117,6 +128,13 @@ class ActionChunkBuffer:
         out = dict(old_step)
         for key, new_val in new_step.items():
             old_val = old_step.get(key, new_val)
+            if _is_ee_angle_key(key):
+                # Shift new_val by +-2pi so the blend crosses the short way, not through 0.
+                diff = new_val - old_val
+                if diff > math.pi:
+                    new_val -= 2 * math.pi
+                elif diff < -math.pi:
+                    new_val += 2 * math.pi
             if self._aggregate_fn_name == 'newest':
                 out[key] = float(new_val)
             else:
