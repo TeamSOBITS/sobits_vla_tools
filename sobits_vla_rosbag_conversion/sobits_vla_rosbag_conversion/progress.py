@@ -58,6 +58,49 @@ def line_mode() -> bool:
     return os.environ.get(PROGRESS_ENV, '') == 'lines'
 
 
+def bar_mode() -> bool:
+    """Real in-place bars: stderr is a terminal and nothing asked for lines."""
+    return not line_mode() and sys.stderr.isatty()
+
+
+class TqdmLogger:
+    """rclpy-logger look-alike that prints through tqdm.write so bars stay at the bottom.
+
+    In bar mode the node runs with --disable-stdout-logs, so this is the console;
+    the real logger still receives every message (log file, rosout).
+    """
+
+    def __init__(self, logger):
+        self._logger = logger
+
+    def _console(self, level: str, msg: str):
+        if bar_mode():
+            tqdm.write(f'[{level}] {msg}', file=sys.stderr)
+
+    # rclpy pins one severity per call site, so every level calls the logger on its own line.
+    def debug(self, msg):
+        self._logger.debug(msg)
+        self._console('DEBUG', msg)
+
+    def info(self, msg):
+        self._logger.info(msg)
+        self._console('INFO', msg)
+
+    def warning(self, msg):
+        self._logger.warning(msg)
+        self._console('WARNING', msg)
+
+    warn = warning
+
+    def error(self, msg):
+        self._logger.error(msg)
+        self._console('ERROR', msg)
+
+    def fatal(self, msg):
+        self._logger.fatal(msg)
+        self._console('FATAL', msg)
+
+
 def progress(iterable=None, **kwargs):
     """tqdm(...) as usual; in line mode, one plain line every `mininterval` (default 10 s)."""
     if line_mode():

@@ -512,11 +512,10 @@ class TestResolveEEActionsValidation:
         return desc
 
     def _node(self, skip_static_threshold=0.0):
+        quiet = types.SimpleNamespace(warning=lambda msg: None, info=lambda msg: None)
         return types.SimpleNamespace(
             skip_static_threshold=skip_static_threshold,
-            get_logger=lambda: types.SimpleNamespace(
-                warning=lambda msg: None, info=lambda msg: None,
-            ),
+            get_logger=lambda: quiet, log=quiet,
         )
 
     def _params(self, arms=(), exclude_groups=(), rotation='rotvec'):

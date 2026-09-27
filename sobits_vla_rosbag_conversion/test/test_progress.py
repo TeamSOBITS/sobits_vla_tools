@@ -34,7 +34,9 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from sobits_vla_rosbag_conversion.progress import progress, PROGRESS_ENV  # noqa: E402
+from sobits_vla_rosbag_conversion.progress import (  # noqa: E402
+    bar_mode, progress, PROGRESS_ENV, TqdmLogger,
+)
 
 
 def test_line_mode_emits_newline_terminated_lines(monkeypatch):
@@ -55,3 +57,33 @@ def test_default_mode_is_plain_tqdm(monkeypatch):
     bar = progress(total=2, desc='x')
     assert bar.disable in (True, False)  # disable=None resolved by tqdm against the TTY
     bar.close()
+
+
+class _Rec:
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, level):
+        return lambda msg: self.calls.append((level, msg))
+
+
+def test_tqdm_logger_forwards_and_prints_in_bar_mode(monkeypatch):
+    monkeypatch.delenv(PROGRESS_ENV, raising=False)
+    err = io.StringIO()
+    err.isatty = lambda: True
+    monkeypatch.setattr(sys, 'stderr', err)
+    assert bar_mode()
+    rec = _Rec()
+    TqdmLogger(rec).info('hello')
+    TqdmLogger(rec).warn('careful')
+    assert rec.calls == [('info', 'hello'), ('warning', 'careful')]
+    assert '[INFO] hello' in err.getvalue() and '[WARNING] careful' in err.getvalue()
+
+
+def test_tqdm_logger_only_forwards_in_line_mode(monkeypatch):
+    monkeypatch.setenv(PROGRESS_ENV, 'lines')
+    err = io.StringIO()
+    monkeypatch.setattr(sys, 'stderr', err)
+    rec = _Rec()
+    TqdmLogger(rec).error('boom')
+    assert rec.calls == [('error', 'boom')] and err.getvalue() == ''
