@@ -476,7 +476,8 @@ class InferenceEngine:
         AbsoluteActionsProcessorStep to do it themselves.
 
         Skips mobile-base and relative_exclude features (e.g. a gripper),
-        which must stay absolute regardless of the policy's delta mode.
+        which must stay absolute regardless of the policy's delta mode, and
+        ee.* keys: SE(3) composition belongs only to the checkpoint's EE step.
         """
         has_absolute_step = False
         try:
@@ -497,6 +498,7 @@ class InferenceEngine:
             for key in list(step.keys()):
                 if (
                     key in state_vector
+                    and not key.startswith('ee.')
                     and key not in self.mobile_base_features
                     and key not in self.relative_exclude_features
                 ):

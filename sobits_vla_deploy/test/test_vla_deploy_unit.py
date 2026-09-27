@@ -286,18 +286,19 @@ class TestApplyManualDelta:
         assert abs(steps[0]['j0'] - 1.1) < 1e-9
         assert steps[0]['hand_left_finger_l_mcp_joint'] == 0.3
 
-    def test_ee_keys_delta_convert_like_joints(self):
-        # ee.* channels are seeded into state_vector by ObsBuilder same as
-        # joints, so _apply_manual_delta needs no ee-specific branch.
-        engine = _make_engine(joint_features=[], mobile_base_features=[], ee_features=[
+    def test_ee_keys_never_delta_converted(self):
+        # Per-component ee.* addition is wrong for rotations; only the
+        # checkpoint's SE(3) EE step may compose EE actions.
+        engine = _make_engine(joint_features=['j0'], mobile_base_features=[], ee_features=[
             'ee.left.x', 'ee.left.roll',
         ])
-        steps = [{'ee.left.x': 0.02, 'ee.left.roll': -0.01}]
+        steps = [{'j0': 0.1, 'ee.left.x': 0.02, 'ee.left.roll': -0.01}]
         engine._apply_manual_delta(
-            steps, state_vector={'ee.left.x': 0.50, 'ee.left.roll': 0.10},
+            steps, state_vector={'j0': 1.0, 'ee.left.x': 0.50, 'ee.left.roll': 0.10},
         )
-        assert abs(steps[0]['ee.left.x'] - 0.52) < 1e-9
-        assert abs(steps[0]['ee.left.roll'] - 0.09) < 1e-9
+        assert abs(steps[0]['j0'] - 1.1) < 1e-9
+        assert steps[0]['ee.left.x'] == 0.02
+        assert steps[0]['ee.left.roll'] == -0.01
 
     def test_noop_when_postprocessor_has_absolute_step(self):
         try:

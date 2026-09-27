@@ -9,6 +9,8 @@
       use_amp: false
       use_relative_actions: false
       action_space: ee
+      # Legacy rpy checkpoint; new conversions default to rotvec (ee.left.{rx,ry,rz}).
+      ee_rotation: rpy
       default_task_label: "Pick up the block"
 
     ee_servo:

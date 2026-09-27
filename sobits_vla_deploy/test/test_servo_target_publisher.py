@@ -28,6 +28,10 @@
 import os
 import sys
 
+import numpy as np
+import pytest
+from scipy.spatial.transform import Rotation
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sobits_vla_common.robot_descriptor import EEControlSpec  # noqa: E402
@@ -57,7 +61,9 @@ def _ee_axes(prefix, x=0.0, y=0.0, z=0.0, roll=0.0, pitch=0.0, yaw=0.0):
     }
 
 
-def _make_servo_publisher(max_lin_step_m=0.03, max_ang_step_rad=0.15, arms=None):
+def _make_servo_publisher(
+    max_lin_step_m=0.03, max_ang_step_rad=0.15, arms=None, rotation='rpy',
+):
     if arms is None:
         arms = [EEControlSpec(
             ee_pose='left', group='arm_left',
@@ -73,6 +79,7 @@ def _make_servo_publisher(max_lin_step_m=0.03, max_ang_step_rad=0.15, arms=None)
         enable_publishers=publishers,
         max_lin_step_m=max_lin_step_m,
         max_ang_step_rad=max_ang_step_rad,
+        rotation=rotation,
     )
     return pub, broadcaster, publishers
 
@@ -169,3 +176,53 @@ class TestServoTargetPublisher:
         pub.engage(state2)
         assert pub._last_target['left'][0] == 2.0
         assert publishers['left'].published == [True, False, True]
+
+
+def _rotvec_state(prefix, pos, rotvec):
+    return {f'{prefix}.{a}': float(v) for a, v in zip(
+        ('x', 'y', 'z', 'rx', 'ry', 'rz'), list(pos) + list(rotvec))}
+
+
+def _tf_quat(t):
+    r = t.transform.rotation
+    return np.array([r.x, r.y, r.z, r.w])
+
+
+class TestServoTargetPublisherRotvec:
+
+    def test_rejects_quat_rotation(self):
+        with pytest.raises(ValueError, match='rotvec or rpy'):
+            _make_servo_publisher(rotation='quat')
+
+    def test_rotvec_target_broadcasts_from_rotvec_quaternion(self):
+        pub, bc, _publishers = _make_servo_publisher(max_ang_step_rad=10.0, rotation='rotvec')
+        rv0 = [0.1, -0.2, 0.3]
+        assert pub.engage(_rotvec_state('ee.left', [0.4, 0.0, 0.3], rv0))
+        rv1 = [0.2, -0.1, 0.5]
+        pub.publish_step(_rotvec_state('ee.left', [0.4, 0.0, 0.3], rv1), now_msg='t0')
+        assert len(bc.sent) == 1
+        expected = Rotation.from_rotvec(rv1).as_quat()
+        got = _tf_quat(bc.sent[0])
+        assert min(np.abs(got - expected).max(), np.abs(got + expected).max()) < 1e-9
+
+    def test_rotvec_clamps_geodesic_angle(self):
+        pub, bc, _publishers = _make_servo_publisher(max_ang_step_rad=0.15, rotation='rotvec')
+        r0 = Rotation.from_rotvec([0.0, 0.0, 3.0])
+        pub.engage(_rotvec_state('ee.left', [0.4, 0.0, 0.3], r0.as_rotvec()))
+        # 1 rad about x relative to r0, crossing the rotvec pi seam in absolute terms.
+        r1 = r0 * Rotation.from_rotvec([1.0, 0.0, 0.0])
+        pub.publish_step(_rotvec_state('ee.left', [0.4, 0.0, 0.3], r1.as_rotvec()),
+                         now_msg='t0')
+        r_new = Rotation.from_rotvec(pub._last_target['left'][3:])
+        assert abs((r0.inv() * r_new).magnitude() - 0.15) < 1e-9
+        step_axis = (r0.inv() * r_new).as_rotvec() / 0.15
+        assert np.allclose(step_axis, [1.0, 0.0, 0.0], atol=1e-9)
+        q = Rotation.from_quat(_tf_quat(bc.sent[0]))
+        assert (q.inv() * r_new).magnitude() < 1e-9
+
+    def test_rotvec_small_step_passes_through(self):
+        pub, _bc, _publishers = _make_servo_publisher(max_ang_step_rad=0.15, rotation='rotvec')
+        pub.engage(_rotvec_state('ee.left', [0.4, 0.0, 0.3], [0.0, 0.0, 1.0]))
+        pub.publish_step(_rotvec_state('ee.left', [0.4, 0.0, 0.3], [0.0, 0.05, 1.0]),
+                         now_msg='t0')
+        assert np.allclose(pub._last_target['left'][3:], [0.0, 0.05, 1.0], atol=1e-12)

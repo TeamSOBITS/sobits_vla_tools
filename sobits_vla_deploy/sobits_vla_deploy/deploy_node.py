@@ -52,7 +52,9 @@ from sobits_vla_common.lerobot_compat import apply_deploy_patches  # noqa: E402
 from sobits_vla_common.param_schema import (  # noqa: E402
     declare_from_schema, P, read_schema, Template,
 )
-from sobits_vla_common.robot_descriptor import ee_action_features  # noqa: E402
+from sobits_vla_common.robot_descriptor import (  # noqa: E402
+    ee_action_features, EE_ROTATION_AXES,
+)
 from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.action_executor import ActionExecutor  # noqa: E402
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
@@ -84,6 +86,9 @@ _SCHEMA = {
         # joint angles, streamed to the sobits_teleop servo bridge; arm
         # groups must be excluded via robot.exclude.groups in that mode.
         'action_space': P('joint'),
+        # EE rotation of the checkpoint's ee.* features: rotvec (rx,ry,rz) or
+        # rpy (roll,pitch,yaw); quat is refused -- ObsBuilder/servo can't emit it.
+        'ee_rotation': P('rotvec'),
     },
     'ee_servo': {
         # 0.3 m/s at the default 10 Hz control_hz -- caps how far one control
@@ -245,6 +250,8 @@ class LeRobotDeployNode(Node):
         self._rtc_enabled = bundle.rtc_enabled
         self._model_action_feature_names = bundle.model_action_feature_names
         self._model_use_relative_actions = bundle.model_use_relative_actions
+        self._model_ee_relative = bundle.model_ee_relative
+        self._model_ee_rotation = bundle.model_ee_rotation
         self._expected_state_dim = bundle.expected_state_dim
         self._preprocessor = bundle.preprocessor
         self._postprocessor = bundle.postprocessor
@@ -284,6 +291,25 @@ class LeRobotDeployNode(Node):
                     self._model_repo_id
                 )
             )
+        if model_has_ee and self._model_ee_rotation != self._ee_rotation:
+            raise RuntimeError(
+                'model.ee_rotation is {!r} but the checkpoint {!r} emits {!r} ee.* '
+                'features -- set model.ee_rotation: {}.'.format(
+                    self._ee_rotation, self._model_repo_id,
+                    self._model_ee_rotation, self._model_ee_rotation,
+                )
+            )
+        if model_has_ee and self._ee_rotation == 'quat':
+            raise RuntimeError(
+                'model.ee_rotation "quat" is not supported at deploy: ObsBuilder and '
+                'ServoTargetPublisher support rotvec and rpy only.'
+            )
+        if self._rtc_enabled and (self._model_ee_relative or self._model_use_relative_actions):
+            raise RuntimeError(
+                'rtc.enabled with a relative-action checkpoint {!r}: the RTC prefix '
+                'is not re-anchored to the new observation yet -- set '
+                'rtc.enabled: false.'.format(self._model_repo_id)
+            )
 
     def _init_collaborators(self) -> None:
         self._obs_builder = ObsBuilder(
@@ -291,6 +317,7 @@ class LeRobotDeployNode(Node):
             mobile_base_features=self._mobile_base_features,
             camera_names=self._camera_names,
             ee_state_specs=self._ee_state_specs,
+            ee_rotation=self._ee_rotation,
         )
 
         self._play_enabled = False
@@ -487,6 +514,7 @@ class LeRobotDeployNode(Node):
             enable_publishers=enable_publishers,
             max_lin_step_m=self._ee_max_lin_step_m,
             max_ang_step_rad=self._ee_max_ang_step_rad,
+            rotation=self._ee_rotation,
             logger=self.get_logger(),
         )
 
@@ -598,6 +626,13 @@ class LeRobotDeployNode(Node):
             raise RuntimeError(
                 'model.action_space must be "joint" or "ee", got {!r}.'.format(
                     self._action_space
+                )
+            )
+        self._ee_rotation = str(params.model.ee_rotation).strip().lower()
+        if self._ee_rotation not in EE_ROTATION_AXES:
+            raise RuntimeError(
+                'model.ee_rotation must be one of {}, got {!r}.'.format(
+                    sorted(EE_ROTATION_AXES), self._ee_rotation
                 )
             )
         self._ee_max_lin_step_m = float(params.ee_servo.max_lin_step_m)
@@ -814,7 +849,8 @@ class LeRobotDeployNode(Node):
                 'arm.'.format(still_active)
             )
         self._ee_features = [
-            key for spec in self._ee_control for key in ee_action_features(spec.ee_pose)
+            key for spec in self._ee_control
+            for key in ee_action_features(spec.ee_pose, rotation=self._ee_rotation)
         ]
         known_ee_poses = {e.name: e for e in self._ee_poses}
         self._ee_state_specs = [

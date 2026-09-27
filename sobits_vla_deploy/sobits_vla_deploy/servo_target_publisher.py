@@ -29,8 +29,11 @@ import math
 from typing import Dict, List
 
 from geometry_msgs.msg import TransformStamped
+import numpy as np
 from sobits_vla_common.geometry import rpy_to_quat, unwrap_rpy
-from sobits_vla_common.robot_descriptor import EE_ACTION_AXES, EEControlSpec
+from sobits_vla_common.robot_descriptor import (
+    EE_ROTATION_AXES, EE_ROTATION_DEFAULT, EEControlSpec,
+)
 from std_msgs.msg import Bool
 
 
@@ -51,6 +54,7 @@ class ServoTargetPublisher:
         enable_publishers: Dict[str, object],
         max_lin_step_m: float,
         max_ang_step_rad: float,
+        rotation: str = EE_ROTATION_DEFAULT,
         logger=None,
     ):
         self.arms = list(arms)
@@ -60,8 +64,13 @@ class ServoTargetPublisher:
         self.max_lin_step_m = max_lin_step_m
         self.max_ang_step_rad = max_ang_step_rad
         self.logger = logger
+        if rotation not in ('rotvec', 'rpy'):
+            raise ValueError(
+                f'ServoTargetPublisher: rotation must be rotvec or rpy, got {rotation!r}')
+        self.rotation = rotation
+        self._axes = EE_ROTATION_AXES[rotation]
 
-        # ee_pose name -> [x, y, z, roll, pitch, yaw] last commanded target.
+        # ee_pose name -> [x, y, z, <3 rotation axes>] last commanded target.
         self._last_target: Dict[str, List[float]] = {}
         self._engaged = False
 
@@ -84,7 +93,7 @@ class ServoTargetPublisher:
         """
         self._last_target = {}
         for spec in self.arms:
-            keys = [f'ee.{spec.ee_pose}.{ax}' for ax in EE_ACTION_AXES]
+            keys = [f'ee.{spec.ee_pose}.{ax}' for ax in self._axes]
             if any(k not in state_vector for k in keys):
                 self._warn(
                     'ServoTargetPublisher.engage: missing {!r} in state_vector '
@@ -115,7 +124,7 @@ class ServoTargetPublisher:
         if not self._engaged:
             return
         for spec in self.arms:
-            keys = [f'ee.{spec.ee_pose}.{ax}' for ax in EE_ACTION_AXES]
+            keys = [f'ee.{spec.ee_pose}.{ax}' for ax in self._axes]
             if any(k not in step for k in keys):
                 continue
             prev = self._last_target.get(spec.ee_pose)
@@ -131,26 +140,47 @@ class ServoTargetPublisher:
     def _clamp_target(
         self, prev: List[float], target: List[float]
     ) -> List[float]:
-        px, py, pz, pr, pp, pyaw = prev
-        tx, ty, tz, tr, tp, tyaw = target
-        tr, tp, tyaw = unwrap_rpy((tr, tp, tyaw), (pr, pp, pyaw))
-
+        px, py, pz = prev[:3]
+        tx, ty, tz = target[:3]
         dx, dy, dz = tx - px, ty - py, tz - pz
         dist = math.sqrt(dx * dx + dy * dy + dz * dz)
         if dist > self.max_lin_step_m and dist > 0.0:
             scale = self.max_lin_step_m / dist
             dx, dy, dz = dx * scale, dy * scale, dz * scale
+        pos = [px + dx, py + dy, pz + dz]
 
+        if self.rotation == 'rotvec':
+            return pos + self._clamp_rotvec(prev[3:], target[3:])
+
+        pr, pp, pyaw = prev[3:]
+        tr, tp, tyaw = unwrap_rpy(tuple(target[3:]), (pr, pp, pyaw))
         max_ang = self.max_ang_step_rad
         dr = max(-max_ang, min(max_ang, tr - pr))
         dp = max(-max_ang, min(max_ang, tp - pp))
         dyaw_ = max(-max_ang, min(max_ang, tyaw - pyaw))
 
-        return [px + dx, py + dy, pz + dz, pr + dr, pp + dp, pyaw + dyaw_]
+        return pos + [pr + dr, pp + dp, pyaw + dyaw_]
+
+    def _clamp_rotvec(self, prev: List[float], target: List[float]) -> List[float]:
+        """Limit the geodesic angle of q_prev^-1 * q_target to max_ang_step_rad."""
+        from scipy.spatial.transform import Rotation
+
+        r_prev = Rotation.from_rotvec(prev)
+        step = (r_prev.inv() * Rotation.from_rotvec(target)).as_rotvec()
+        angle = float(np.linalg.norm(step))
+        if angle <= self.max_ang_step_rad:
+            return [float(v) for v in target]
+        step *= self.max_ang_step_rad / angle
+        return [float(v) for v in (r_prev * Rotation.from_rotvec(step)).as_rotvec()]
 
     def _broadcast(self, spec: EEControlSpec, target: List[float], now_msg) -> None:
-        x, y, z, roll, pitch, yaw = target
-        qx, qy, qz, qw = rpy_to_quat(roll, pitch, yaw)
+        x, y, z = target[:3]
+        if self.rotation == 'rotvec':
+            from scipy.spatial.transform import Rotation
+
+            qx, qy, qz, qw = Rotation.from_rotvec(target[3:]).as_quat()
+        else:
+            qx, qy, qz, qw = rpy_to_quat(*target[3:])
 
         t = TransformStamped()
         t.header.stamp = now_msg

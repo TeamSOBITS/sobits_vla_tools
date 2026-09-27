@@ -30,7 +30,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from sobits_vla_common.geometry import unwrap_rpy
-from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES, EE_ACTION_AXES
+from sobits_vla_common.robot_descriptor import (
+    BASE_KEY_ALIASES, EE_ROTATION_AXES, EE_ROTATION_DEFAULT,
+)
 import torch
 
 try:
@@ -48,6 +50,7 @@ class ObsBuilder:
         mobile_base_features: List[str],
         camera_names: List[str],
         ee_state_specs: Optional[List[Tuple[str, str, str]]] = None,
+        ee_rotation: str = EE_ROTATION_DEFAULT,
     ):
         self.joint_features = joint_features
         self.mobile_base_features = mobile_base_features
@@ -55,6 +58,11 @@ class ObsBuilder:
         # (name, source_frame, target_frame), e.g. ('left', 'hand_left_end_effector_link',
         # 'base_footprint') -- drives the ee.{name}.* action-space state channels.
         self.ee_state_specs = list(ee_state_specs or [])
+        if ee_rotation not in ('rotvec', 'rpy'):
+            raise ValueError(
+                f'ObsBuilder: ee_rotation must be rotvec or rpy, got {ee_rotation!r}')
+        self.ee_rotation = ee_rotation
+        self._ee_axes = EE_ROTATION_AXES[ee_rotation]
 
         self.lock = Lock()
         self.state_vector: Dict[str, float] = {
@@ -63,17 +71,14 @@ class ObsBuilder:
         for feat in self.mobile_base_features:
             self.state_vector[feat] = 0.0
         for name, _source_frame, _target_frame in self.ee_state_specs:
-            for ax in EE_ACTION_AXES:
+            for ax in self._ee_axes:
                 self.state_vector[f'ee.{name}.{ax}'] = 0.0
 
         self.images: Dict[str, Optional[np.ndarray]] = {
             cam_name: None for cam_name in self.camera_names
         }
         self.obs_features = None
-        self.prev_ee_pose: Dict[str, Optional[np.ndarray]] = {}
-        # Separate from prev_ee_pose (observation.ee_pose.* deltas): this one
-        # tracks the ee.{name}.* action-space state channel's own prev pose,
-        # used only to unwrap rpy for continuity.
+        # Prev pose of the ee.{name}.* state channels, used only to unwrap rpy.
         self._prev_ee_state_pose: Dict[str, np.ndarray] = {}
 
         self._BASE_KEY_ALIASES: Dict[str, str] = dict(BASE_KEY_ALIASES)
@@ -94,7 +99,6 @@ class ObsBuilder:
 
     def clear_prev_ee_pose(self):
         with self.lock:
-            self.prev_ee_pose = {}
             self._prev_ee_state_pose = {}
 
     def get_ee_pose(
@@ -161,13 +165,20 @@ class ObsBuilder:
         return poses
 
     def _apply_ee_state_poses(self, poses: Dict[str, np.ndarray]) -> None:
-        """Unwrap each pose against its own prev and write ee.{name}.* into state_vector."""
+        """Write ee.{name}.* into state_vector; rpy is unwrapped against its own prev."""
         for name, pose in poses.items():
+            if self.ee_rotation == 'rotvec':
+                from scipy.spatial.transform import Rotation
+
+                rv = Rotation.from_euler('xyz', pose[3:6]).as_rotvec()
+                for ax, value in zip(self._ee_axes, (pose[0], pose[1], pose[2], *rv)):
+                    self.state_vector[f'ee.{name}.{ax}'] = float(value)
+                continue
             prev = self._prev_ee_state_pose.get(name)
             roll, pitch, yaw = pose[3], pose[4], pose[5]
             if prev is not None:
                 roll, pitch, yaw = unwrap_rpy((roll, pitch, yaw), tuple(prev[3:6]))
-            for ax, value in zip(EE_ACTION_AXES, (pose[0], pose[1], pose[2], roll, pitch, yaw)):
+            for ax, value in zip(self._ee_axes, (pose[0], pose[1], pose[2], roll, pitch, yaw)):
                 self.state_vector[f'ee.{name}.{ax}'] = float(value)
             self._prev_ee_state_pose[name] = np.array(
                 [pose[0], pose[1], pose[2], roll, pitch, yaw], dtype=np.float32
@@ -202,7 +213,7 @@ class ObsBuilder:
             for base_feat in self.mobile_base_features:
                 hw_features[base_feat] = float
             for name, _src, _tgt in self.ee_state_specs:
-                for ax in EE_ACTION_AXES:
+                for ax in self._ee_axes:
                     hw_features[f'ee.{name}.{ax}'] = float
             for cam_name in self.camera_names:
                 img = obs[cam_name]
@@ -216,18 +227,13 @@ class ObsBuilder:
 
         frame = build_dataset_frame(self.obs_features, obs, 'observation')
 
+        # Absolute rpy, as conversion still writes observation.ee_pose.<arm>; policies
+        # ignore it unless it is one of their input features.
         for name, source_frame, target_frame in ee_poses:
             ee_pose = self.get_ee_pose(tf_buffer, target_frame, source_frame)
-            prev = self.prev_ee_pose.get(name)
-            if ee_pose is not None:
-                frame[f'observation.ee_pose.{name}'] = ee_pose
-                frame[f'observation.ee_pose.{name}.delta'] = (
-                    ee_pose - prev if prev is not None else np.zeros(6, dtype=np.float32)
-                )
-                self.prev_ee_pose[name] = ee_pose.copy()
-            else:
-                frame[f'observation.ee_pose.{name}'] = np.zeros(6, dtype=np.float32)
-                frame[f'observation.ee_pose.{name}.delta'] = np.zeros(6, dtype=np.float32)
+            frame[f'observation.ee_pose.{name}'] = (
+                ee_pose if ee_pose is not None else np.zeros(6, dtype=np.float32)
+            )
 
         state_dim = (
             frame['observation.state'].shape[-1]
@@ -257,7 +263,7 @@ class ObsBuilder:
                 ee_state_features = [
                     f'ee.{name}.{ax}'
                     for name, _src, _tgt in self.ee_state_specs
-                    for ax in EE_ACTION_AXES
+                    for ax in self._ee_axes
                 ]
                 yaml_index = {
                     name: idx
