@@ -168,12 +168,14 @@ sensors:
 
 # End effectors: where each is measured (ee_link in reference_frame) and,
 # when a servo backend can drive it, how (control -> sobits_teleop
-# servo_target_bridge contract).
+# servo_target_bridge contract). reference_frame is body_lift_link, the link
+# both arms hang from: the EE pose then depends on the arm joints only, and
+# body_lift_joint (a separate action) no longer shifts it.
 ee:
   - name: left
     active: true
     ee_link: hand_left_end_effector_link
-    reference_frame: base_footprint
+    reference_frame: body_lift_link
     control:
       group: arm_left
       command_frame: left_target_link
@@ -181,7 +183,7 @@ ee:
   - name: right
     active: true
     ee_link: hand_right_end_effector_link
-    reference_frame: base_footprint
+    reference_frame: body_lift_link
     control:
       group: arm_right
       command_frame: right_target_link
