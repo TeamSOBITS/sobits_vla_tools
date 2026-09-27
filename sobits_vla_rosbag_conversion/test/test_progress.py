@@ -41,10 +41,11 @@ def test_line_mode_emits_newline_terminated_lines(monkeypatch):
     monkeypatch.setenv(PROGRESS_ENV, 'lines')
     err = io.StringIO()
     monkeypatch.setattr(sys, 'stderr', err)
-    for _ in progress(range(3), desc='episodes', unit='ep', mininterval=0):
+    for _ in progress(range(3), desc='episodes', unit='ep', mininterval=0, delay=0):
         pass
     out = err.getvalue()
-    assert '\r' not in out
+    assert '\r' not in out and '\x1b' not in out
+    assert all(ln.strip() for ln in out.splitlines())  # no blank lines
     lines = [ln for ln in out.splitlines() if ln]
     assert lines and all('episodes' in ln for ln in lines)
 

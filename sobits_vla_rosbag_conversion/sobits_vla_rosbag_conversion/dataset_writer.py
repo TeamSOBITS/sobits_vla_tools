@@ -36,9 +36,12 @@ import subprocess
 import numpy as np
 import pandas as pd
 
-try:  # lerobot encodes through PyAV; its muxer logs at INFO on every episode.
+try:
+    # lerobot's encoder ends every call with restore_default_callback(), handing
+    # logging back to ffmpeg's INFO-level stderr writer (muxer chatter per episode).
     import av.logging
     av.logging.set_level(av.logging.ERROR)
+    av.logging.restore_default_callback = lambda: None
 except ImportError:
     pass
 from sobits_vla_common.lerobot_adapter import (

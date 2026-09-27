@@ -29,9 +29,12 @@
 """tqdm bars that degrade to log lines under ros2 launch."""
 
 import os
+import re
 import sys
 
 from tqdm import tqdm
+
+_ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
 
 # ros2 launch relays child output one complete line at a time, so a \r-refreshed
 # bar never shows. The launch file sets this to 'lines' to get one line per refresh.
@@ -42,7 +45,8 @@ class _LineFile:
     """Write each tqdm refresh as a newline-terminated line on stderr."""
 
     def write(self, s):
-        s = s.replace('\r', '').strip()
+        # Nested bars also emit cursor moves (\n, ESC[A); drop those, keep bar text.
+        s = _ANSI.sub('', s).replace('\r', '').strip()
         if s:
             sys.stderr.write(s + '\n')
 
@@ -58,8 +62,10 @@ def progress(iterable=None, **kwargs):
     """tqdm(...) as usual; in line mode, one plain line every `mininterval` (default 10 s)."""
     if line_mode():
         kwargs.setdefault('mininterval', 10.0)
+        # delay: phases shorter than the interval print nothing, not a lone 0% line.
+        kwargs.setdefault('delay', kwargs['mininterval'])
         kwargs.update(file=_LineFile(), disable=False, leave=False, ascii=True, ncols=80,
-                      dynamic_ncols=False)
+                      dynamic_ncols=False, position=0)
     else:
         kwargs.setdefault('disable', None)  # auto-off when stderr is not a TTY
     return tqdm(iterable, **kwargs)

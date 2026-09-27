@@ -165,11 +165,17 @@ def _shapes_from_properties(topics, all_cam_props):
     return shapes, set(unresolved)
 
 
+# Bags of one recording share a topic set: this many bags without the wanted
+# camera_info topic means it was never recorded, so stop opening the rest.
+CAMERA_INFO_MISS_LIMIT = 3
+
+
 def _fill_shapes_from_camera_info(shapes, unresolved_set, info_topics, candidate_bag_dirs):
     # First pass over the bags: only runs when metadata lacks the shapes.
+    misses = 0
     for bag_dir in progress(candidate_bag_dirs, desc='sniffing camera_info',
                             unit='bag', leave=False):
-        if not unresolved_set:
+        if not unresolved_set or misses >= CAMERA_INFO_MISS_LIMIT:
             break
         try:
             with AnyReader([Path(bag_dir)]) as reader:
@@ -182,6 +188,7 @@ def _fill_shapes_from_camera_info(shapes, unresolved_set, info_topics, candidate
                     break
                 connections = [c for c in reader.connections if c.topic in info_topic_to_cam]
                 if not connections:
+                    misses += 1
                     continue  # rosbags reads the WHOLE bag on an empty filter
                 for connection, _, rawdata in reader.messages(connections=connections):
                     cam_name = info_topic_to_cam.get(connection.topic)

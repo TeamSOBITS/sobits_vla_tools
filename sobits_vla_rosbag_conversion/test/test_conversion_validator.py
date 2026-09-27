@@ -234,11 +234,16 @@ class TestSniffSkipsBagsWithoutTopic:
 
     def test_camera_info_pass_skips_bags_lacking_the_topic(self, monkeypatch):
         calls = []
-        v = self._patch_reader(monkeypatch, ['/cam/image_raw'], calls)
+        opened = []
+        from sobits_vla_rosbag_conversion.pipeline import validator
+        monkeypatch.setattr(
+            validator, 'AnyReader',
+            lambda paths: (opened.append(paths) or _FakeReader(['/cam/image_raw'], calls)))
         shapes, unresolved = {}, {'cam'}
-        v._fill_shapes_from_camera_info(
-            shapes, unresolved, {'cam': '/cam/camera_info'}, ['/b1', '/b2'])
+        validator._fill_shapes_from_camera_info(
+            shapes, unresolved, {'cam': '/cam/camera_info'}, [f'/b{i}' for i in range(10)])
         assert calls == []  # never asked to iterate messages
+        assert len(opened) == validator.CAMERA_INFO_MISS_LIMIT  # gives up, not all 10 bags
         assert unresolved == {'cam'} and shapes == {}
 
     def test_image_pass_skips_bags_lacking_the_topic(self, monkeypatch):
