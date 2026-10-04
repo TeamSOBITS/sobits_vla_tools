@@ -205,21 +205,35 @@ def _check_action_convention(
                 f"Dataset '{repo_id}' EE rotation is {rotation!r} but robot.ee_rotation is "
                 f'{expected!r}. Set robot.ee_rotation to match or reconvert.'
             )
-        _check_ee_frames(repo_id, (convention or {}).get('ee_frames') or {}, params)
+        arms = sorted({n.split('.')[1] for n in action_names if n.startswith('ee.')})
+        _check_ee_frames(repo_id, (convention or {}).get('ee_frames') or {}, params, arms)
     log_info(f"Action convention pre-flight passed for '{repo_id}'.")
 
 
-def _check_ee_frames(repo_id: str, ee_frames: dict, params: dict) -> None:
-    """Refuse a dataset whose EE poses were measured in other frames than the descriptor's."""
+def _check_ee_frames(repo_id: str, ee_frames: dict, params: dict, arms: list) -> None:
+    """Refuse an EE dataset whose frames are unknown or differ from the descriptor's."""
     desc_id = params.get('robot.descriptor_id', '')
-    if not ee_frames or not desc_id:
-        return
+    if not desc_id:
+        raise RuntimeError(
+            f"Dataset '{repo_id}' has ee.* actions; set robot.descriptor_id so its EE "
+            'frames can be checked against the descriptor.'
+        )
     from sobits_vla_common.robot_descriptor import load_robot_descriptor
     by_name = {e.name: e for e in (load_robot_descriptor(desc_id).ee_poses or [])}
-    for arm, frames in ee_frames.items():
+    for arm in arms:
+        frames = ee_frames.get(arm)
+        if frames is None:
+            raise RuntimeError(
+                f"Dataset '{repo_id}' records no action_convention.ee_frames for ee.{arm}: "
+                'it was converted before EE frames were tracked, so its frame cannot be '
+                'verified. Reconvert the dataset.'
+            )
         spec = by_name.get(arm)
         if spec is None:
-            continue
+            raise RuntimeError(
+                f"Dataset '{repo_id}' has ee.{arm} actions but descriptor '{desc_id}' "
+                'declares no such ee entry.'
+            )
         got = (frames.get('source'), frames.get('target'))
         want = (spec.source_frame, spec.target_frame)
         if got != want:

@@ -46,6 +46,12 @@ REPO = 'team-sobits/fake-ee'
 JOINTS = ['head_pan_joint', 'body_lift_joint']
 EE_RPY = ['ee.left.x', 'ee.left.y', 'ee.left.z', 'ee.left.roll', 'ee.left.pitch', 'ee.left.yaw']
 EE_ROTVEC = ['ee.left.x', 'ee.left.y', 'ee.left.z', 'ee.left.rx', 'ee.left.ry', 'ee.left.rz']
+LEFT_FRAMES = {'source': 'hand_left_end_effector_link', 'target': 'body_lift_link'}
+EE_CONV = {'action_mode': 'absolute', 'ee_rotation': 'rotvec', 'ee_frames': {'left': LEFT_FRAMES}}
+# The fake dataset has no images; keep the descriptor's cameras out of the alignment check.
+DESC_PARAMS = {'robot.descriptor_id': 'sobit_home',
+               'robot.exclude.cameras': ['head_camera', 'hand_left_camera', 'hand_right_camera']}
+EE_PARAMS = {'robot.ee_rotation': 'rotvec', **DESC_PARAMS}
 
 
 @pytest.fixture
@@ -111,9 +117,19 @@ class TestLoadMetaFile:
 class TestSidecarConvention:
 
     def test_absolute_ee_sidecar_passes(self, lerobot_home):
+        _make_dataset(lerobot_home, JOINTS + EE_ROTVEC, convention=EE_CONV)
+        _run(_params(**EE_PARAMS))
+
+    def test_ee_sidecar_without_frames_fails(self, lerobot_home):
         conv = {'action_mode': 'absolute', 'ee_rotation': 'rotvec', 'ee_frames': {}}
         _make_dataset(lerobot_home, JOINTS + EE_ROTVEC, convention=conv)
-        _run(_params(**{'robot.ee_rotation': 'rotvec'}))
+        with pytest.raises(RuntimeError, match='no action_convention.ee_frames'):
+            _run(_params(**EE_PARAMS))
+
+    def test_ee_dataset_without_descriptor_fails(self, lerobot_home):
+        _make_dataset(lerobot_home, JOINTS + EE_ROTVEC, convention=EE_CONV)
+        with pytest.raises(RuntimeError, match='robot.descriptor_id'):
+            _run(_params(**{'robot.ee_rotation': 'rotvec'}))
 
     def test_relative_action_mode_fails(self, lerobot_home):
         conv = {'action_mode': 'relative', 'ee_rotation': 'rotvec'}
@@ -135,15 +151,20 @@ class TestSidecarConvention:
 
 class TestLegacyDataset:
 
-    def test_legacy_rpy_matching_rotation_passes_with_warning(self, lerobot_home, caplog):
+    def test_legacy_joint_only_passes_with_warning(self, lerobot_home, caplog):
+        _make_dataset(lerobot_home, JOINTS, conversion_stats={'use_relative_actions': False})
+        with caplog.at_level(logging.WARNING):
+            _run(_params())
+        assert 'Legacy dataset without action_convention' in caplog.text
+
+    def test_legacy_ee_dataset_refused_for_unknown_frames(self, lerobot_home):
         names = JOINTS + EE_RPY
-        # Absolute: action mean tracks state mean.
+        # Absolute (action mean tracks state mean), but the EE frame is unrecorded.
         stats = _stats(names, [0.3] * 8, [0.31] * 8, [0.1] * 8)
         _make_dataset(lerobot_home, names, stats=stats,
                       conversion_stats={'use_relative_actions': False})
-        with caplog.at_level(logging.WARNING):
-            _run(_params(**{'robot.ee_rotation': 'rpy'}))
-        assert 'Legacy dataset without action_convention' in caplog.text
+        with pytest.raises(RuntimeError, match='no action_convention.ee_frames'):
+            _run(_params(**{'robot.ee_rotation': 'rpy', **DESC_PARAMS}))
 
     def test_legacy_rotation_mismatch_fails(self, lerobot_home):
         names = JOINTS + EE_RPY
@@ -169,42 +190,47 @@ class TestLegacyDataset:
 class TestPerComponentEERelative:
 
     def test_refused_without_ee_relative_actions(self, lerobot_home):
-        conv = {'action_mode': 'absolute', 'ee_rotation': 'rotvec'}
-        _make_dataset(lerobot_home, JOINTS + EE_ROTVEC, convention=conv)
-        params = _params(**{'robot.ee_rotation': 'rotvec'},
-                         policy_overrides={'use_relative_actions': True})
+        _make_dataset(lerobot_home, JOINTS + EE_ROTVEC, convention=EE_CONV)
+        params = _params(**EE_PARAMS, policy_overrides={'use_relative_actions': True})
         with pytest.raises(RuntimeError, match='per-component relative EE is refused'):
             _run(params)
 
     def test_allowed_with_ee_relative_actions(self, lerobot_home):
-        conv = {'action_mode': 'absolute', 'ee_rotation': 'rotvec'}
-        _make_dataset(lerobot_home, JOINTS + EE_ROTVEC, convention=conv)
-        params = _params(**{'robot.ee_rotation': 'rotvec', 'robot.ee_relative_actions': True},
+        _make_dataset(lerobot_home, JOINTS + EE_ROTVEC, convention=EE_CONV)
+        params = _params(**EE_PARAMS, **{'robot.ee_relative_actions': True},
                          policy_overrides={'use_relative_actions': True})
         _run(params)
 
 
-if __name__ == '__main__':
-    raise SystemExit(pytest.main([__file__, '-v']))
-
-
 class TestEEFrames:
-    """_check_ee_frames: the dataset's EE frames must match the descriptor's current ones."""
+    """_check_ee_frames: every dataset arm's EE frames must match the descriptor's current ones."""
 
-    LEFT = {'source': 'hand_left_end_effector_link', 'target': 'body_lift_link'}
-
-    def _check(self, frames):
+    def _check(self, frames, arms=('left',), desc_id='sobit_home'):
         from sobits_vla_training.preflight import _check_ee_frames
-        _check_ee_frames(REPO, frames, {'robot.descriptor_id': 'sobit_home'})
+        _check_ee_frames(REPO, frames, {'robot.descriptor_id': desc_id}, list(arms))
 
     def test_matching_frames_pass(self):
-        self._check({'left': dict(self.LEFT)})
+        self._check({'left': dict(LEFT_FRAMES)})
 
     def test_old_base_footprint_dataset_fails(self):
         with pytest.raises(RuntimeError, match='base_footprint.*body_lift_link'):
-            self._check({'left': dict(self.LEFT, target='base_footprint')})
+            self._check({'left': dict(LEFT_FRAMES, target='base_footprint')})
 
-    def test_unknown_arm_and_no_descriptor_are_ignored(self):
-        self._check({'ghost': dict(self.LEFT, target='base_footprint')})
-        from sobits_vla_training.preflight import _check_ee_frames
-        _check_ee_frames(REPO, {'left': dict(self.LEFT, target='x')}, {'robot.descriptor_id': ''})
+    def test_arm_missing_from_frames_fails(self):
+        with pytest.raises(RuntimeError, match=r'ee_frames for ee\.left'):
+            self._check({'right': dict(LEFT_FRAMES)})
+
+    def test_arm_unknown_to_descriptor_fails(self):
+        with pytest.raises(RuntimeError, match='no such ee entry'):
+            self._check({'ghost': dict(LEFT_FRAMES)}, arms=('ghost',))
+
+    def test_no_descriptor_fails(self):
+        with pytest.raises(RuntimeError, match='robot.descriptor_id'):
+            self._check({'left': dict(LEFT_FRAMES)}, desc_id='')
+
+    def test_extra_frames_for_arms_not_in_dataset_ignored(self):
+        self._check({'left': dict(LEFT_FRAMES), 'right': dict(LEFT_FRAMES, target='old')})
+
+
+if __name__ == '__main__':
+    raise SystemExit(pytest.main([__file__, '-v']))
