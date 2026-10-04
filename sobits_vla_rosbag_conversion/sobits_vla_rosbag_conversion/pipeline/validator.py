@@ -77,9 +77,17 @@ def sensors_match(ref_sensors: dict, other_sensors: dict) -> bool:
         for key in ['names', 'topics', 'compressed_topics', 'info_topics']:
             if rs.get(key, []) != os_.get(key, []):
                 return False
-        if rs.get('properties', {}) != os_.get('properties', {}):
+        if _shapes(rs.get('properties', {})) != _shapes(os_.get('properties', {})):
             return False
     return True
+
+
+def _shapes(properties: dict) -> dict:
+    """Width/height per sensor only: topic/source record where a size came from, not what it is."""
+    return {
+        name: (props.get('width'), props.get('height'))
+        for name, props in properties.items()
+    }
 
 
 def resolve_cameras(

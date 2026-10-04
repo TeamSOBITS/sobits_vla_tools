@@ -119,6 +119,16 @@ class TestSensorsMatch:
         b = self._sensors(camera=cam)
         assert not sensors_match(a, b)
 
+    def test_property_provenance_keys_ignored(self):
+        # topic/source vary per session (CameraInfo vs first image frame); only size matters.
+        a = self._sensors()
+        cam = {**self._sensors()['camera'],
+               'properties': {'head_camera': {
+                   'width': 64, 'height': 48,
+                   'topic': '/head/image_raw/compressed', 'source': 'image'}}}
+        b = self._sensors(camera=cam)
+        assert sensors_match(a, b)
+
 
 class TestResolveCameras:
 
