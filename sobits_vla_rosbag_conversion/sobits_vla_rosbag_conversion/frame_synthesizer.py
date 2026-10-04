@@ -54,8 +54,9 @@ class FrameSynthesizer:
         camera_topics: dict,
         subtask_label_to_idx: dict,
         depth_camera_topics: dict | None = None,
-        ee_action_specs: list = [],
+        ee_action_specs: list | None = None,
         ee_rotation: str = EE_ROTATION_DEFAULT,
+        tf_max_age_s: float = 0.5,
         logger=None,
     ):
         self.fps = fps
@@ -71,8 +72,9 @@ class FrameSynthesizer:
         self.camera_topics = camera_topics
         self.depth_camera_topics = depth_camera_topics or {}
         self.subtask_label_to_idx = subtask_label_to_idx
-        self.ee_action_specs = ee_action_specs
+        self.ee_action_specs = list(ee_action_specs or [])
         self.ee_rotation = ee_rotation
+        self.tf_max_age_s = tf_max_age_s
         self.logger = logger
 
     def log_warn(self, msg: str):
@@ -152,7 +154,9 @@ class FrameSynthesizer:
         cam_series = bag_series['cam_series']
         tf_messages = bag_series['tf_messages']
 
-        tf_tree = OfflineTFTree() if self.tf_enabled else None
+        tf_tree = None
+        if self.tf_enabled:
+            tf_tree = OfflineTFTree(max_age_ns=int(round(self.tf_max_age_s * 1e9)))
         if tf_tree is not None:
             for _, msg, topic in tf_messages:
                 tf_tree.ingest(msg, is_static=(topic == '/tf_static'))

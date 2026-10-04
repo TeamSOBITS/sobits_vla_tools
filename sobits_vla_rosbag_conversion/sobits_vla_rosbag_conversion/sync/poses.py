@@ -46,10 +46,9 @@ def synthesize_ee_action(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_pose):
     (state_pose6, action_pose6) or None when the state lookup fails.
 
     state = observed EE pose at t, action = pose at t + 1/fps (shift-forward),
-    both unwrapped per-axis against prev_state_pose (fb188e1). OfflineTFTree is
-    a zero-order hold, so past the last sample the action is the last recorded
-    pose; the fallback to state only fires when a frame is missing from the
-    chain (unresolvable future), not at end of bag.
+    both unwrapped per-axis against prev_state_pose (fb188e1). None when
+    either lookup fails (missing frame, or TF stale beyond the tree's
+    max_age): a held pose would label the frame as zero motion.
     """
     state_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, t_ns)
     if state_mat is None:
@@ -59,38 +58,35 @@ def synthesize_ee_action(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_pose):
         rpy = unwrap_rpy(state_pose[3:6], prev_state_pose[3:6])
         state_pose[3:6] = rpy
 
-    future_ns = t_ns + int(round((1.0 / fps) * 1e9)) if fps > 0 else t_ns
-    action_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, future_ns)
+    action_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, _future_ns(t_ns, fps))
     if action_mat is None:
-        action_pose = state_pose.copy()
-    else:
-        action_pose = mat_to_pose6d(action_mat)
-        rpy = unwrap_rpy(action_pose[3:6], state_pose[3:6])
-        action_pose[3:6] = rpy
+        return None
+    action_pose = mat_to_pose6d(action_mat)
+    rpy = unwrap_rpy(action_pose[3:6], state_pose[3:6])
+    action_pose[3:6] = rpy
 
     return state_pose, action_pose
+
+
+def _future_ns(t_ns: int, fps: float) -> int:
+    """Stamp of the shift-forward action sample, one frame period ahead."""
+    return t_ns + int(round((1.0 / fps) * 1e9)) if fps > 0 else t_ns
 
 
 def synthesize_ee_action_rotvec(tf_tree, ee_src, ee_tgt, t_ns, fps):
     """
     (state_pose6, action_pose6) rotvec [x, y, z, rx, ry, rz], or None on state lookup failure.
 
-    Same shift-forward and unresolvable-future fallback as synthesize_ee_action.
+    Same shift-forward rule as synthesize_ee_action; None when either lookup fails.
     No unwrap: scipy's rotvec is canonical (|rotvec| <= pi) and each pose is absolute.
     """
     state_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, t_ns)
     if state_mat is None:
         return None
-    state_pose = mat_to_pose6d_rotvec(state_mat)
-
-    future_ns = t_ns + int(round((1.0 / fps) * 1e9)) if fps > 0 else t_ns
-    action_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, future_ns)
+    action_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, _future_ns(t_ns, fps))
     if action_mat is None:
-        action_pose = state_pose.copy()
-    else:
-        action_pose = mat_to_pose6d_rotvec(action_mat)
-
-    return state_pose, action_pose
+        return None
+    return mat_to_pose6d_rotvec(state_mat), mat_to_pose6d_rotvec(action_mat)
 
 
 def synthesize_ee_action_quat(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_quat):
@@ -99,8 +95,7 @@ def synthesize_ee_action_quat(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_qua
 
     Quaternion analogue of synthesize_ee_action: 7D = [x, y, z, qx, qy, qz,
     qw]. state = observed EE pose at t, action = pose at t + 1/fps
-    (shift-forward); action falls back to state only when the future lookup
-    is unresolvable (missing frame), see synthesize_ee_action. Continuity via
+    (shift-forward); None when either lookup fails. Continuity via
     shortest-arc alignment (quat_shortest_arc) instead of per-axis unwrap:
     state's quat is aligned against prev_state_quat (or left as-is when
     prev is None), and action's quat is aligned against state's quat.
@@ -112,12 +107,10 @@ def synthesize_ee_action_quat(tf_tree, ee_src, ee_tgt, t_ns, fps, prev_state_qua
     if prev_state_quat is not None:
         state_pose[3:7] = quat_shortest_arc(state_pose[3:7], prev_state_quat[3:7])
 
-    future_ns = t_ns + int(round((1.0 / fps) * 1e9)) if fps > 0 else t_ns
-    action_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, future_ns)
+    action_mat = resolve_ee_pose(tf_tree, ee_src, ee_tgt, _future_ns(t_ns, fps))
     if action_mat is None:
-        action_pose = state_pose.copy()
-    else:
-        action_pose = mat_to_pose7d(action_mat)
-        action_pose[3:7] = quat_shortest_arc(action_pose[3:7], state_pose[3:7])
+        return None
+    action_pose = mat_to_pose7d(action_mat)
+    action_pose[3:7] = quat_shortest_arc(action_pose[3:7], state_pose[3:7])
 
     return state_pose, action_pose

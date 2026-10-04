@@ -93,14 +93,12 @@ class TestSynthesizeEEAction:
         np.testing.assert_allclose(state[:3], [0.0, 0.0, 0.0], atol=1e-6)
         np.testing.assert_allclose(action[:3], [0.1, 0.0, 0.0], atol=1e-6)
 
-    def test_unresolvable_future_falls_back_to_state(self):
+    def test_unresolvable_future_skips_frame(self):
+        # A held pose would label the frame as zero motion; refuse instead.
         tree = _StubTFTree({
             ('base', 'ee', 0): (0.2, 0.3, 0.0, 0.0, 0.0, 0.0),
         })
-        result = synthesize_ee_action(tree, 'ee', 'base', 0, FPS, None)
-        assert result is not None
-        state, action = result
-        np.testing.assert_allclose(action, state, atol=1e-6)
+        assert synthesize_ee_action(tree, 'ee', 'base', 0, FPS, None) is None
 
     def test_state_lookup_failure_returns_none(self):
         tree = _StubTFTree({})
@@ -115,6 +113,7 @@ class TestSynthesizeEEAction:
         wrapped_yaw = -np.pi + 0.05
         tree = _StubTFTree({
             ('base', 'ee', STEP_NS): (0.0, 0.0, 0.0, 0.0, 0.0, wrapped_yaw),
+            ('base', 'ee', 2 * STEP_NS): (0.0, 0.0, 0.0, 0.0, 0.0, wrapped_yaw),
         })
         result = synthesize_ee_action(tree, 'ee', 'base', STEP_NS, FPS, prev_state)
         assert result is not None
@@ -164,15 +163,12 @@ class TestSynthesizeEEActionQuat:
         tree = _StubTFTreeQuat({})
         assert synthesize_ee_action_quat(tree, 'ee', 'base', 0, FPS, None) is None
 
-    def test_unresolvable_future_falls_back_to_state(self):
+    def test_unresolvable_future_skips_frame(self):
         qx, qy, qz, qw = self._quat_lookup(0.0, 0.0, 0.3)
         tree = _StubTFTreeQuat({
             ('base', 'ee', 0): (0.2, 0.3, 0.0, qx, qy, qz, qw),
         })
-        result = synthesize_ee_action_quat(tree, 'ee', 'base', 0, FPS, None)
-        assert result is not None
-        state, action = result
-        np.testing.assert_allclose(action, state, atol=1e-6)
+        assert synthesize_ee_action_quat(tree, 'ee', 'base', 0, FPS, None) is None
 
     def test_shortest_arc_continuity_across_sign_flip(self):
         # Same physical orientation, but the raw quaternion sample flips sign
@@ -182,6 +178,7 @@ class TestSynthesizeEEActionQuat:
         flipped = (-qx, -qy, -qz, -qw)
         tree = _StubTFTreeQuat({
             ('base', 'ee', STEP_NS): (0.0, 0.0, 0.0) + flipped,
+            ('base', 'ee', 2 * STEP_NS): (0.0, 0.0, 0.0) + flipped,
         })
         result = synthesize_ee_action_quat(tree, 'ee', 'base', STEP_NS, FPS, prev_state)
         assert result is not None
@@ -239,14 +236,11 @@ class TestSynthesizeEEActionRotvec:
         np.testing.assert_allclose(state, np.zeros(6), atol=1e-6)
         np.testing.assert_allclose(action, [0.1, 0.0, 0.0, 0.0, 0.0, 0.3], atol=1e-6)
 
-    def test_unresolvable_future_falls_back_to_state(self):
+    def test_unresolvable_future_skips_frame(self):
         tree = _StubTFTree({
             ('base', 'ee', 0): (0.2, 0.3, 0.0, 0.1, -0.2, 0.3),
         })
-        result = synthesize_ee_action_rotvec(tree, 'ee', 'base', 0, FPS)
-        assert result is not None
-        state, action = result
-        np.testing.assert_allclose(action, state, atol=1e-6)
+        assert synthesize_ee_action_rotvec(tree, 'ee', 'base', 0, FPS) is None
 
     def test_state_lookup_failure_returns_none(self):
         assert synthesize_ee_action_rotvec(_StubTFTree({}), 'ee', 'base', 0, FPS) is None
@@ -254,7 +248,8 @@ class TestSynthesizeEEActionRotvec:
     def test_matches_scipy_rotvec(self):
         from scipy.spatial.transform import Rotation
         rpy = (0.4, -0.3, 2.9)
-        tree = _StubTFTree({('base', 'ee', 0): (0.0, 0.0, 0.0) + rpy})
+        tree = _StubTFTree({('base', 'ee', 0): (0.0, 0.0, 0.0) + rpy,
+                            ('base', 'ee', STEP_NS): (0.0, 0.0, 0.0) + rpy})
         state, _ = synthesize_ee_action_rotvec(tree, 'ee', 'base', 0, FPS)
         expected = Rotation.from_euler('xyz', rpy).as_rotvec()
         np.testing.assert_allclose(state[3:6], expected, atol=1e-5)
@@ -320,6 +315,67 @@ class TestAppendEEChannels:
     def test_lookup_failure_skips_frame(self):
         ok, _, _ = self._run(self._synthesizer('rotvec'), _StubTFTree({}), 0.0, None)
         assert not ok
+
+
+def _tf_msg(t_s: float, parent: str, child: str, x: float, z: float = 0.0):
+    sec = int(t_s)
+    ns = types.SimpleNamespace
+    return ns(transforms=[ns(
+        header=ns(frame_id=parent, stamp=ns(sec=sec, nanosec=int(round((t_s - sec) * 1e9)))),
+        child_frame_id=child,
+        transform=ns(translation=ns(x=x, y=0.0, z=z), rotation=ns(x=0.0, y=0.0, z=0.0, w=1.0)),
+    )])
+
+
+class TestSynthesizerWithOfflineTFTree:
+    """FrameSynthesizer._append_ee_channels on a real OfflineTFTree fed from /tf messages."""
+
+    TF_HZ = 20
+
+    def _tree(self, max_age_s, gap=(None, None)):
+        from sobits_vla_rosbag_conversion.offline_tf_tree import OfflineTFTree
+        tree = OfflineTFTree(max_age_ns=int(max_age_s * 1e9))
+        # base -> lift (constant lift) -> ee moving at 0.5 m/s for 1 s; optional dropout.
+        for i in range(self.TF_HZ + 1):
+            t = i / self.TF_HZ
+            if gap[0] is not None and gap[0] < t <= gap[1]:
+                continue
+            tree.ingest(_tf_msg(t, 'base', 'lift', 0.0, z=0.1), is_static=False)
+            tree.ingest(_tf_msg(t, 'lift', 'ee', 0.5 * t), is_static=False)
+        return tree
+
+    def _append(self, tree, t_sec):
+        from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
+        synth = types.SimpleNamespace(
+            ee_action_specs=[('left', 'ee', 'base')], fps=FPS, ee_rotation='rotvec',
+            log_warn=lambda msg: None, _append_ee_channels=FrameSynthesizer._append_ee_channels,
+        )
+        state, action, counters = [], [], {'tf': 0}
+        ok = synth._append_ee_channels(synth, state, action, tree, t_sec, {'left': None}, counters)
+        return ok, state, action, counters
+
+    def test_state_at_t_and_action_one_frame_ahead_through_chain(self):
+        ok, state, action, _ = self._append(self._tree(0.5), 0.3)
+        assert ok
+        np.testing.assert_allclose(state[:3], [0.15, 0.0, 0.1], atol=1e-6)
+        np.testing.assert_allclose(action[:3], [0.20, 0.0, 0.1], atol=1e-6)
+
+    def test_tf_dropout_beyond_max_age_skips_frame(self):
+        tree = self._tree(0.1, gap=(0.6, 0.9))
+        ok, _, _, counters = self._append(tree, 0.75)
+        assert not ok and counters['tf'] == 1
+        ok, state, action, _ = self._append(tree, 0.95)  # back to live samples
+        assert ok
+        np.testing.assert_allclose(state[0], 0.475, atol=1e-6)
+
+    def test_action_past_end_of_recording_within_max_age_holds_last_pose(self):
+        ok, state, action, _ = self._append(self._tree(0.1), 1.0)
+        assert ok
+        np.testing.assert_allclose(action[0], 0.5, atol=1e-6)
+
+    def test_action_past_end_of_recording_beyond_max_age_skips_frame(self):
+        ok, _, _, counters = self._append(self._tree(0.1), 1.05)
+        assert not ok and counters['tf'] == 1
 
 
 class TestEEActionFeatures:

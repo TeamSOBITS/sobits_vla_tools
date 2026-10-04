@@ -129,6 +129,9 @@ _SCHEMA = {
         # Removed with relative actions (absolute poses have no body frame);
         # declared as a string so any non-empty value is rejected loudly.
         'frame': P(''),
+        # A /tf sample older than this at a frame's stamp is a dropout (or the
+        # end of the recording): the frame is skipped, not labelled zero-motion.
+        'tf_max_age_s': P(0.5),
     },
 }
 
@@ -259,6 +262,7 @@ class RosbagConversionNode(Node):
         self.active_ros_names = set(desc.active_ros_names)
 
         self.ee_action_specs = self._resolve_ee_actions(desc, params)
+        self.tf_max_age_s = float(params.ee_actions.tf_max_age_s)
 
         # Exclude every camera name for a state/action-only dataset.
         self.skip_cameras = False
@@ -654,7 +658,7 @@ class RosbagConversionNode(Node):
             depth_camera_topics=self.depth_camera_topics,
             subtask_label_to_idx=self.subtask_label_to_idx,
             ee_action_specs=self.ee_action_specs, ee_rotation=self.ee_rotation,
-            logger=self.log,
+            tf_max_age_s=self.tf_max_age_s, logger=self.log,
         )
 
     def _run_episodes(self, dirs: list, all_tasks: list, pipeline: EpisodePipeline) -> None:

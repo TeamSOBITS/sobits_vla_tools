@@ -55,6 +55,8 @@
     ee_actions:
       # Absolute pose, axis-angle rotation; relative is training's robot.ee_relative_actions.
       rotation: rotvec
+      # A /tf sample older than this at the frame's stamp is a dropout: skip the frame.
+      tf_max_age_s: 0.5
 
     # primary = sync trigger camera (one frame assembled per primary image;
     # other cameras are sampled at the nearest timestamp).
