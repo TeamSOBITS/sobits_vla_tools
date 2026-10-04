@@ -107,43 +107,43 @@ class TestEEActionArmsDerivation:
     """
 
     def test_joint_mode_derives_empty(self):
-        from sobits_vla_training.config_builder import _ee_action_dim
+        from sobits_vla_training.ee_params import ee_action_dim
         from sobits_vla_common.robot_descriptor import load_robot_descriptor
         desc = load_robot_descriptor('sobit_home')
-        assert _ee_action_dim(desc, {}) == 0
+        assert ee_action_dim(desc, {}) == 0
 
     def test_excluded_group_derives_that_arms_ee_dim(self):
-        from sobits_vla_training.config_builder import _ee_action_dim
+        from sobits_vla_training.ee_params import ee_action_dim
         from sobits_vla_common.robot_descriptor import (
             ee_action_features, load_robot_descriptor,
         )
         desc = load_robot_descriptor('sobit_home').filtered(exclude_groups=['arm_left'])
         expected = len(ee_action_features('left'))
-        assert _ee_action_dim(desc, {}) == expected
+        assert ee_action_dim(desc, {}) == expected
 
     def test_explicit_override_validated_against_derivation_rule(self):
-        from sobits_vla_training.config_builder import _ee_action_dim
+        from sobits_vla_training.ee_params import ee_action_dim
         from sobits_vla_common.robot_descriptor import load_robot_descriptor
         desc = load_robot_descriptor('sobit_home')  # arm_left still active
         with pytest.raises(ValueError, match='not excluded'):
-            _ee_action_dim(desc, {'robot.ee_action_arms': ['left']})
+            ee_action_dim(desc, {'robot.ee_action_arms': ['left']})
 
     def test_explicit_override_matching_derivation_rule_passes(self):
-        from sobits_vla_training.config_builder import _ee_action_dim
+        from sobits_vla_training.ee_params import ee_action_dim
         from sobits_vla_common.robot_descriptor import (
             ee_action_features, load_robot_descriptor,
         )
         desc = load_robot_descriptor('sobit_home').filtered(exclude_groups=['arm_left'])
         expected = len(ee_action_features('left'))
-        assert _ee_action_dim(desc, {'robot.ee_action_arms': ['left']}) == expected
+        assert ee_action_dim(desc, {'robot.ee_action_arms': ['left']}) == expected
 
     def test_preflight_expected_ee_actions_derives(self):
-        from sobits_vla_training.preflight import _expected_ee_actions
+        from sobits_vla_training.ee_params import expected_ee_actions
         from sobits_vla_common.robot_descriptor import (
             ee_action_features, load_robot_descriptor,
         )
         desc = load_robot_descriptor('sobit_home').filtered(exclude_groups=['arm_left'])
-        assert _expected_ee_actions(desc, {}) == ee_action_features('left')
+        assert expected_ee_actions(desc, {}) == ee_action_features('left')
 
 
 if __name__ == '__main__':

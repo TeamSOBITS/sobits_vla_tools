@@ -419,30 +419,14 @@ class TrainNode(Node):
     def _install_relative_training(self, params: dict, train_cfg) -> None:
         """Wire relative-space stats and the SE(3) EE steps into lerobot_train."""
         from sobits_vla_common.lerobot_compat import install_ee_relative_training
-        from sobits_vla_training.preflight import _robot_ee_rotation, load_dataset_info
+        from sobits_vla_training.preflight import load_dataset_info
+        from sobits_vla_training.relative_training import relative_training_spec
 
-        ee_relative = bool(params.get('robot.ee_relative_actions', False))
-        joint_relative = bool(getattr(train_cfg.policy, 'use_relative_actions', False))
-        if not (ee_relative or joint_relative):
-            return
         info = load_dataset_info(params.get('dataset.repo_id', ''))
-        if info is None and ee_relative:
-            raise RuntimeError(
-                'robot.ee_relative_actions needs meta/info.json for the action/state names; '
-                'dataset not found locally.')
-        if info is None:
-            self.get_logger().warning(
-                'meta/info.json not found locally; action stats stay absolute-space.')
-            return
-        features = info.get('features', {})
-        install_ee_relative_training({
-            'ee_relative': ee_relative,
-            'joint_relative': joint_relative,
-            'joint_exclude': list(getattr(train_cfg.policy, 'relative_exclude_joints', []) or []),
-            'action_names': features.get('action', {}).get('names') or [],
-            'state_names': features.get('observation.state', {}).get('names') or [],
-            'ee_rotation': _robot_ee_rotation(params),
-        })
+        spec = relative_training_spec(
+            params, train_cfg.policy, info, self.get_logger().warning)
+        if spec is not None:
+            install_ee_relative_training(spec)
 
 
 def main(args=None) -> None:

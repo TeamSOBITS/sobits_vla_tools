@@ -289,3 +289,41 @@ class TestInstallEERelativeTraining:
 
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))
+
+
+class TestRelativeTrainingSpec:
+
+    def _info(self):
+        return {'features': {'action': {'names': ['j1', 'ee.left.x']},
+                             'observation.state': {'names': ['j1', 'ee.left.x']}}}
+
+    def test_nothing_relative_returns_none(self):
+        from sobits_vla_training.relative_training import relative_training_spec
+        policy = SimpleNamespace(use_relative_actions=False)
+        assert relative_training_spec({}, policy, self._info(), lambda m: None) is None
+
+    def test_ee_relative_without_info_raises(self):
+        from sobits_vla_training.relative_training import relative_training_spec
+        policy = SimpleNamespace(use_relative_actions=False)
+        with pytest.raises(RuntimeError, match='meta/info.json'):
+            relative_training_spec(
+                {'robot.ee_relative_actions': True}, policy, None, lambda m: None)
+
+    def test_joint_relative_without_info_warns_and_returns_none(self):
+        from sobits_vla_training.relative_training import relative_training_spec
+        warnings = []
+        policy = SimpleNamespace(use_relative_actions=True, relative_exclude_joints=['j1'])
+        assert relative_training_spec({}, policy, None, warnings.append) is None
+        assert warnings and 'absolute-space' in warnings[0]
+
+    def test_spec_carries_names_mask_and_rotation(self):
+        from sobits_vla_training.relative_training import relative_training_spec
+        policy = SimpleNamespace(use_relative_actions=True, relative_exclude_joints=['j1'])
+        spec = relative_training_spec(
+            {'robot.ee_relative_actions': True, 'robot.ee_rotation': 'rpy'},
+            policy, self._info(), lambda m: None)
+        assert spec == {
+            'ee_relative': True, 'joint_relative': True, 'joint_exclude': ['j1'],
+            'action_names': ['j1', 'ee.left.x'], 'state_names': ['j1', 'ee.left.x'],
+            'ee_rotation': 'rpy',
+        }
