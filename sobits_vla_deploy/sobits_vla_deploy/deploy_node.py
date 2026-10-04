@@ -63,10 +63,10 @@ from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E4
 from sobits_vla_deploy.deadman import DeadmanGate, Edge  # noqa: E402
 from sobits_vla_deploy.ee_control import resolve_ee_control  # noqa: E402
 from sobits_vla_deploy.episode_logger import EpisodeLogger  # noqa: E402
+from sobits_vla_deploy.fake_policy import fake_bundle  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
 from sobits_vla_deploy.model_checks import check_action_space_matches_model  # noqa: E402
 from sobits_vla_deploy.obs_builder import ObsBuilder  # noqa: E402
-from sobits_vla_deploy.policy_loader import PolicyLoader  # noqa: E402
 from sobits_vla_deploy.servo_target_publisher import ServoTargetPublisher  # noqa: E402
 from std_msgs.msg import Bool, String  # noqa: E402
 import tf2_ros  # noqa: E402
@@ -86,6 +86,8 @@ _SCHEMA = {
         'use_relative_actions': P(False),
         'default_task_label': P(''),
         'dataset_repo_id': P(''),
+        # Dry run: hold-pose stand-in policy, no lerobot/torch needed.
+        'fake_policy': P(False),
         # 'joint': arm groups command joint trajectories directly (default).
         # 'ee': the policy emits absolute ee.{arm}.* poses instead of arm
         # joint angles, streamed to the sobits_teleop servo bridge; arm
@@ -205,12 +207,19 @@ class JointGroupConfig:
 class LeRobotDeployNode(Node):
     def __init__(self) -> None:
         super().__init__('sobits_vla_deploy')
+        self._configure_parameters()
+        if not self._model_fake_policy:
+            runtime_deps.ensure({
+                'lerobot': 'pip install lerobot[training]~=0.6.0',
+                'huggingface_hub': 'pip install huggingface_hub',
+                'safetensors': 'pip install lerobot[training]~=0.6.0',
+            })
 
         from sobits_vla_common.lerobot_adapter import describe
         seam = describe()
         self.get_logger().info(
-            f'lerobot seam: version={seam["version"]} is_v06={seam["is_v06"]} '
-            f'unresolvable={seam["unresolvable"]}'
+            f'lerobot seam: version={seam["version"]} available={seam["available"]} '
+            f'is_v06={seam["is_v06"]} unresolvable={seam["unresolvable"]}'
         )
 
         self._cb_group = ReentrantCallbackGroup()
@@ -218,7 +227,6 @@ class LeRobotDeployNode(Node):
         self._reset_lock = Lock()
         self._episode_start_lock = Lock()
 
-        self._configure_parameters()
         self._load_robot_profile()
 
         self._init_policy()
@@ -238,6 +246,17 @@ class LeRobotDeployNode(Node):
         )
 
     def _init_policy(self) -> None:
+        if self._model_fake_policy:
+            action_keys = self._joint_features + self._mobile_base_features + self._ee_features
+            self._apply_bundle(fake_bundle(action_keys, self._actions_per_chunk))
+            self.get_logger().warning('model.fake_policy: holding pose, no real inference.')
+        else:
+            self._apply_bundle(self._load_policy_bundle())
+        self._check_model_flags()
+
+    def _load_policy_bundle(self):
+        # Imported here: policy_loader pulls torch, absent in the fake dry run.
+        from sobits_vla_deploy.policy_loader import PolicyLoader
         loader = PolicyLoader(
             model_repo_id=self._model_repo_id,
             policy_class_path=self._policy_class_path,
@@ -253,11 +272,11 @@ class LeRobotDeployNode(Node):
             control_hz=self._control_hz,
             logger=self.get_logger(),
         )
-
-        bundle = loader.load_policy(
+        return loader.load_policy(
             self._joint_features, self._mobile_base_features, self._ee_features
         )
 
+    def _apply_bundle(self, bundle) -> None:
         self._policy = bundle.policy
         self._rtc_enabled = bundle.rtc_enabled
         self._model_action_feature_names = bundle.model_action_feature_names
@@ -268,6 +287,7 @@ class LeRobotDeployNode(Node):
         self._preprocessor = bundle.preprocessor
         self._postprocessor = bundle.postprocessor
 
+    def _check_model_flags(self) -> None:
         # model.use_relative_actions was dead (checkpoint always won silently);
         # enforce that an explicit config value agrees with the checkpoint.
         if (
@@ -336,6 +356,7 @@ class LeRobotDeployNode(Node):
             relative_exclude_features=self._relative_exclude_features,
             ee_features=self._ee_features,
             logger=self.get_logger(),
+            predict_fn=self._policy.predict if self._model_fake_policy else None,
         )
         self._inference_engine.update_task_label(self._task_label)
 
@@ -604,6 +625,7 @@ class LeRobotDeployNode(Node):
         self._model_device = str(params.model.device)
         self._model_use_amp = bool(params.model.use_amp)
         self._model_dataset_repo_id = str(params.model.dataset_repo_id)
+        self._model_fake_policy = bool(params.model.fake_policy)
         self._model_use_relative_actions_param = bool(params.model.use_relative_actions)
         # Only enforce when the config explicitly set this key -- otherwise
         # it's just the declared default, not an operator claim to check.
@@ -1383,13 +1405,6 @@ class LeRobotDeployNode(Node):
 
 
 def main(args: Optional[List[str]] = None) -> None:
-    # Checked here, not at module import, so lint/pytest collection of this
-    # package still works on environments without the ML stack installed.
-    runtime_deps.ensure({
-        'lerobot': 'pip install lerobot[training]~=0.6.0',
-        'huggingface_hub': 'pip install huggingface_hub',
-        'safetensors': 'pip install lerobot[training]~=0.6.0',
-    })
     rclpy.init(args=args)
     node = LeRobotDeployNode()
     executor = MultiThreadedExecutor(num_threads=4)

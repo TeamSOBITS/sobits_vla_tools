@@ -45,7 +45,7 @@ ROS node startup.
 from __future__ import annotations
 
 import importlib
-from importlib.metadata import version as _pkg_version
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 
 def _parse(v: str) -> tuple:
@@ -53,10 +53,16 @@ def _parse(v: str) -> tuple:
     return tuple(int(x) for x in v.split('.')[:3] if x.isdigit())
 
 
-LEROBOT_VERSION: tuple = _parse(_pkg_version('lerobot'))
+try:
+    LEROBOT_VERSION: tuple = _parse(_pkg_version('lerobot'))
+    LEROBOT_AVAILABLE = True
+except PackageNotFoundError:
+    # Missing lerobot is allowed so the fake_policy dry run can import the stack.
+    LEROBOT_VERSION = (0, 0, 0)
+    LEROBOT_AVAILABLE = False
 IS_V06: bool = LEROBOT_VERSION >= (0, 6)
 
-if LEROBOT_VERSION < (0, 6):
+if LEROBOT_AVAILABLE and LEROBOT_VERSION < (0, 6):
     _found = '.'.join(str(p) for p in LEROBOT_VERSION)
     raise ImportError(
         f'sobits_vla_tools now requires lerobot >= 0.6.0; found {_found}. '
@@ -130,14 +136,15 @@ def describe() -> dict:
     Returns
     -------
     dict
-        ``{'version': (0, 6, 0), 'is_v06': True, 'unresolvable': [...]}``
+        ``{'version': (0, 6, 0), 'is_v06': True, 'available': True,
+        'unresolvable': [...]}``
         where ``unresolvable`` lists ``(symbol, error)`` pairs for every
         symbol that failed to import in the active lerobot version. Meant to
         be logged once at node startup and used by the seam test suite.
 
     """
     unresolvable: list[tuple[str, str]] = []
-    for name in _SYMBOLS:
+    for name in _SYMBOLS if LEROBOT_AVAILABLE else ():
         try:
             __getattr__(name)
         except Exception as exc:  # noqa: BLE001 - collecting all failures, not just the first
@@ -145,5 +152,6 @@ def describe() -> dict:
     return {
         'version': LEROBOT_VERSION,
         'is_v06': IS_V06,
+        'available': LEROBOT_AVAILABLE,
         'unresolvable': unresolvable,
     }

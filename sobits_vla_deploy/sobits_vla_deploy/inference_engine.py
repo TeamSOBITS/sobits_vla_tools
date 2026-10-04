@@ -32,7 +32,10 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES
-import torch
+try:
+    import torch
+except ImportError:  # fake_policy dry run runs without torch
+    torch = None
 
 try:
     from sobits_vla_common.lerobot_adapter import predict_action, prepare_observation_for_inference
@@ -48,6 +51,8 @@ try:
 except ImportError:
     LatencyTracker = None
     _RTC_AVAILABLE = False
+
+_TENSOR_TYPES = (torch.Tensor,) if torch is not None else ()
 
 
 class InferenceEngine:
@@ -73,8 +78,12 @@ class InferenceEngine:
         relative_exclude_features: Optional[List[str]] = None,
         ee_features: Optional[List[str]] = None,
         logger=None,
+        predict_fn=None,
+        on_chunk=None,
     ):
         self.policy = policy
+        self.predict_fn = predict_fn
+        self.on_chunk = on_chunk
         self.model_device = model_device
         self.model_use_amp = model_use_amp
         self.control_hz = control_hz
@@ -113,6 +122,10 @@ class InferenceEngine:
             self.latency_tracker.add(seed_latency)
 
         self._BASE_KEY_ALIASES: Dict[str, str] = dict(BASE_KEY_ALIASES)
+
+    def _notify_chunk(self) -> None:
+        if self.on_chunk is not None:
+            self.on_chunk()
 
     def log_info(self, msg: str):
         if self.logger:
@@ -238,6 +251,7 @@ class InferenceEngine:
                             continue
                     with self.single_step_lock:
                         self.single_step_result = steps[0]
+                    self._notify_chunk()
             return
 
         while rclpy.ok() and not self.shutdown_inference:
@@ -295,9 +309,12 @@ class InferenceEngine:
                     chunk_buffer.replace(raw_model_chunk, chunk, used_delay)
                 else:
                     chunk_buffer.merge_aligned(chunk, q_len_at_obs)
+                self._notify_chunk()
 
     # refactor-exempt: inference hot path kept linear for latency
     def _predict_actions(self, obs_frame: Dict[str, Any], state_vector: Dict[str, float]):
+        if self.predict_fn is not None:
+            return self.predict_fn(obs_frame, state_vector)
         device = torch.device(self.model_device)
         model_dtype = next(self.policy.parameters()).dtype
 
@@ -508,7 +525,7 @@ class InferenceEngine:
         if isinstance(raw_actions, dict):
             values = list(raw_actions.values())
             if values and isinstance(
-                values[0], (list, tuple, np.ndarray, torch.Tensor)
+                values[0], (list, tuple, np.ndarray) + _TENSOR_TYPES
             ):
                 chunk_len = len(values[0])
                 chunk: List[Dict[str, float]] = []
@@ -524,7 +541,7 @@ class InferenceEngine:
                 {k: float(v) for k, v in raw_actions.items() if k in action_keys}
             ]
 
-        if isinstance(raw_actions, torch.Tensor):
+        if isinstance(raw_actions, _TENSOR_TYPES):
             raw_actions = raw_actions.detach().cpu().numpy()
 
         if isinstance(raw_actions, np.ndarray):
