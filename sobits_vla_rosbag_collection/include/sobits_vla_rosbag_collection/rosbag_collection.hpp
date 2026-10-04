@@ -203,6 +203,8 @@ private:
     const std::shared_ptr<sobits_interfaces::srv::VlaCommand::Request> request,
     std::shared_ptr<sobits_interfaces::srv::VlaCommand::Response> response);
 
+  void handleRecord(sobits_interfaces::srv::VlaCommand::Response & response);
+
   void requestWorldReset();
 
   rclcpp::Client<sobits_interfaces::srv::VlaResetWorld>::SharedPtr world_reset_client_;

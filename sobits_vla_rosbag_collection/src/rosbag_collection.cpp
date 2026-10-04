@@ -51,6 +51,19 @@ namespace sobits_vla
 {
 
 using CmdResponse = sobits_interfaces::srv::VlaCommand::Response;
+using CmdRequest = sobits_interfaces::srv::VlaCommand::Request;
+
+namespace
+{
+
+void fillResponse(CmdResponse & r, bool success, const std::string & msg, uint8_t status)
+{
+  r.success = success;
+  r.message = msg;
+  r.status = status;
+}
+
+}  // namespace
 
 RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 : Node("rosbag_collection", options)
@@ -481,6 +494,31 @@ void RosbagCollection::removeEpisodeFromYaml()
   }
 }
 
+void RosbagCollection::handleRecord(CmdResponse & response)
+{
+  if (current_state_ != CmdResponse::STATE_STOPPED &&
+    current_state_ != CmdResponse::STATE_PAUSED)
+  {
+    rejectCommand(
+      response, "Cannot start/resume recording while already in state: " +
+      std::to_string(current_state_), current_state_);
+    return;
+  }
+
+  if (current_state_ == CmdResponse::STATE_STOPPED) {
+    createRosbag();
+    fillResponse(response, true, "Recording started successfully", CmdResponse::STATE_RECORDING);
+  } else if (current_state_ == CmdResponse::STATE_PAUSED) {
+    if (recorder_node_) {
+      recorder_node_->resume();
+      transition(CmdResponse::STATE_RECORDING, RecordStatus::Event::Resumed);
+      fillResponse(response, true, "Recording resumed successfully", CmdResponse::STATE_RECORDING);
+    } else {
+      fillResponse(response, false, "Recorder node not initialized", CmdResponse::STATE_ERROR);
+    }
+  }
+}
+
 void RosbagCollection::handleVlaCommand(
   const std::shared_ptr<sobits_interfaces::srv::VlaCommand::Request> request,
   std::shared_ptr<sobits_interfaces::srv::VlaCommand::Response> response)
@@ -495,101 +533,58 @@ void RosbagCollection::handleVlaCommand(
     return;
   }
 
-  if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR) {
-    rejectCommand(
-      *response, "Cannot process command while in ERROR state.", CmdResponse::STATE_ERROR);
+  if (current_state_ == CmdResponse::STATE_ERROR) {
+    rejectCommand(*response, "Cannot process command while in ERROR state.",
+      CmdResponse::STATE_ERROR);
     return;
   }
 
-  if (request->command == sobits_interfaces::srv::VlaCommand::Request::RECORD) {
-    if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED &&
-      current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED)
-    {
-      rejectCommand(
-        *response, "Cannot start/resume recording while already in state: " +
-        std::to_string(current_state_), current_state_);
-      return;
-    }
-
-    if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
-      createRosbag();
-      response->success = true;
-      response->message = "Recording started successfully";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
-    } else if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED) {
-      if (recorder_node_) {
-        recorder_node_->resume();
-        transition(CmdResponse::STATE_RECORDING, RecordStatus::Event::Resumed);
-        response->success = true;
-        response->message = "Recording resumed successfully";
-        response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
-      } else {
-        response->success = false;
-        response->message = "Recorder node not initialized";
-        response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
-      }
-    }
-  } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::PAUSE) {
-    if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING) {
-      rejectCommand(
-        *response, "Cannot pause while not recording", current_state_);
+  if (request->command == CmdRequest::RECORD) {
+    handleRecord(*response);
+  } else if (request->command == CmdRequest::PAUSE) {
+    if (current_state_ != CmdResponse::STATE_RECORDING) {
+      rejectCommand(*response, "Cannot pause while not recording", current_state_);
       return;
     }
 
     if (recorder_node_) {
       recorder_node_->pause();
       transition(CmdResponse::STATE_PAUSED, RecordStatus::Event::Paused);
-      response->success = true;
-      response->message = "Recording paused successfully";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED;
+      fillResponse(*response, true, "Recording paused successfully", CmdResponse::STATE_PAUSED);
     } else {
-      response->success = false;
-      response->message = "Recorder node not initialized";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
+      fillResponse(*response, false, "Recorder node not initialized", CmdResponse::STATE_ERROR);
     }
-  } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::RESUME) {
-    if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED) {
-      rejectCommand(
-        *response, "Cannot resume while not paused", current_state_);
+  } else if (request->command == CmdRequest::RESUME) {
+    if (current_state_ != CmdResponse::STATE_PAUSED) {
+      rejectCommand(*response, "Cannot resume while not paused", current_state_);
       return;
     }
 
     if (recorder_node_) {
       recorder_node_->resume();
       transition(CmdResponse::STATE_RECORDING, RecordStatus::Event::Resumed);
-      response->success = true;
-      response->message = "Recording resumed successfully";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
+      fillResponse(*response, true, "Recording resumed successfully", CmdResponse::STATE_RECORDING);
     } else {
-      response->success = false;
-      response->message = "Recorder node not initialized";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
+      fillResponse(*response, false, "Recorder node not initialized", CmdResponse::STATE_ERROR);
     }
-  } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::SAVE) {
-    if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
-      rejectCommand(
-        *response, "Cannot save recording while not in RECORDING or PAUSED state", current_state_);
+  } else if (request->command == CmdRequest::SAVE) {
+    if (current_state_ == CmdResponse::STATE_STOPPED) {
+      rejectCommand(*response, "Cannot save recording while not in RECORDING or PAUSED state",
+          current_state_);
       return;
     }
     if (saveRosbag()) {
-      response->success = true;
-      response->message = "Recording saved successfully";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
+      fillResponse(*response, true, "Recording saved successfully", CmdResponse::STATE_STOPPED);
     } else {
-      response->success = false;
-      response->message = "Recording was discarded (too short or integrity failed)";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
+      fillResponse(*response, false, "Recording was discarded (too short or integrity failed)",
+          CmdResponse::STATE_STOPPED);
     }
-  } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::DELETE) {
+  } else if (request->command == CmdRequest::DELETE) {
     removeRosbag();
-    response->success = true;
-    response->message = "Recording deleted successfully";
-    response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
-  } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::RESET) {
+    fillResponse(*response, true, "Recording deleted successfully", CmdResponse::STATE_STOPPED);
+  } else if (request->command == CmdRequest::RESET) {
     requestWorldReset();
-    response->success = true;
-    response->message = "World reset requested";
-    response->status = current_state_;
+    fillResponse(*response, true, "World reset requested", current_state_);
   } else {
     RCLCPP_ERROR(this->get_logger(), "Unknown command received: %d", request->command);
     rejectCommand(
