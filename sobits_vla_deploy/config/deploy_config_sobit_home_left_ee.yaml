@@ -1,8 +1,8 @@
 /**:
   ros__parameters:
     model:
-      # EE-abs-actions model: policy emits ee.left.{x,y,z,rx,ry,rz} (rotvec)
-      # (base_footprint) instead of arm_left joint angles.
+      # EE-abs-actions model: policy emits ee.left.{x,y,z,rx,ry,rz} (rotvec, in
+      # the descriptor's EE reference_frame) instead of arm_left joint angles.
       repo_id: "team-sobits/sobit_home_left_ee_abs"
       policy_class: "lerobot.policies.pi05.modeling_pi05.PI05Policy"
       device: "cuda"
@@ -16,6 +16,8 @@
     ee_servo:
       max_lin_step_m: 0.03
       max_ang_step_rad: 0.15
+      max_lag_m: 0.10
+      max_lag_rad: 0.5
 
     runtime:
       control_hz: 10.0

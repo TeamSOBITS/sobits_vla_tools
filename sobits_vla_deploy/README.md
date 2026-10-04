@@ -114,8 +114,11 @@ to be set in the deploy config; the loader re-pairs the steps and refuses:
 
 ### Limitations
 
-Composed targets are absolute in `base_footprint`; if the base drives during
-a chunk they go stale (same as absolute mode). RTC is unavailable with
+Composed targets are absolute in the descriptor's EE `reference_frame`
+(`body_lift_link` on sobit_home); if the base drives during a chunk they go
+stale (same as absolute mode). `ee_servo.max_lag_m` / `max_lag_rad` bound how
+far a target may lead the measured pose, so a stalled arm does not bank a
+chunk's worth of steps; non-finite targets are dropped. RTC is unavailable with
 relative models until the prefix is re-anchored.
 
 ## How to test

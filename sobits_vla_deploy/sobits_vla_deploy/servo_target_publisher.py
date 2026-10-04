@@ -26,7 +26,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import math
-from typing import Dict, List
+import threading
+from typing import Dict, List, Optional
 
 from geometry_msgs.msg import TransformStamped
 import numpy as np
@@ -54,6 +55,8 @@ class ServoTargetPublisher:
         enable_publishers: Dict[str, object],
         max_lin_step_m: float,
         max_ang_step_rad: float,
+        max_lag_m: float = 0.10,
+        max_lag_rad: float = 0.5,
         rotation: str = EE_ROTATION_DEFAULT,
         logger=None,
     ):
@@ -63,6 +66,10 @@ class ServoTargetPublisher:
         self.enable_publishers = enable_publishers
         self.max_lin_step_m = max_lin_step_m
         self.max_ang_step_rad = max_ang_step_rad
+        # How far a target may run ahead of the measured pose: a stalled arm
+        # (collision, IK failure) must not accumulate a chunk's worth of lead.
+        self.max_lag_m = max_lag_m
+        self.max_lag_rad = max_lag_rad
         self.logger = logger
         if rotation not in ('rotvec', 'rpy'):
             raise ValueError(
@@ -73,6 +80,9 @@ class ServoTargetPublisher:
         # ee_pose name -> [x, y, z, <3 rotation axes>] last commanded target.
         self._last_target: Dict[str, List[float]] = {}
         self._engaged = False
+        # Timer ticks (publish_step) and command callbacks (engage/disable)
+        # share a reentrant group.
+        self._lock = threading.Lock()
 
     def _warn(self, msg: str) -> None:
         if self.logger is not None:
@@ -81,6 +91,9 @@ class ServoTargetPublisher:
     @property
     def engaged(self) -> bool:
         return self._engaged
+
+    def _keys(self, spec: EEControlSpec) -> List[str]:
+        return [f'ee.{spec.ee_pose}.{ax}' for ax in self._axes]
 
     def engage(self, state_vector: Dict[str, float]) -> bool:
         """
@@ -91,87 +104,115 @@ class ServoTargetPublisher:
         any arm was actually seeded, so callers can tell a no-op engage apart
         from a real one.
         """
-        self._last_target = {}
-        for spec in self.arms:
-            keys = [f'ee.{spec.ee_pose}.{ax}' for ax in self._axes]
-            if any(k not in state_vector for k in keys):
-                self._warn(
-                    'ServoTargetPublisher.engage: missing {!r} in state_vector '
-                    '-- arm {!r} not seeded.'.format(keys, spec.ee_pose)
-                )
-                continue
-            values = [float(state_vector[k]) for k in keys]
-            if all(v == 0.0 for v in values):
-                # Fail toward "arm does not move": an all-zero pose means the
-                # EE state was never measured -- enabling would servo to origin.
-                self._warn(
-                    'ServoTargetPublisher.engage: state_vector for arm {!r} is '
-                    'all-zero (EE state never measured) -- arm left disabled.'.format(
-                        spec.ee_pose
+        with self._lock:
+            self._last_target = {}
+            for spec in self.arms:
+                values = self._pose_from(spec, state_vector)
+                if values is None:
+                    self._warn(
+                        'ServoTargetPublisher.engage: no usable {!r} in state_vector '
+                        '(missing, non-finite or all-zero = EE state never measured) '
+                        '-- arm {!r} left disabled.'.format(self._keys(spec), spec.ee_pose)
                     )
-                )
-                continue
-            self._last_target[spec.ee_pose] = values
+                    continue
+                self._last_target[spec.ee_pose] = values
 
-            pub = self.enable_publishers.get(spec.ee_pose)
-            if pub is not None:
-                pub.publish(Bool(data=True))
-        self._engaged = bool(self._last_target)
-        return self._engaged
+                pub = self.enable_publishers.get(spec.ee_pose)
+                if pub is not None:
+                    pub.publish(Bool(data=True))
+            self._engaged = bool(self._last_target)
+            return self._engaged
 
-    def publish_step(self, step: Dict[str, float], now_msg) -> None:
-        """Clamp+broadcast one control step's EE targets. No-op if not engaged."""
-        if not self._engaged:
-            return
-        for spec in self.arms:
-            keys = [f'ee.{spec.ee_pose}.{ax}' for ax in self._axes]
-            if any(k not in step for k in keys):
-                continue
-            prev = self._last_target.get(spec.ee_pose)
-            if prev is None:
-                # Never seeded (engage skipped it) => enable was never latched
-                # true for this arm; broadcasting targets would be dead weight.
-                continue
-            target = [float(step[k]) for k in keys]
-            clamped = self._clamp_target(prev, target)
-            self._last_target[spec.ee_pose] = clamped
-            self._broadcast(spec, clamped, now_msg)
+    def _pose_from(
+        self, spec: EEControlSpec, vector: Optional[Dict[str, float]]
+    ) -> Optional[List[float]]:
+        """Measured pose of one arm from a state vector, or None when it cannot be trusted."""
+        if not vector:
+            return None
+        keys = self._keys(spec)
+        if any(k not in vector for k in keys):
+            return None
+        values = [float(vector[k]) for k in keys]
+        if not all(math.isfinite(v) for v in values):
+            return None
+        # Fail toward "arm does not move": an all-zero pose means the EE state
+        # was never measured -- servoing to it would drive the arm to origin.
+        if all(v == 0.0 for v in values):
+            return None
+        return values
 
-    def _clamp_target(
-        self, prev: List[float], target: List[float]
+    def publish_step(
+        self, step: Dict[str, float], now_msg, measured: Optional[Dict[str, float]] = None
+    ) -> None:
+        """
+        Clamp+broadcast one control step's EE targets. No-op if not engaged.
+
+        measured (ee.<arm>.<axis> keys) bounds how far a target may lead the
+        real pose; without it only the per-step clamp applies.
+        """
+        with self._lock:
+            if not self._engaged:
+                return
+            for spec in self.arms:
+                keys = self._keys(spec)
+                if any(k not in step for k in keys):
+                    continue
+                prev = self._last_target.get(spec.ee_pose)
+                if prev is None:
+                    # Never seeded (engage skipped it) => enable was never latched
+                    # true for this arm; broadcasting targets would be dead weight.
+                    continue
+                target = [float(step[k]) for k in keys]
+                if not all(math.isfinite(v) for v in target):
+                    self._warn(
+                        'ServoTargetPublisher: non-finite target {} for arm {!r} '
+                        '-- step dropped.'.format(target, spec.ee_pose)
+                    )
+                    continue
+                clamped = self._limit(prev, target, self.max_lin_step_m, self.max_ang_step_rad)
+                anchor = self._pose_from(spec, measured)
+                if anchor is not None:
+                    clamped = self._limit(anchor, clamped, self.max_lag_m, self.max_lag_rad)
+                self._last_target[spec.ee_pose] = clamped
+                self._broadcast(spec, clamped, now_msg)
+
+    def _limit(
+        self, anchor: List[float], target: List[float], max_lin: float, max_ang: float
     ) -> List[float]:
-        px, py, pz = prev[:3]
+        """Pull target back to within max_lin / max_ang of anchor."""
+        px, py, pz = anchor[:3]
         tx, ty, tz = target[:3]
         dx, dy, dz = tx - px, ty - py, tz - pz
         dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-        if dist > self.max_lin_step_m and dist > 0.0:
-            scale = self.max_lin_step_m / dist
+        if dist > max_lin and dist > 0.0:
+            scale = max_lin / dist
             dx, dy, dz = dx * scale, dy * scale, dz * scale
         pos = [px + dx, py + dy, pz + dz]
 
         if self.rotation == 'rotvec':
-            return pos + self._clamp_rotvec(prev[3:], target[3:])
+            return pos + self._limit_rotvec(anchor[3:], target[3:], max_ang)
 
-        pr, pp, pyaw = prev[3:]
+        pr, pp, pyaw = anchor[3:]
         tr, tp, tyaw = unwrap_rpy(tuple(target[3:]), (pr, pp, pyaw))
-        max_ang = self.max_ang_step_rad
         dr = max(-max_ang, min(max_ang, tr - pr))
         dp = max(-max_ang, min(max_ang, tp - pp))
         dyaw_ = max(-max_ang, min(max_ang, tyaw - pyaw))
 
         return pos + [pr + dr, pp + dp, pyaw + dyaw_]
 
-    def _clamp_rotvec(self, prev: List[float], target: List[float]) -> List[float]:
-        """Limit the geodesic angle of q_prev^-1 * q_target to max_ang_step_rad."""
+    def _limit_rotvec(
+        self, anchor: List[float], target: List[float], max_ang: float
+    ) -> List[float]:
+        """Limit the geodesic angle of q_anchor^-1 * q_target to max_ang."""
         from scipy.spatial.transform import Rotation
 
-        r_prev = Rotation.from_rotvec(prev)
-        step = (r_prev.inv() * Rotation.from_rotvec(target)).as_rotvec()
+        r_anchor = Rotation.from_rotvec(anchor)
+        step = (r_anchor.inv() * Rotation.from_rotvec(target)).as_rotvec()
         angle = float(np.linalg.norm(step))
-        if angle <= self.max_ang_step_rad:
+        if angle <= max_ang:
             return [float(v) for v in target]
-        step *= self.max_ang_step_rad / angle
-        return [float(v) for v in (r_prev * Rotation.from_rotvec(step)).as_rotvec()]
+        step *= max_ang / angle
+        return [float(v) for v in (r_anchor * Rotation.from_rotvec(step)).as_rotvec()]
 
     def _broadcast(self, spec: EEControlSpec, target: List[float], now_msg) -> None:
         x, y, z = target[:3]
@@ -197,9 +238,10 @@ class ServoTargetPublisher:
 
     def disable_tracking(self) -> None:
         """Latch enable=false on every arm and drop seeds. Idempotent."""
-        for spec in self.arms:
-            pub = self.enable_publishers.get(spec.ee_pose)
-            if pub is not None:
-                pub.publish(Bool(data=False))
-        self._last_target = {}
-        self._engaged = False
+        with self._lock:
+            for spec in self.arms:
+                pub = self.enable_publishers.get(spec.ee_pose)
+                if pub is not None:
+                    pub.publish(Bool(data=False))
+            self._last_target = {}
+            self._engaged = False

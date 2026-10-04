@@ -63,6 +63,7 @@ def _ee_axes(prefix, x=0.0, y=0.0, z=0.0, roll=0.0, pitch=0.0, yaw=0.0):
 
 def _make_servo_publisher(
     max_lin_step_m=0.03, max_ang_step_rad=0.15, arms=None, rotation='rpy',
+    max_lag_m=0.10, max_lag_rad=0.5,
 ):
     if arms is None:
         arms = [EEControlSpec(
@@ -79,9 +80,18 @@ def _make_servo_publisher(
         enable_publishers=publishers,
         max_lin_step_m=max_lin_step_m,
         max_ang_step_rad=max_ang_step_rad,
+        max_lag_m=max_lag_m,
+        max_lag_rad=max_lag_rad,
         rotation=rotation,
     )
     return pub, broadcaster, publishers
+
+
+def _rotvec_axes(prefix, x=0.0, y=0.0, z=0.0, rx=0.0, ry=0.0, rz=0.0):
+    return {
+        f'{prefix}.x': x, f'{prefix}.y': y, f'{prefix}.z': z,
+        f'{prefix}.rx': rx, f'{prefix}.ry': ry, f'{prefix}.rz': rz,
+    }
 
 
 class TestServoTargetPublisher:
@@ -226,3 +236,86 @@ class TestServoTargetPublisherRotvec:
         pub.publish_step(_rotvec_state('ee.left', [0.4, 0.0, 0.3], [0.0, 0.05, 1.0]),
                          now_msg='t0')
         assert np.allclose(pub._last_target['left'][3:], [0.0, 0.05, 1.0], atol=1e-12)
+
+
+class TestServoTargetPublisherSafety:
+
+    def test_engage_skips_non_finite_seed(self):
+        pub, _bc, publishers = _make_servo_publisher()
+        assert pub.engage(_ee_axes('ee.left', x=float('nan'), z=0.5)) is False
+        assert not pub.engaged
+        assert publishers['left'].published == []
+
+    def test_publish_step_drops_non_finite_target(self):
+        pub, bc, _publishers = _make_servo_publisher()
+        pub.engage(_ee_axes('ee.left', x=0.5, z=0.3))
+        pub.publish_step(_ee_axes('ee.left', x=float('nan'), z=0.3), now_msg='t0')
+        pub.publish_step(_ee_axes('ee.left', x=float('inf'), z=0.3), now_msg='t1')
+        assert bc.sent == []
+        assert pub._last_target['left'][:3] == [0.5, 0.0, 0.3]
+        # A later finite step still works from the untouched seed.
+        pub.publish_step(_ee_axes('ee.left', x=0.51, z=0.3), now_msg='t2')
+        assert len(bc.sent) == 1
+        assert bc.sent[0].transform.translation.x == pytest.approx(0.51)
+
+    def test_target_lead_bounded_by_measured_pose(self):
+        pub, bc, _publishers = _make_servo_publisher(max_lin_step_m=0.03, max_lag_m=0.10)
+        seed = _ee_axes('ee.left', x=0.5, z=0.3)
+        pub.engage(seed)
+        # Arm stalled at the seed pose while the policy keeps asking for x=2.0.
+        for i in range(10):
+            pub.publish_step(_ee_axes('ee.left', x=2.0, z=0.3), now_msg=f't{i}', measured=seed)
+        assert bc.sent[-1].transform.translation.x == pytest.approx(0.60, abs=1e-9)
+
+    def test_without_measured_pose_only_step_clamp_applies(self):
+        pub, bc, _publishers = _make_servo_publisher(max_lin_step_m=0.03, max_lag_m=0.10)
+        pub.engage(_ee_axes('ee.left', x=0.5, z=0.3))
+        for i in range(10):
+            pub.publish_step(_ee_axes('ee.left', x=2.0, z=0.3), now_msg=f't{i}')
+        assert bc.sent[-1].transform.translation.x == pytest.approx(0.80, abs=1e-9)
+
+    def test_rotation_lead_bounded_by_measured_pose_rotvec(self):
+        pub, bc, _publishers = _make_servo_publisher(
+            rotation='rotvec', max_ang_step_rad=0.15, max_lag_rad=0.5,
+        )
+        seed = _rotvec_axes('ee.left', x=0.5, z=0.3)
+        pub.engage(seed)
+        for i in range(10):
+            pub.publish_step(
+                _rotvec_axes('ee.left', x=0.5, z=0.3, rz=2.0), now_msg=f't{i}', measured=seed,
+            )
+        q = bc.sent[-1].transform.rotation
+        angle = Rotation.from_quat([q.x, q.y, q.z, q.w]).magnitude()
+        assert angle == pytest.approx(0.5, abs=1e-9)
+
+    def test_unmeasured_zero_pose_does_not_anchor(self):
+        # measured all-zero == never measured: must not yank the target to origin.
+        pub, bc, _publishers = _make_servo_publisher(max_lin_step_m=0.03, max_lag_m=0.10)
+        pub.engage(_ee_axes('ee.left', x=0.5, z=0.3))
+        pub.publish_step(
+            _ee_axes('ee.left', x=0.52, z=0.3), now_msg='t0', measured=_ee_axes('ee.left'),
+        )
+        assert bc.sent[-1].transform.translation.x == pytest.approx(0.52)
+
+    def test_disable_during_publish_is_serialized(self):
+        import threading
+        pub, bc, publishers = _make_servo_publisher()
+        pub.engage(_ee_axes('ee.left', x=0.5, z=0.3))
+        stop = threading.Event()
+
+        def hammer():
+            i = 0
+            while not stop.is_set():
+                pub.publish_step(_ee_axes('ee.left', x=0.5 + 0.001 * i, z=0.3), now_msg=i)
+                i += 1
+
+        t = threading.Thread(target=hammer)
+        t.start()
+        pub.disable_tracking()
+        stop.set()
+        t.join()
+        # After disable no seed survives, so nothing can be broadcast afterwards.
+        assert pub._last_target == {}
+        n = len(bc.sent)
+        pub.publish_step(_ee_axes('ee.left', x=0.9, z=0.3), now_msg='after')
+        assert len(bc.sent) == n

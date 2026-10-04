@@ -95,6 +95,10 @@ _SCHEMA = {
         # step may move a servo target, independent of the policy's own output.
         'max_lin_step_m': P(0.03),
         'max_ang_step_rad': P(0.15),
+        # Max lead of a target over the measured EE pose; a stalled arm must
+        # not bank a chunk's worth of steps and lunge when it frees up.
+        'max_lag_m': P(0.10),
+        'max_lag_rad': P(0.5),
     },
     'runtime': {
         'control_hz': P(10.0),
@@ -501,18 +505,24 @@ class LeRobotDeployNode(Node):
             for spec in self._ee_control
         }
         tf_broadcaster = tf2_ros.TransformBroadcaster(self)
-        # ee_poses[].target_frame is the frame the descriptor already measures
-        # EE state in (base_footprint) -- reuse it as the servo TF parent so
-        # observed and commanded poses share one frame.
-        parent_frame = self._ee_poses[0].target_frame if self._ee_poses else 'base_footprint'
+        # Servo TF parent = the descriptor's EE reference_frame, so observed
+        # and commanded poses share one frame. One parent serves every arm.
+        parent_frames = sorted({e.target_frame for e in self._ee_poses})
+        if len(parent_frames) != 1:
+            raise RuntimeError(
+                'EE control needs every descriptor ee entry to share one '
+                f'reference_frame, got {parent_frames}.'
+            )
 
         self._servo_targets = ServoTargetPublisher(
             arms=self._ee_control,
-            parent_frame=parent_frame,
+            parent_frame=parent_frames[0],
             tf_broadcaster=tf_broadcaster,
             enable_publishers=enable_publishers,
             max_lin_step_m=self._ee_max_lin_step_m,
             max_ang_step_rad=self._ee_max_ang_step_rad,
+            max_lag_m=self._ee_max_lag_m,
+            max_lag_rad=self._ee_max_lag_rad,
             rotation=self._ee_rotation,
             logger=self.get_logger(),
         )
@@ -636,6 +646,8 @@ class LeRobotDeployNode(Node):
             )
         self._ee_max_lin_step_m = float(params.ee_servo.max_lin_step_m)
         self._ee_max_ang_step_rad = float(params.ee_servo.max_ang_step_rad)
+        self._ee_max_lag_m = float(params.ee_servo.max_lag_m)
+        self._ee_max_lag_rad = float(params.ee_servo.max_lag_rad)
 
         self._control_hz = float(params.runtime.control_hz)
         self._actions_per_chunk = int(params.runtime.actions_per_chunk)
@@ -1379,7 +1391,9 @@ class LeRobotDeployNode(Node):
             now_msg=now,
         )
         if self._servo_targets is not None:
-            self._servo_targets.publish_step(step, now)
+            self._servo_targets.publish_step(
+                step, now, measured=self._obs_builder.state_vector
+            )
 
         if self._logging_enabled:
             self._log_step(step, joint_log, base_log)
