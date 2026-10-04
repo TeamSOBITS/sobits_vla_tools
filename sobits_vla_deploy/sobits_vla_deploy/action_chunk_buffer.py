@@ -30,15 +30,7 @@ import math
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
-from sobits_vla_common.robot_descriptor import EE_ACTION_AXES
-
-_EE_ANGLE_AXES = set(EE_ACTION_AXES[3:])
-
-
-def _is_ee_angle_key(key: str) -> bool:
-    """Return True for 'ee.<arm>.{roll,pitch,yaw}' keys; rotvec axes need no unwrap."""
-    parts = key.split('.')
-    return len(parts) == 3 and parts[0] == 'ee' and parts[2] in _EE_ANGLE_AXES
+from sobits_vla_deploy.ee_blend import blend_rotvec_groups, is_ee_angle_key as _is_ee_angle_key
 
 
 class ActionChunkBuffer:
@@ -139,4 +131,6 @@ class ActionChunkBuffer:
                 out[key] = float(new_val)
             else:
                 out[key] = float(0.5 * old_val + 0.5 * new_val)
+        if self._aggregate_fn_name != 'newest':
+            blend_rotvec_groups(out, old_step, new_step, 0.5)
         return out

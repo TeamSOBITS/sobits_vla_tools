@@ -39,6 +39,10 @@ from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E4
 from sobits_vla_deploy.deploy_node import ActionChunkBuffer  # noqa: E402
 
 
+def _rotvec(prefix, rx=0.0, ry=0.0, rz=0.0):
+    return {f'{prefix}.rx': rx, f'{prefix}.ry': ry, f'{prefix}.rz': rz}
+
+
 class TestActionChunkBufferAngleUnwrap:
 
     def test_ee_angle_key_unwraps_before_blending(self):
@@ -59,13 +63,28 @@ class TestActionChunkBufferAngleUnwrap:
         assert step is not None
         assert abs(step['ee.left.x'] - 0.0) < 1e-9  # plain average, no unwrap
 
-    def test_ee_rotvec_key_unaffected_by_unwrap(self):
+    def test_ee_rotvec_group_blends_on_so3(self):
+        # rx 3.1 and -3.1 are 0.08 rad apart as rotations; a per-axis average
+        # would give identity, 3.1 rad from both.
         buf = ActionChunkBuffer('weighted_average')
-        buf.merge([{'ee.left.rx': 3.1}], overlap=0)
-        buf.merge([{'ee.left.rx': -3.1}], overlap=1)
+        buf.merge([_rotvec('ee.left', rx=3.1)], overlap=0)
+        buf.merge([_rotvec('ee.left', rx=-3.1)], overlap=1)
         step = buf.pop()
         assert step is not None
-        assert abs(step['ee.left.rx'] - 0.0) < 1e-9  # rotvec axis, no unwrap
+        assert abs(abs(step['ee.left.rx']) - math.pi) < 0.05
+        assert abs(step['ee.left.ry']) < 1e-9 and abs(step['ee.left.rz']) < 1e-9
+
+    def test_partial_rotvec_group_falls_back_to_per_axis(self):
+        buf = ActionChunkBuffer('weighted_average')
+        buf.merge([{'ee.left.rx': 0.2}], overlap=0)
+        buf.merge([{'ee.left.rx': 0.4}], overlap=1)
+        assert buf.pop()['ee.left.rx'] == pytest.approx(0.3)
+
+    def test_newest_takes_rotvec_as_is(self):
+        buf = ActionChunkBuffer('newest')
+        buf.merge([_rotvec('ee.left', rx=3.1)], overlap=0)
+        buf.merge([_rotvec('ee.left', rx=-3.1)], overlap=1)
+        assert buf.pop()['ee.left.rx'] == pytest.approx(-3.1)
 
 
 class TestActionInterpolatorAngleUnwrap:
@@ -85,3 +104,11 @@ class TestActionInterpolatorAngleUnwrap:
         interp.add({'ee.left.x': -3.1})
         values = [interp.get()['ee.left.x'] for _ in range(2)]
         assert values == [pytest.approx((3.1 + -3.1) / 2), pytest.approx(-3.1)]
+
+    def test_rotvec_group_interpolates_on_so3(self):
+        interp = ActionInterpolator(4)
+        interp.add(_rotvec('ee.left', rx=3.1))
+        interp.add(_rotvec('ee.left', rx=-3.1))
+        values = [interp.get()['ee.left.rx'] for _ in range(4)]
+        assert all(abs(v) > math.pi - 0.3 for v in values)
+        assert values[-1] == pytest.approx(-3.1)

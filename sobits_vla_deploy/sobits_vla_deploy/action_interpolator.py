@@ -28,15 +28,7 @@
 import math
 from typing import Dict, List, Optional
 
-from sobits_vla_common.robot_descriptor import EE_ACTION_AXES
-
-_EE_ANGLE_AXES = set(EE_ACTION_AXES[3:])
-
-
-def _is_ee_angle_key(key: str) -> bool:
-    """Return True for 'ee.<arm>.{roll,pitch,yaw}' keys; rotvec axes need no unwrap."""
-    parts = key.split('.')
-    return len(parts) == 3 and parts[0] == 'ee' and parts[2] in _EE_ANGLE_AXES
+from sobits_vla_deploy.ee_blend import blend_rotvec_groups, is_ee_angle_key as _is_ee_angle_key
 
 
 class ActionInterpolator:
@@ -78,6 +70,7 @@ class ActionInterpolator:
                         elif diff < -math.pi:
                             v += 2 * math.pi
                     interp[k] = pv + t * (v - pv)
+                blend_rotvec_groups(interp, prev, action, t)
                 self._buffer.append(interp)
         else:
             # First step: no previous action yet, run at base rate.
