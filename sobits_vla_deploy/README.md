@@ -31,10 +31,11 @@ Schema-driven (`_SCHEMA` in `deploy_node.py`; see
 
 | Group | Covers |
 |---|---|
-| `model.*` | `repo_id`, `policy_class`, `device`, `use_amp`, `use_relative_actions`, `action_space` (`joint` or `ee`), `ee_rotation` (`rotvec` or `rpy`, must match the checkpoint's `ee.*` names). |
+| `model.*` | `repo_id`, `policy_class`, `device`, `use_amp`, `use_relative_actions`, `fake_policy` (hold-pose stand-in, no lerobot/torch; see "Dry run"), `action_space` (`joint` or `ee`), `ee_rotation` (`rotvec` or `rpy`, must match the checkpoint's `ee.*` names). |
 | `ee_servo.*` | `max_lin_step_m`, `max_ang_step_rad` -- per-step clamp on EE servo targets in `action_space: ee` mode. |
 | `runtime.*` | `control_hz`, `actions_per_chunk`, `async_enabled`, `action_interpolation_multiplier`. |
 | `rtc.*` | Real-Time Chunking guidance knobs. |
+| `status.*` | `rate_hz` (default `1.0`) -- heartbeat rate of `~/status`. |
 | `gamepad.*` | `command_service` (this node advertises `~/command`), `controller`, per-controller `button_mapping`, deadman safety trigger. |
 | `logging.*` | Episode-log directory + scene-config YAML for termination baselines. |
 | `task.*` | Pick/place success thresholds, timeout, tilt/fall detection. |
@@ -52,10 +53,49 @@ Owner-private naming: node name `sobits_vla_deploy`.
 | `~/play` (Bool), `~/task` (String) | Robot I/O (joint states, cameras, cmd_vel — absolute) |
 | `~/update_task` (`VlaUpdateTask`), `~/command` (`VlaCommand`) | `world_reset_node/reset_world` (consumer form) |
 | `~/episode_done` (String) | — |
+| `~/status` (`sobits_interfaces/VlaStatus`, reliable + transient-local, depth 1) | — |
 
 `vla_experiment_runner` is a consumer: `command_service` defaults to
 `sobits_vla_deploy/command`, `episode_done_topic` to
 `sobits_vla_deploy/episode_done`.
+
+## Status feed
+
+`~/status` publishes `VlaStatus` with `stage = STAGE_DEPLOY`: a heartbeat at
+`status.rate_hz` (steady clock, so a paused sim does not stall it) plus one
+message immediately on every event. Fields: `state` (`STOPPED`, `PLAYING`,
+`RESETTING`, `ERROR`), `event` and `event_seq`, `task_name`, `episode_name`
+(`episode_<n>` of this process), `elapsed_sec` (the node's episode clock; with
+a deadman it starts at the first engagement and freezes at stop), `policy`,
+`deadman_enabled` / `deadman_engaged`, `steps`, `inference_hz` (rolling window
+of chunk inferences, 0 when idle) and `outcome`.
+
+| Trigger | State | Event |
+|---|---|---|
+| PLAY | `PLAYING` | `STARTED` |
+| deadman pressed / released | `PLAYING` | `ENGAGED` / `RELEASED` |
+| STOP while playing, or auto-termination | `RESETTING` | `STOPPED` (outcome set) |
+| world reset finished after an episode | `STOPPED` | `EPISODE_DONE` (outcome set; mirrors `~/episode_done`) |
+| idle STOP / RESET | `RESETTING`, then `STOPPED` | none, then `RESET_DONE` |
+| task set (`~/task`, `~/update_task`) | unchanged | `TASK_SET` |
+| unsupported command | unchanged | `REJECTED` |
+
+The deadman latch is cleared on every PLAY and STOP, so a trigger still held
+across STOP -> PLAY engages again instead of leaving the robot frozen.
+
+## Dry run (`model.fake_policy`)
+
+`model.fake_policy: true` swaps the checkpoint for a stand-in that holds the
+measured pose (zero for `*.vel` keys), so PLAY/STOP/RESET, the deadman and the
+status feed can run in the sim without lerobot, torch or pixi:
+
+```
+ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py deploy_config:=deploy_config_sobit_home_fake fake_policy:=true use_sim_time:=true robot_name:=sobit_home
+```
+
+The `fake_policy` launch arg runs the node on the system python
+(`PYTHONNOUSERSITE=1`, no pixi prefix). `deploy_config_sobit_home_fake.yaml`
+excludes the right arm and the hand cameras, so only `head_camera` must stream.
 
 ## Outputs
 
@@ -132,6 +172,11 @@ colcon test-result --test-result-base build/sobits_vla_deploy
 cd src/sobits_vla_tools
 pixi run -e gpu python -m pytest sobits_vla_deploy/test/ -q --ignore-glob='*test_flake8.py' --ignore-glob='*test_pep257.py' --ignore-glob='*test_copyright.py'
 ```
+
+Without torch/pandas (the colcon container) `conftest.py` skips the modules
+that need them; the pixi run covers those. `test_deploy_status.py`,
+`test_deadman.py` and `test_fake_policy.py` are pure; `test_deploy_status_wire.py`
+checks the `VlaStatus` constants and `to_msg` mapping against the built message.
 
 `test_vla_deploy_unit.py` covers `ActionChunkBuffer`, `ActionInterpolator`,
 episode-logger termination logic; `test_eval_metrics.py` /
