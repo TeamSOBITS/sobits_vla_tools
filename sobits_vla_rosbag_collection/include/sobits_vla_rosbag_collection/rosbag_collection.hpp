@@ -47,6 +47,7 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <sobits_interfaces/srv/vla_command.hpp>
 #include <sobits_interfaces/srv/vla_reset_world.hpp>
 #include <sobits_interfaces/srv/vla_update_task.hpp>
@@ -155,6 +156,9 @@ public:
   void stopRecordingMonitor();
   bool verifyBagIntegrity(const std::string & bag_path);
   std::string getTimestampString();
+  void publishStatus(const std::string & status);
+  void publishCurrentStatus();
+  std::string formatRecordingElapsed() const;
 
 private:
   // Implemented in rosbag_collection_params.cpp: pure move of the 41
@@ -181,6 +185,9 @@ private:
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr task_update_service_;
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr subtask_update_service_;
   rclcpp::Service<sobits_interfaces::srv::VlaCommand>::SharedPtr command_service_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+  rclcpp::TimerBase::SharedPtr status_timer_;
+  std::string last_status_text_{"idle"};
 
   void handleVlaCommand(
     const std::shared_ptr<sobits_interfaces::srv::VlaCommand::Request> request,
