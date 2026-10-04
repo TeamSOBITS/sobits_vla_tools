@@ -53,13 +53,15 @@ from sobits_vla_common.param_schema import (  # noqa: E402
     declare_from_schema, P, read_schema, Template,
 )
 from sobits_vla_common.robot_descriptor import (  # noqa: E402
-    ee_action_features, EE_ROTATION_AXES,
+    EE_ROTATION_AXES,
 )
 from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.action_executor import ActionExecutor  # noqa: E402
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
+from sobits_vla_deploy.ee_control import resolve_ee_control  # noqa: E402
 from sobits_vla_deploy.episode_logger import EpisodeLogger  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
+from sobits_vla_deploy.model_checks import check_action_space_matches_model  # noqa: E402
 from sobits_vla_deploy.obs_builder import ObsBuilder  # noqa: E402
 from sobits_vla_deploy.policy_loader import PolicyLoader  # noqa: E402
 from sobits_vla_deploy.servo_target_publisher import ServoTargetPublisher  # noqa: E402
@@ -281,42 +283,14 @@ class LeRobotDeployNode(Node):
         self._check_action_space_matches_model()
 
     def _check_action_space_matches_model(self) -> None:
-        """model.action_space must agree with what the checkpoint actually emits."""
-        names = self._model_action_feature_names or []
-        model_has_ee = any(n.startswith('ee.') for n in names)
-        if self._action_space == 'joint' and model_has_ee:
-            raise RuntimeError(
-                'model.action_space is "joint" but the checkpoint {!r} emits '
-                'ee.* action features -- set model.action_space: ee.'.format(
-                    self._model_repo_id
-                )
-            )
-        if self._action_space == 'ee' and not model_has_ee:
-            raise RuntimeError(
-                'model.action_space is "ee" but the checkpoint {!r} emits no '
-                'ee.* action features -- set model.action_space: joint.'.format(
-                    self._model_repo_id
-                )
-            )
-        if model_has_ee and self._model_ee_rotation != self._ee_rotation:
-            raise RuntimeError(
-                'model.ee_rotation is {!r} but the checkpoint {!r} emits {!r} ee.* '
-                'features -- set model.ee_rotation: {}.'.format(
-                    self._ee_rotation, self._model_repo_id,
-                    self._model_ee_rotation, self._model_ee_rotation,
-                )
-            )
-        if model_has_ee and self._ee_rotation == 'quat':
-            raise RuntimeError(
-                'model.ee_rotation "quat" is not supported at deploy: ObsBuilder and '
-                'ServoTargetPublisher support rotvec and rpy only.'
-            )
-        if self._rtc_enabled and (self._model_ee_relative or self._model_use_relative_actions):
-            raise RuntimeError(
-                'rtc.enabled with a relative-action checkpoint {!r}: the RTC prefix '
-                'is not re-anchored to the new observation yet -- set '
-                'rtc.enabled: false.'.format(self._model_repo_id)
-            )
+        check_action_space_matches_model(
+            action_space=self._action_space, ee_rotation=self._ee_rotation,
+            rtc_enabled=self._rtc_enabled, model_repo_id=self._model_repo_id,
+            model_action_feature_names=self._model_action_feature_names,
+            model_ee_rotation=self._model_ee_rotation,
+            model_ee_relative=self._model_ee_relative,
+            model_use_relative_actions=self._model_use_relative_actions,
+        )
 
     def _init_collaborators(self) -> None:
         self._obs_builder = ObsBuilder(
@@ -835,44 +809,15 @@ class LeRobotDeployNode(Node):
                 self._camera_encodings[cam.name] = cam.encoding if cam.encoding else 'rgb8'
 
     def _configure_ee_control(self, desc, active_groups_list: List[str]) -> None:
-        """
-        Resolve EE-servo wiring for model.action_space=='ee'; no-op in joint mode.
-
-        Each surviving ee_control spec's joint group must already be excluded
-        (via robot.exclude.groups) -- the policy drives that arm through the
-        servo bridge instead, so the joint controller must not also command it.
-        """
+        """Resolve EE-servo wiring for model.action_space=='ee'; no-op in joint mode."""
         self._ee_control: List[Any] = []
         self._ee_features: List[str] = []
         self._ee_state_specs: List[tuple] = []
         if self._action_space != 'ee':
             return
-
-        self._ee_control = desc.active_ee_control
-        if not self._ee_control:
-            raise RuntimeError(
-                'model.action_space is "ee" but no ee_control spec survived '
-                'robot.exclude filtering -- nothing to servo. Check '
-                "robot.exclude.ee against the descriptor's ee_control list."
-            )
-        still_active = [c.group for c in self._ee_control if c.group in active_groups_list]
-        if still_active:
-            raise RuntimeError(
-                'model.action_space is "ee" but joint group(s) {} are still '
-                'active -- add them to robot.exclude.groups so the servo '
-                'bridge and the joint controller do not both drive the same '
-                'arm.'.format(still_active)
-            )
-        self._ee_features = [
-            key for spec in self._ee_control
-            for key in ee_action_features(spec.ee_pose, rotation=self._ee_rotation)
-        ]
-        known_ee_poses = {e.name: e for e in self._ee_poses}
-        self._ee_state_specs = [
-            (e.name, e.source_frame, e.target_frame)
-            for spec in self._ee_control
-            for e in [known_ee_poses[spec.ee_pose]]
-        ]
+        self._ee_control, self._ee_features, self._ee_state_specs = resolve_ee_control(
+            desc, active_groups_list, self._ee_rotation,
+        )
 
     def _load_scene_baselines(self) -> None:
         """

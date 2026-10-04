@@ -46,7 +46,6 @@ from sobits_vla_common.lerobot_adapter import (  # noqa: E402
     transition_to_policy_action, UnnormalizerProcessorStep,
 )
 from sobits_vla_common.robot_descriptor import ee_action_features  # noqa: E402
-from sobits_vla_deploy.deploy_node import LeRobotDeployNode  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
 from sobits_vla_deploy.obs_builder import ObsBuilder  # noqa: E402
 from sobits_vla_deploy.policy_loader import (  # noqa: E402
@@ -187,42 +186,42 @@ class TestLoaderEEChecks:
         assert _dataset_action_names(None) is None
 
 
-def _check_node(**overrides):
-    node = SimpleNamespace(
-        _model_action_feature_names=NAMES, _action_space='ee', _model_repo_id='repo',
-        _model_ee_rotation='rotvec', _ee_rotation='rotvec', _rtc_enabled=False,
-        _model_ee_relative=False, _model_use_relative_actions=False,
-    )
-    for k, v in overrides.items():
-        setattr(node, k, v)
-    return node
+def _check(**overrides):
+    from sobits_vla_deploy.model_checks import check_action_space_matches_model
+    kwargs = {
+        'model_action_feature_names': NAMES, 'action_space': 'ee', 'model_repo_id': 'repo',
+        'model_ee_rotation': 'rotvec', 'ee_rotation': 'rotvec', 'rtc_enabled': False,
+        'model_ee_relative': False, 'model_use_relative_actions': False,
+    }
+    kwargs.update(overrides)
+    check_action_space_matches_model(**kwargs)
 
 
 class TestDeployNodeModelChecks:
 
     def test_matching_rotation_passes(self):
-        LeRobotDeployNode._check_action_space_matches_model(_check_node())
+        _check()
 
     def test_rotation_mismatch_raises(self):
-        node = _check_node(_ee_rotation='rpy')
         with pytest.raises(RuntimeError, match='ee_rotation'):
-            LeRobotDeployNode._check_action_space_matches_model(node)
+            _check(ee_rotation='rpy')
 
     def test_quat_refused(self):
-        node = _check_node(
-            _model_action_feature_names=ee_action_features('left', 'quat'),
-            _model_ee_rotation='quat', _ee_rotation='quat')
         with pytest.raises(RuntimeError, match='rotvec and rpy only'):
-            LeRobotDeployNode._check_action_space_matches_model(node)
+            _check(model_action_feature_names=ee_action_features('left', 'quat'),
+                   model_ee_rotation='quat', ee_rotation='quat')
 
-    @pytest.mark.parametrize('flag', ['_model_ee_relative', '_model_use_relative_actions'])
+    def test_joint_space_with_ee_checkpoint_raises(self):
+        with pytest.raises(RuntimeError, match='model.action_space: ee'):
+            _check(action_space='joint')
+
+    @pytest.mark.parametrize('flag', ['model_ee_relative', 'model_use_relative_actions'])
     def test_rtc_with_relative_model_refused(self, flag):
-        node = _check_node(_rtc_enabled=True, **{flag: True})
         with pytest.raises(RuntimeError, match='re-anchored'):
-            LeRobotDeployNode._check_action_space_matches_model(node)
+            _check(rtc_enabled=True, **{flag: True})
 
     def test_rtc_with_absolute_model_allowed(self):
-        LeRobotDeployNode._check_action_space_matches_model(_check_node(_rtc_enabled=True))
+        _check(rtc_enabled=True)
 
 
 class _FakeTfBuffer:
