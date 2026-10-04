@@ -64,7 +64,8 @@ def bar_mode() -> bool:
 
 
 class TqdmLogger:
-    """rclpy-logger look-alike that prints through tqdm.write so bars stay at the bottom.
+    """
+    rclpy-logger look-alike that prints through tqdm.write so bars stay at the bottom.
 
     In bar mode the node runs with --disable-stdout-logs, so this is the console;
     the real logger still receives every message (log file, rosout).
