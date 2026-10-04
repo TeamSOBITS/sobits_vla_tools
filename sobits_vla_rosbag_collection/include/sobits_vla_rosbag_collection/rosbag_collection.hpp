@@ -47,7 +47,7 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
-#include <sobits_interfaces/msg/vla_record_status.hpp>
+#include <sobits_interfaces/msg/vla_status.hpp>
 #include <sobits_interfaces/srv/vla_command.hpp>
 #include <sobits_interfaces/srv/vla_reset_world.hpp>
 #include <sobits_interfaces/srv/vla_update_task.hpp>
@@ -183,7 +183,7 @@ private:
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr task_update_service_;
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr subtask_update_service_;
   rclcpp::Service<sobits_interfaces::srv::VlaCommand>::SharedPtr command_service_;
-  rclcpp::Publisher<sobits_interfaces::msg::VlaRecordStatus>::SharedPtr record_status_pub_;
+  rclcpp::Publisher<sobits_interfaces::msg::VlaStatus>::SharedPtr record_status_pub_;
   rclcpp::TimerBase::SharedPtr record_status_timer_;
 
   // Implemented in rosbag_collection_status.cpp. transition() writes the
@@ -194,7 +194,7 @@ private:
   void rejectCommand(
     sobits_interfaces::srv::VlaCommand::Response & response, const std::string & msg,
     uint8_t status);
-  static sobits_interfaces::msg::VlaRecordStatus toMsg(const RecordStatus::Snapshot & s);
+  static sobits_interfaces::msg::VlaStatus toMsg(const RecordStatus::Snapshot & s);
 
   RecordStatus record_status_;
   std::mutex record_status_mutex_;

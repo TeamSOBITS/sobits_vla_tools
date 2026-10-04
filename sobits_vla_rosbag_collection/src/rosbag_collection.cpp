@@ -205,8 +205,8 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     std::bind(&RosbagCollection::handleVlaCommand, this, std::placeholders::_1,
       std::placeholders::_2));
 
-  record_status_pub_ = this->create_publisher<sobits_interfaces::msg::VlaRecordStatus>(
-    "~/record_status", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+  record_status_pub_ = this->create_publisher<sobits_interfaces::msg::VlaStatus>(
+    "~/status", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
   record_status_timer_ = this->create_wall_timer(
     std::chrono::seconds(1), std::bind(&RosbagCollection::publishRecordStatus, this));
 

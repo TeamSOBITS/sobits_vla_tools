@@ -45,17 +45,17 @@ Owner-private naming (see `sobits_vla_common`'s README): this node's name is
 |---|---|
 | `~/command` (`VlaCommand`) — resolves to `/<robot>/vla_rosbag_collection/command` | Robot I/O (joint states, cameras, cmd_vel — absolute, from the descriptor) |
 | `~/vla_task_update`, `~/vla_subtask_update` (`VlaUpdateTask`) | `world_reset_node/reset_world` (consumer form; only when `enable_world_reset:=true`) |
-| `~/record_status` (`sobits_interfaces/msg/VlaRecordStatus`; reliable · transient-local · depth 1; 1 Hz heartbeat + on events) — resolves to `/<robot>/vla_rosbag_collection/record_status` | |
+| `~/status` (`sobits_interfaces/msg/VlaStatus`; reliable · transient-local · depth 1; 1 Hz heartbeat + on events) — resolves to `/<robot>/vla_rosbag_collection/status` | |
 
 ### Status feed
 
-`~/record_status` carries the recorder state, the last event (started, paused,
+`~/status` carries the stage (`STAGE_COLLECTION` here), the recorder state, the last event (started, paused,
 resumed, saved, discarded, deleted, error, task set, rejected), the task and
 episode names, and the recorded time with pauses excluded. A late subscriber
 gets the latest message at once. Watch it with:
 
 ```sh
-ros2 topic echo /<robot>/vla_rosbag_collection/record_status
+ros2 topic echo /<robot>/vla_rosbag_collection/status
 ```
 
 ## Outputs

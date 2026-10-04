@@ -36,7 +36,7 @@
 namespace sobits_vla
 {
 
-using Msg = sobits_interfaces::msg::VlaRecordStatus;
+using Msg = sobits_interfaces::msg::VlaStatus;
 using Cmd = sobits_interfaces::srv::VlaCommand;
 using State = RecordStatus::State;
 using Event = RecordStatus::Event;
@@ -50,6 +50,7 @@ static_assert(Cmd::Response::STATE_STOPPED == Msg::STATE_STOPPED);
 static_assert(Cmd::Response::STATE_RECORDING == Msg::STATE_RECORDING);
 static_assert(Cmd::Response::STATE_PAUSED == Msg::STATE_PAUSED);
 static_assert(Cmd::Response::STATE_ERROR == Msg::STATE_ERROR);
+static_assert(Cmd::Response::STATE_PLAYING == Msg::STATE_PLAYING);
 static_assert(static_cast<uint8_t>(Event::None) == Msg::EVENT_NONE);
 static_assert(static_cast<uint8_t>(Event::Started) == Msg::EVENT_STARTED);
 static_assert(static_cast<uint8_t>(Event::Paused) == Msg::EVENT_PAUSED);
@@ -64,6 +65,7 @@ static_assert(static_cast<uint8_t>(Event::Rejected) == Msg::EVENT_REJECTED);
 Msg RosbagCollection::toMsg(const RecordStatus::Snapshot & s)
 {
   Msg m;
+  m.stage = Msg::STAGE_COLLECTION;
   m.state = static_cast<uint8_t>(s.state);
   m.event = static_cast<uint8_t>(s.event);
   m.event_seq = s.event_seq;
