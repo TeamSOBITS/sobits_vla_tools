@@ -25,58 +25,39 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef SOBITS_VLA_COMMON__GAMEPAD_CLT_HPP_
-#define SOBITS_VLA_COMMON__GAMEPAD_CLT_HPP_
+#ifndef SOBITS_VLA_COMMON__STATUS_TOPIC_HPP_
+#define SOBITS_VLA_COMMON__STATUS_TOPIC_HPP_
 
+#include <cstdint>
 #include <string>
-
-#include <sensor_msgs/msg/joy.hpp>
-#include <rcl_interfaces/msg/parameter_type.hpp>
-#include <sobits_interfaces/msg/vla_record_status.hpp>
-#include <sobits_interfaces/srv/vla_command.hpp>
-
-#include <rclcpp/rclcpp.hpp>
 
 namespace sobits_vla
 {
 
-class GamepadClient : public rclcpp::Node
+// Empty when the service name does not end in "/command" (nothing to follow).
+inline std::string statusTopicFromService(const std::string & service)
 {
-public:
-  explicit GamepadClient(const rclcpp::NodeOptions & options);
-  ~GamepadClient();
+  const std::string suffix = "/command";
+  if (service.size() <= suffix.size() ||
+    service.compare(service.size() - suffix.size(), suffix.size(), suffix) != 0)
+  {
+    return "";
+  }
+  return service.substr(0, service.size() - suffix.size()) + "/record_status";
+}
 
-private:
-  void joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
-  void callService(const uint8_t & command);
-  void timerCallback();
-  void statusCallback(const sobits_interfaces::msg::VlaRecordStatus::SharedPtr msg);
-
-  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
-  rclcpp::Subscription<sobits_interfaces::msg::VlaRecordStatus>::SharedPtr status_subscriber_;
-  rclcpp::Client<sobits_interfaces::srv::VlaCommand>::SharedPtr service_client_;
-  rclcpp::TimerBase::SharedPtr timer_;
-
-  sensor_msgs::msg::Joy::SharedPtr last_joy_msg_;
-
-  uint8_t current_state_;
-  uint8_t previous_state_;
-
-  std::string gamepad_name_;
-  std::string command_service_name_;
-
-  int record_button_;
-  int pause_button_;
-  int save_button_;
-  int delete_button_;
-  int play_button_;
-  int reset_button_;
-  bool deploy_mode_;
-
-  double button_cooldown_duration_;
-  rclcpp::Time last_button_press_time_;
-};
+// Numbers mirror VlaCommand::Response::STATE_*; kept literal to stay ROS-free.
+inline const char * recordStateName(uint8_t state)
+{
+  switch (state) {
+    case 0: return "STOPPED";
+    case 1: return "RECORDING";
+    case 2: return "PAUSED";
+    case 4: return "ERROR";
+    default: return "UNKNOWN";
+  }
+}
 
 }  // namespace sobits_vla
 
-#endif  // SOBITS_VLA_COMMON__GAMEPAD_CLT_HPP_
+#endif  // SOBITS_VLA_COMMON__STATUS_TOPIC_HPP_

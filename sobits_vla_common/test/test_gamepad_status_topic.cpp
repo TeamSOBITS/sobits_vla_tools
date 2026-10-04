@@ -25,58 +25,36 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef SOBITS_VLA_COMMON__GAMEPAD_CLT_HPP_
-#define SOBITS_VLA_COMMON__GAMEPAD_CLT_HPP_
+#include <gtest/gtest.h>
 
-#include <string>
+#include "sobits_vla_common/status_topic.hpp"
 
-#include <sensor_msgs/msg/joy.hpp>
-#include <rcl_interfaces/msg/parameter_type.hpp>
-#include <sobits_interfaces/msg/vla_record_status.hpp>
-#include <sobits_interfaces/srv/vla_command.hpp>
+using sobits_vla::recordStateName;
+using sobits_vla::statusTopicFromService;
 
-#include <rclcpp/rclcpp.hpp>
-
-namespace sobits_vla
+TEST(StatusTopic, ReplacesTrailingCommand)
 {
+  EXPECT_EQ(
+    statusTopicFromService("vla_rosbag_collection/command"),
+    "vla_rosbag_collection/record_status");
+  EXPECT_EQ(
+    statusTopicFromService("/sobit_home/vla_rosbag_collection/command"),
+    "/sobit_home/vla_rosbag_collection/record_status");
+}
 
-class GamepadClient : public rclcpp::Node
+TEST(StatusTopic, EmptyWhenNotACommandService)
 {
-public:
-  explicit GamepadClient(const rclcpp::NodeOptions & options);
-  ~GamepadClient();
+  EXPECT_EQ(statusTopicFromService(""), "");
+  EXPECT_EQ(statusTopicFromService("/command"), "");
+  EXPECT_EQ(statusTopicFromService("command"), "");
+  EXPECT_EQ(statusTopicFromService("a/command_x"), "");
+}
 
-private:
-  void joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
-  void callService(const uint8_t & command);
-  void timerCallback();
-  void statusCallback(const sobits_interfaces::msg::VlaRecordStatus::SharedPtr msg);
-
-  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
-  rclcpp::Subscription<sobits_interfaces::msg::VlaRecordStatus>::SharedPtr status_subscriber_;
-  rclcpp::Client<sobits_interfaces::srv::VlaCommand>::SharedPtr service_client_;
-  rclcpp::TimerBase::SharedPtr timer_;
-
-  sensor_msgs::msg::Joy::SharedPtr last_joy_msg_;
-
-  uint8_t current_state_;
-  uint8_t previous_state_;
-
-  std::string gamepad_name_;
-  std::string command_service_name_;
-
-  int record_button_;
-  int pause_button_;
-  int save_button_;
-  int delete_button_;
-  int play_button_;
-  int reset_button_;
-  bool deploy_mode_;
-
-  double button_cooldown_duration_;
-  rclcpp::Time last_button_press_time_;
-};
-
-}  // namespace sobits_vla
-
-#endif  // SOBITS_VLA_COMMON__GAMEPAD_CLT_HPP_
+TEST(StatusTopic, StateNames)
+{
+  EXPECT_STREQ(recordStateName(0), "STOPPED");
+  EXPECT_STREQ(recordStateName(1), "RECORDING");
+  EXPECT_STREQ(recordStateName(2), "PAUSED");
+  EXPECT_STREQ(recordStateName(4), "ERROR");
+  EXPECT_STREQ(recordStateName(3), "UNKNOWN");
+}
