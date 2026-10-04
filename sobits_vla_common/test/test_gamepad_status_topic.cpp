@@ -29,17 +29,17 @@
 
 #include "sobits_vla_common/status_topic.hpp"
 
-using sobits_vla::recordStateName;
+using sobits_vla::vlaStateName;
 using sobits_vla::statusTopicFromService;
 
 TEST(StatusTopic, ReplacesTrailingCommand)
 {
   EXPECT_EQ(
     statusTopicFromService("vla_rosbag_collection/command"),
-    "vla_rosbag_collection/record_status");
+    "vla_rosbag_collection/status");
   EXPECT_EQ(
     statusTopicFromService("/sobit_home/vla_rosbag_collection/command"),
-    "/sobit_home/vla_rosbag_collection/record_status");
+    "/sobit_home/vla_rosbag_collection/status");
 }
 
 TEST(StatusTopic, EmptyWhenNotACommandService)
@@ -52,9 +52,11 @@ TEST(StatusTopic, EmptyWhenNotACommandService)
 
 TEST(StatusTopic, StateNames)
 {
-  EXPECT_STREQ(recordStateName(0), "STOPPED");
-  EXPECT_STREQ(recordStateName(1), "RECORDING");
-  EXPECT_STREQ(recordStateName(2), "PAUSED");
-  EXPECT_STREQ(recordStateName(4), "ERROR");
-  EXPECT_STREQ(recordStateName(3), "UNKNOWN");
+  EXPECT_STREQ(vlaStateName(0), "STOPPED");
+  EXPECT_STREQ(vlaStateName(1), "RECORDING");
+  EXPECT_STREQ(vlaStateName(2), "PAUSED");
+  EXPECT_STREQ(vlaStateName(4), "ERROR");
+  EXPECT_STREQ(vlaStateName(3), "PLAYING");
+  EXPECT_STREQ(vlaStateName(5), "RESETTING");
+  EXPECT_STREQ(vlaStateName(6), "UNKNOWN");
 }

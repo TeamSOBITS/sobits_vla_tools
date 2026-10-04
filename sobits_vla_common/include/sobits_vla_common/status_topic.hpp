@@ -43,17 +43,19 @@ inline std::string statusTopicFromService(const std::string & service)
   {
     return "";
   }
-  return service.substr(0, service.size() - suffix.size()) + "/record_status";
+  return service.substr(0, service.size() - suffix.size()) + "/status";
 }
 
 // Numbers mirror VlaCommand::Response::STATE_*; kept literal to stay ROS-free.
-inline const char * recordStateName(uint8_t state)
+inline const char * vlaStateName(uint8_t state)
 {
   switch (state) {
     case 0: return "STOPPED";
     case 1: return "RECORDING";
     case 2: return "PAUSED";
+    case 3: return "PLAYING";
     case 4: return "ERROR";
+    case 5: return "RESETTING";
     default: return "UNKNOWN";
   }
 }

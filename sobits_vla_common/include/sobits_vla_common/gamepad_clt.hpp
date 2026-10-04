@@ -32,7 +32,7 @@
 
 #include <sensor_msgs/msg/joy.hpp>
 #include <rcl_interfaces/msg/parameter_type.hpp>
-#include <sobits_interfaces/msg/vla_record_status.hpp>
+#include <sobits_interfaces/msg/vla_status.hpp>
 #include <sobits_interfaces/srv/vla_command.hpp>
 
 #include <rclcpp/rclcpp.hpp>
@@ -50,10 +50,10 @@ private:
   void joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
   void callService(const uint8_t & command);
   void timerCallback();
-  void statusCallback(const sobits_interfaces::msg::VlaRecordStatus::SharedPtr msg);
+  void statusCallback(const sobits_interfaces::msg::VlaStatus::SharedPtr msg);
 
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
-  rclcpp::Subscription<sobits_interfaces::msg::VlaRecordStatus>::SharedPtr status_subscriber_;
+  rclcpp::Subscription<sobits_interfaces::msg::VlaStatus>::SharedPtr status_subscriber_;
   rclcpp::Client<sobits_interfaces::srv::VlaCommand>::SharedPtr service_client_;
   rclcpp::TimerBase::SharedPtr timer_;
 

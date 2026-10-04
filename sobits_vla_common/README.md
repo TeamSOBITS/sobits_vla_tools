@@ -47,7 +47,7 @@ namespaced. Consumers address it by the owner's relative name,
 
 | Node | Advertises | Consumes |
 |---|---|---|
-| `gamepad_clt_node` | — | `joy` (`sensor_msgs/Joy`, robot I/O, absolute via remap); in collection mode also `<recorder>/record_status` (`VlaRecordStatus`) to follow the recorder state (auto-save, terminal calls); `gamepad.command_service` param, e.g. `sobits_vla_deploy/command` or `vla_rosbag_collection/command` |
+| `gamepad_clt_node` | — | `joy` (`sensor_msgs/Joy`, robot I/O, absolute via remap); also `<owner>/status` (`VlaStatus`, both stages) to follow the stage state (auto-save, terminal calls); `gamepad.command_service` param, e.g. `sobits_vla_deploy/command` or `vla_rosbag_collection/command` |
 | `world_reset_node` | `~/reset_world` (`sobits_interfaces/srv/VlaResetWorld`) | robot model/joint topics from the descriptor (absolute) |
 
 ## Outputs
