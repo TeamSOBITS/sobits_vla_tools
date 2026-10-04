@@ -56,8 +56,9 @@ don't compress it.
 
 ## The lerobot seam
 
-`sobits_vla_common/lerobot_adapter.py` is the *only* module allowed to
-import from `lerobot` internals. Every other module — across every package
+`sobits_vla_common/lerobot_adapter.py` (plus `lerobot_compat.py` beside it,
+which holds the version patches) is the *only* module allowed to import from
+`lerobot` internals. Every other module — across every package
 — imports from the adapter, never from `lerobot` directly. This is what
 makes a lerobot version bump a one-file change instead of a repo-wide hunt.
 

@@ -151,7 +151,7 @@ def generate_descriptor_yaml(
         'ee:',
         '  - name: left  # TODO: Verify name',
         '    ee_link: hand_left_end_effector_link  # TODO: Verify ee_link',
-        '    reference_frame: base_footprint  # TODO: Verify reference_frame',
+        '    reference_frame: base_footprint  # TODO: link the arm hangs from (body_lift_link?)',
         '',
         '# ── Excluded joints ──────────────────────────────────────────',
         'excluded_joints:',

@@ -56,7 +56,7 @@ class ObsBuilder:
         self.mobile_base_features = mobile_base_features
         self.camera_names = camera_names
         # (name, source_frame, target_frame), e.g. ('left', 'hand_left_end_effector_link',
-        # 'base_footprint') -- drives the ee.{name}.* action-space state channels.
+        # 'body_lift_link') -- drives the ee.{name}.* action-space state channels.
         self.ee_state_specs = list(ee_state_specs or [])
         if ee_rotation not in ('rotvec', 'rpy'):
             raise ValueError(
