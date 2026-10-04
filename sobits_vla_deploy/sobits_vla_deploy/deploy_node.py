@@ -135,6 +135,9 @@ _SCHEMA = {
     'logging': {
         'enabled': P(False),
         'log_dir': P('/tmp/vla_logs'),
+        # Frame the logged EE pose is measured in: the robot's world-pose
+        # frame, so the logger can compose ee_pose into world coordinates.
+        'ee_frame': P('base_footprint'),
         'scene_config': P(''),
         'scene_preset': P('default'),
     },
@@ -670,6 +673,7 @@ class LeRobotDeployNode(Node):
 
         self._logging_enabled = bool(params.logging.enabled)
         self._log_dir = str(params.logging.log_dir)
+        self._log_ee_frame = str(params.logging.ee_frame)
         self._log_tilt_deg = float(params.task.common.tilt_threshold_deg)
         self._episode_timeout_s = float(params.task.common.episode_timeout_s)
         self._success_settle_s = float(params.task.common.success_settle_s)
@@ -1413,12 +1417,13 @@ class LeRobotDeployNode(Node):
             'y': float(step.get('y.vel', 0.0)) if step else 0.0,
             'theta': float(step.get('theta.vel', 0.0)) if step else 0.0,
         }
-        # Logger takes one EE pose; use the descriptor's first entry.
+        # Logger takes one EE pose (the descriptor's first arm), in the base
+        # frame rather than the descriptor's reference_frame (body_lift_link).
         ee = None
         if self._ee_poses:
             first = self._ee_poses[0]
             ee = self._obs_builder.get_ee_pose(
-                self._tf_buffer, first.target_frame, first.source_frame
+                self._tf_buffer, self._log_ee_frame, first.source_frame
             )
         self._episode_logger.log_step(
             joints=log_joints,
