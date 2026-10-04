@@ -186,8 +186,8 @@ private:
   rclcpp::Publisher<sobits_interfaces::msg::VlaRecordStatus>::SharedPtr record_status_pub_;
   rclcpp::TimerBase::SharedPtr record_status_timer_;
 
-  // Implemented in rosbag_collection_status.cpp. transition() is the only
-  // writer of current_state_ after construction; it also publishes.
+  // Implemented in rosbag_collection_status.cpp. transition() writes the
+  // state, drives the tracker and publishes (saveRosbag() pre-marks STOPPED).
   void publishRecordStatus();
   void publishLocked();
   void transition(uint8_t state, RecordStatus::Event ev, const std::string & detail = "");
