@@ -46,7 +46,7 @@ Each line is one timestep dict with:
   base_speed     — float, sqrt(x^2 + y^2)
   ee_pose        — {x, y, z, roll, pitch, yaw} in the WORLD frame, directly
                    comparable with block_pose/robot_pose (None if TF miss)
-  ee_pose_base   — the same pose in base_footprint, for controller debugging
+  ee_pose_base   — the same pose in logging.ee_frame (base_footprint), for controller debugging
   ee_error       — {dx, dy, dz, dist} relative to block position (None if gz query fails)
   robot_pose     — {x, y, z, roll, pitch, yaw} in world frame from Gazebo
   robot_z_drop   — float, baseline_robot_z - robot_pose.z
@@ -346,7 +346,7 @@ class EpisodeLogger:
         joints_measured: measured joint positions (rad) for tracking error;
                          may be None when unavailable.
         base_vel:        {x, y, theta} commanded base velocity.
-        ee_pose:         [x, y, z, roll, pitch, yaw] in base_footprint, or None.
+        ee_pose:         [x, y, z, roll, pitch, yaw] in logging.ee_frame, or None.
 
         Gazebo poses are read from cache updated by background poller — zero
         blocking latency on the 10 Hz control loop.

@@ -121,6 +121,7 @@ def _create_train_node(context, *args, **kwargs):
     ]
 
 
+# refactor-exempt: launch description, declarative
 def generate_launch_description() -> LaunchDescription:
     """Generate the LaunchDescription for sobits_vla_training."""
     default_config = PathJoinSubstitution(

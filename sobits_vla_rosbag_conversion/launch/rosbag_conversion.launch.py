@@ -38,11 +38,12 @@ from sobits_vla_common.launch.utils import (
     resolve_pixi_env,
 )
 
-# Conversion imports pandas/scipy/matplotlib/rosbags/torch -> shared pixi env;
+# Conversion imports pandas/scipy/rosbags/torch -> shared pixi env;
 # only the accelerator varies, GPU by default. Override with enable_gpu:=false
 _DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
+# refactor-exempt: launch description, declarative
 def generate_launch_description_impl(context, *args, **kwargs):
     conversion_share = get_package_share_directory('sobits_vla_rosbag_conversion')
     collection_share = get_package_share_directory('sobits_vla_rosbag_collection')
@@ -148,6 +149,10 @@ def generate_launch_description_impl(context, *args, **kwargs):
         executable='ros2bag_to_lerobotdataset',
         name='rosbag_conversion_node',
         output='screen',
+        # A pty keeps rcutils/Python line-buffered; launch relays complete lines only,
+        # so progress bars become periodic lines (sobits_vla_rosbag_conversion.progress).
+        emulate_tty=True,
+        additional_env={'SOBITS_VLA_PROGRESS': 'lines'},
         prefix=prefix or None,
         parameters=parameters,
     )

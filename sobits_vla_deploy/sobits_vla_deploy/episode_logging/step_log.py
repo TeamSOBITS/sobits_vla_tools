@@ -296,7 +296,7 @@ class StepLog:
     def _ee_world_and_error(self, ee_pose, robot_pose, block_pose) -> tuple:
         if ee_pose is None or robot_pose is None:
             return None, None
-        # base_footprint -> world: robot_xy + R(yaw) * ee_xy, z offset.
+        # logging.ee_frame (robot base) -> world: robot_xy + R(yaw) * ee_xy, z offset.
         yaw = robot_pose['yaw']
         cos_y, sin_y = math.cos(yaw), math.sin(yaw)
         ee_x_w = robot_pose['x'] + cos_y * ee_pose[0] - sin_y * ee_pose[1]

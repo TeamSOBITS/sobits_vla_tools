@@ -25,6 +25,8 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# refactor-exempt: file over 600 lines, test module
+
 import os
 import sys
 
@@ -34,7 +36,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
-from sobits_vla_deploy.deploy_node import ActionChunkBuffer  # noqa: E402
+from sobits_vla_deploy.deploy_node import ActionChunkBuffer, LeRobotDeployNode  # noqa: E402
 from sobits_vla_deploy.episode_logger import EpisodeLogger  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
 
@@ -115,10 +117,9 @@ class TestActionChunkBufferAggregate:
 
 # --- _to_action_steps tests (the live copy, InferenceEngine) ---
 
-
 def _make_engine(
     joint_features=None, mobile_base_features=None, relative_exclude_features=None,
-    postprocessor=None,
+    postprocessor=None, ee_features=None, model_action_feature_names=None,
 ) -> InferenceEngine:
     """Minimal InferenceEngine with only what _to_action_steps reads set."""
     return InferenceEngine(
@@ -135,13 +136,14 @@ def _make_engine(
         preprocessor=None,
         postprocessor=postprocessor,
         expected_state_dim=None,
-        model_action_feature_names=None,
+        model_action_feature_names=model_action_feature_names,
         model_use_relative_actions=False,
         joint_features=joint_features if joint_features is not None else ['j0', 'j1', 'j2'],
         mobile_base_features=(
             mobile_base_features if mobile_base_features is not None else ['x.vel']
         ),
         relative_exclude_features=relative_exclude_features,
+        ee_features=ee_features,
     )
 
 
@@ -199,6 +201,57 @@ class TestToActionSteps:
         assert steps == []
 
 
+# --- _to_action_steps: ee.* action keys alongside hand joints ---
+
+
+_EE_LEFT_KEYS = ['ee.left.x', 'ee.left.y', 'ee.left.z',
+                 'ee.left.roll', 'ee.left.pitch', 'ee.left.yaw']
+_HAND_JOINTS = ['hand_left_finger_l_mcp_joint', 'hand_left_finger_c_mcp_joint']
+
+
+def _make_ee_engine(model_action_feature_names=None):
+    return _make_engine(
+        joint_features=_HAND_JOINTS,
+        mobile_base_features=[],
+        ee_features=_EE_LEFT_KEYS,
+        model_action_feature_names=model_action_feature_names,
+    )
+
+
+class TestToActionStepsEE:
+
+    def test_dict_input_includes_ee_keys(self):
+        engine = _make_ee_engine()
+        raw = {k: float(i) for i, k in enumerate(_HAND_JOINTS + _EE_LEFT_KEYS)}
+        raw['extra'] = 99.0
+        steps = engine._to_action_steps(raw)
+        assert len(steps) == 1
+        for k in _HAND_JOINTS + _EE_LEFT_KEYS:
+            assert steps[0][k] == raw[k]
+        assert 'extra' not in steps[0]
+
+    def test_1d_numpy_with_model_names(self):
+        names = _HAND_JOINTS + _EE_LEFT_KEYS
+        engine = _make_ee_engine(model_action_feature_names=names)
+        raw = np.array(list(range(len(names))), dtype=np.float32)
+        steps = engine._to_action_steps(raw)
+        assert len(steps) == 1
+        for i, name in enumerate(names):
+            assert steps[0][name] == float(i)
+
+    def test_2d_numpy_chunk_with_model_names(self):
+        names = _HAND_JOINTS + _EE_LEFT_KEYS
+        engine = _make_ee_engine(model_action_feature_names=names)
+        raw = np.stack([
+            np.arange(len(names), dtype=np.float32),
+            np.arange(len(names), dtype=np.float32) * 2,
+        ])
+        steps = engine._to_action_steps(raw)
+        assert len(steps) == 2
+        assert steps[0]['ee.left.x'] == float(len(_HAND_JOINTS))
+        assert steps[1]['ee.left.x'] == float(len(_HAND_JOINTS)) * 2
+
+
 # --- _apply_manual_delta tests ---
 
 
@@ -232,6 +285,20 @@ class TestApplyManualDelta:
         )
         assert abs(steps[0]['j0'] - 1.1) < 1e-9
         assert steps[0]['hand_left_finger_l_mcp_joint'] == 0.3
+
+    def test_ee_keys_never_delta_converted(self):
+        # Per-component ee.* addition is wrong for rotations; only the
+        # checkpoint's SE(3) EE step may compose EE actions.
+        engine = _make_engine(joint_features=['j0'], mobile_base_features=[], ee_features=[
+            'ee.left.x', 'ee.left.roll',
+        ])
+        steps = [{'j0': 0.1, 'ee.left.x': 0.02, 'ee.left.roll': -0.01}]
+        engine._apply_manual_delta(
+            steps, state_vector={'j0': 1.0, 'ee.left.x': 0.50, 'ee.left.roll': 0.10},
+        )
+        assert abs(steps[0]['j0'] - 1.1) < 1e-9
+        assert steps[0]['ee.left.x'] == 0.02
+        assert steps[0]['ee.left.roll'] == -0.01
 
     def test_noop_when_postprocessor_has_absolute_step(self):
         try:
@@ -330,7 +397,6 @@ class TestActionInterpolator:
 
 
 # --- EpisodeLogger.evaluate_termination ---
-
 
 def _make_logger(tmp_path, **kwargs):
     """sim_enabled=False skips the gz poller thread and blocking begin_episode reads."""
@@ -499,3 +565,88 @@ class TestEvaluateTerminationPlace:
         _set_poses(logger, block=_pose(x=9.0, y=9.0, z=0.0))
         outcome = logger.evaluate_termination(elapsed_sim_s=50.0)  # under the 60s timeout
         assert outcome is None
+
+
+class TestCheckNoDeprecatedExcludeEEPoses:
+    """Pure staticmethod -- no Node instance needed."""
+
+    def test_old_key_set_raises(self):
+        with pytest.raises(ValueError, match='robot.exclude.ee_poses was renamed'):
+            LeRobotDeployNode._check_no_deprecated_exclude_ee_poses(['right'])
+
+    def test_old_key_empty_is_allowed(self):
+        LeRobotDeployNode._check_no_deprecated_exclude_ee_poses([])
+
+
+# --- _refresh_and_engage_servo: unit-tested against a stub node ---
+
+
+class _StubLogger:
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, msg):
+        self.warnings.append(msg)
+
+
+class _StubObsBuilder:
+    def __init__(self, refresh_ok, state_vector=None):
+        self._refresh_ok = refresh_ok
+        self.state_vector = state_vector or {}
+        self.refresh_calls = 0
+
+    def refresh_ee_state(self, tf_buffer):
+        self.refresh_calls += 1
+        return self._refresh_ok
+
+
+class _StubServoTargets:
+    def __init__(self):
+        self.engage_calls = []
+        self.disable_calls = 0
+
+    def engage(self, state_vector):
+        self.engage_calls.append(state_vector)
+        return bool(state_vector)
+
+    def disable_tracking(self):
+        self.disable_calls += 1
+
+
+class _StubNode:
+    """Bare stand-in exposing only what _refresh_and_engage_servo reads."""
+
+    def __init__(self, obs_builder, servo_targets):
+        self._obs_builder = obs_builder
+        self._tf_buffer = object()
+        self._servo_targets = servo_targets
+        self._logger = _StubLogger()
+
+    def get_logger(self):
+        return self._logger
+
+
+class TestRefreshAndEngageServo:
+
+    def test_refresh_failure_disables_and_never_engages(self):
+        obs_builder = _StubObsBuilder(refresh_ok=False, state_vector={'ee.left.x': 1.0})
+        servo_targets = _StubServoTargets()
+        node = _StubNode(obs_builder, servo_targets)
+
+        LeRobotDeployNode._refresh_and_engage_servo(node)
+
+        assert obs_builder.refresh_calls == 1
+        assert servo_targets.disable_calls == 1
+        assert servo_targets.engage_calls == []  # never seeded from stale state
+        assert node._logger.warnings  # warns about the failed refresh
+
+    def test_refresh_success_engages_with_state_vector(self):
+        state = {'ee.left.x': 0.5}
+        obs_builder = _StubObsBuilder(refresh_ok=True, state_vector=state)
+        servo_targets = _StubServoTargets()
+        node = _StubNode(obs_builder, servo_targets)
+
+        LeRobotDeployNode._refresh_and_engage_servo(node)
+
+        assert servo_targets.engage_calls == [state]
+        assert servo_targets.disable_calls == 0

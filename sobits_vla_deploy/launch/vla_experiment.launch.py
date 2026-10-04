@@ -75,7 +75,7 @@ os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
 _DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
-def _setup(context, *args, **kwargs):
+def _setup(context, *args, **kwargs):  # refactor-exempt: launch description, declarative
     from ament_index_python.packages import get_package_share_directory
 
     deploy_config = LaunchConfiguration('deploy_config').perform(context).strip()
@@ -220,6 +220,7 @@ def _setup(context, *args, **kwargs):
     return actions
 
 
+# refactor-exempt: launch description, declarative
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         DeclareLaunchArgument(

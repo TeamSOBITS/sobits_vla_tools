@@ -30,7 +30,7 @@
 from pathlib import Path
 
 from rosbags.highlevel import AnyReader
-from tqdm import tqdm
+from sobits_vla_rosbag_conversion.progress import progress
 
 
 class BagReader:
@@ -48,7 +48,7 @@ class BagReader:
             missing = wanted_topics - available
             return missing
 
-    def read_topic_series(
+    def read_topic_series(  # refactor-exempt: bag read loop with per-topic branches
         self,
         wanted_topics: set,
         topic_to_cam: dict,
@@ -56,7 +56,7 @@ class BagReader:
         cmd_vel_topic: str,
         odom_topic: str,
         joint_states_topic: str,
-        ee_pose_enabled: bool,
+        tf_enabled: bool,
         has_mobile_base: bool,
         has_cmd_vel_y: bool,
         has_cmd_vel_z: bool,
@@ -72,9 +72,9 @@ class BagReader:
         with AnyReader([self.bag_path]) as reader:
             connections = [c for c in reader.connections if c.topic in wanted_topics]
             total = sum(getattr(c, 'msgcount', 0) for c in connections) or None
-            msg_iter = tqdm(
+            msg_iter = progress(
                 reader.messages(connections=connections), total=total,
-                desc='  reading bag', unit='msg', disable=None, leave=False,
+                desc='  reading bag', unit='msg', leave=False,
             )
             for connection, timestamp, rawdata in msg_iter:
                 topic = connection.topic
@@ -91,7 +91,7 @@ class BagReader:
                         joint_vel = {}
                     joint_states_series.append((t_sec, joint_pos, joint_vel))
 
-                elif ee_pose_enabled and topic in ('/tf', '/tf_static'):
+                elif tf_enabled and topic in ('/tf', '/tf_static'):
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     tf_messages.append((t_bag, msg, topic))
 

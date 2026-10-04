@@ -25,14 +25,16 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# refactor-exempt: file over 600 lines, per-policy checkpoint handling; split is a follow-up
+
 from dataclasses import dataclass
 import gc
 from importlib import import_module
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
-from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES
+from sobits_vla_common.robot_descriptor import BASE_KEY_ALIASES, ee_rotation_from_names
 import torch
 
 # LeRobot imports (via the single seam — see lerobot_adapter.py)
@@ -49,6 +51,18 @@ except ImportError:
     RTCConfig = None
     RTCAttentionSchedule = None
     _RTC_AVAILABLE = False
+
+# Importing registers the sobits EE steps so serialized pipelines deserialize them.
+try:
+    from sobits_vla_common.ee_relative_processor import (
+        EEAbsoluteActionsProcessorStep, EERelativeActionsProcessorStep,
+        reconnect_ee_relative_steps,
+    )
+    _EE_STEPS_AVAILABLE = True
+except ImportError:
+    EEAbsoluteActionsProcessorStep = None
+    EERelativeActionsProcessorStep = None
+    _EE_STEPS_AVAILABLE = False
 
 
 def _registry_flag(policy_class_path: str, index: int, default: bool) -> bool:
@@ -90,6 +104,88 @@ def _state_dim_from_preprocessor(preprocessor) -> Optional[int]:
     return None
 
 
+def _find_step(pipeline, step_cls) -> Optional[Any]:
+    if pipeline is None or step_cls is None:
+        return None
+    return next((s for s in getattr(pipeline, 'steps', []) if isinstance(s, step_cls)), None)
+
+
+def _dataset_action_names(ds_meta) -> Optional[List[str]]:
+    """features.action.names from LeRobotDatasetMetadata, or None."""
+    try:
+        names = ds_meta.features['action']['names']
+    except Exception:
+        return None
+    if isinstance(names, dict):
+        names = next(iter(names.values()), None)
+    return [str(n) for n in names] if names else None
+
+
+def _resolve_action_names(
+    config_names: Optional[List[str]],
+    preprocessor,
+    dataset_names: Optional[List[str]],
+    log: Callable[[str], None] = print,
+) -> Optional[List[str]]:
+    """
+    Model action names: policy config, else the EE step's, else the dataset's.
+
+    SmolVLA/ACT configs carry no action_feature_names; without a fallback EE deploy can't map
+    dims. The dataset fallback applies only to EE datasets so joint-mode deploys keep their
+    positional mapping.
+    """
+    if config_names:
+        return list(config_names)
+    rel = _find_step(preprocessor, EERelativeActionsProcessorStep)
+    if rel is not None and rel.action_names:
+        log('Model action names taken from the EE relative processor step.')
+        return list(rel.action_names)
+    if dataset_names and any(n.startswith('ee.') for n in dataset_names):
+        log('Model action names taken from the dataset features.action.names.')
+        return list(dataset_names)
+    return None
+
+
+def _check_ee_relative(
+    policy_config, preprocessor, postprocessor, action_names: Optional[List[str]],
+) -> bool:
+    """
+    Refuse EE relative setups deploy can't compose; return whether the EE step pair is active.
+
+    Per-component (LeRobot) relative on ee.* subtracts rotations axis by axis -- never valid.
+    """
+    ee_names = [n for n in (action_names or []) if n.startswith('ee.')]
+    if ee_names and getattr(policy_config, 'use_relative_actions', False):
+        # Same token match as LeRobot's RelativeActionsProcessorStep._build_mask.
+        tokens = [str(t).lower() for t in
+                  (getattr(policy_config, 'relative_exclude_joints', None) or []) if t]
+        uncovered = [n for n in ee_names
+                     if not any(t == n.lower() or t in n.lower() for t in tokens)]
+        if uncovered:
+            raise RuntimeError(
+                'Checkpoint uses LeRobot per-component use_relative_actions on EE '
+                'features {} (not in relative_exclude_joints) -- rotation deltas '
+                'are invalid; retrain with robot.ee_relative_actions.'.format(uncovered))
+
+    rel = _find_step(preprocessor, EERelativeActionsProcessorStep)
+    ab = _find_step(postprocessor, EEAbsoluteActionsProcessorStep)
+    rel_on = rel is not None and rel.enabled
+    ab_on = ab is not None and ab.enabled
+    if not (rel_on or ab_on):
+        return False
+    if preprocessor is None:
+        raise RuntimeError(
+            'Checkpoint has an EE relative action step but no preprocessor was '
+            'built -- the observation pose (T_obs) can never be cached, so '
+            'relative EE actions cannot be composed. Refusing to run.')
+    if not (rel_on and ab_on) or ab.relative_step is not rel:
+        raise RuntimeError(
+            'Checkpoint EE relative/absolute processor steps are unpaired '
+            '(pre: {}, post: {}) -- relative EE actions would be executed as '
+            'absolute poses. Refusing to run.'.format(rel_on, ab_on))
+    return True
+
+
 @dataclass(frozen=True)
 class PolicyBundle:
     """Result of PolicyLoader.load_policy(); fields replace the old 7-key dict."""
@@ -98,6 +194,9 @@ class PolicyBundle:
     rtc_enabled: bool
     model_action_feature_names: Optional[List[str]]
     model_use_relative_actions: bool
+    # SE(3) EE step pair active in the pipelines; ee rotation of the action names ('' if none).
+    model_ee_relative: bool
+    model_ee_rotation: str
     expected_state_dim: Optional[int]
     preprocessor: Any
     postprocessor: Any
@@ -370,8 +469,12 @@ class PolicyLoader:
         except Exception:
             return False
 
+    # refactor-exempt: ordered checkpoint load with per-policy branches; split is a follow-up
     def load_policy(
-        self, joint_features: List[str], mobile_base_features: List[str]
+        self,
+        joint_features: List[str],
+        mobile_base_features: List[str],
+        ee_features: Optional[List[str]] = None,
     ) -> PolicyBundle:
         module_path, class_name = self.policy_class_path.rsplit('.', 1)
         policy_module = import_module(module_path)
@@ -556,45 +659,13 @@ class PolicyLoader:
                 '(base_x, base_y, base_theta) may be incorrectly delta-converted.'
             )
 
-        if model_action_feature_names:
-            self.log_info(
-                'Model action_feature_names: {}'.format(
-                    model_action_feature_names
-                )
-            )
-            yaml_features = joint_features + mobile_base_features
-            _alias_rev = {v: k for k, v in self._BASE_KEY_ALIASES.items()}
-            model_names_set = set(model_action_feature_names)
-            missing = [
-                f
-                for f in yaml_features
-                if f not in model_names_set and _alias_rev.get(f) not in model_names_set
-            ]
-            wired = set(yaml_features) | {
-                _alias_rev.get(f, f) for f in yaml_features
-            }
-            unknown = [
-                f for f in model_action_feature_names if f not in wired
-            ]
-            if missing:
-                raise RuntimeError(
-                    'Deploy joint names do not match model action_feature_names — '
-                    'zeros would be inserted at wrong positions causing bad actions. '
-                    'Missing from model: {}. Update your deploy_config YAML.'.format(
-                        missing
-                    )
-                )
-            if unknown:
-                self.log_warn(
-                    'Model outputs joints not wired to any controller (ignored): '
-                    '{}'.format(unknown)
-                )
-
         if hasattr(policy, 'config') and policy.config is not None:
             _policy_cfg = policy.config
             _max_action_dim = getattr(_policy_cfg, 'max_action_dim', None)
             _max_state_dim = getattr(_policy_cfg, 'max_state_dim', None)
-            _actual_action_dim = len(joint_features + mobile_base_features)
+            _actual_action_dim = len(
+                joint_features + mobile_base_features + (ee_features or [])
+            )
             _actual_state_dim = _actual_action_dim
             if _max_action_dim is not None and _max_action_dim < _actual_action_dim:
                 raise RuntimeError(
@@ -613,6 +684,7 @@ class PolicyLoader:
 
         preprocessor = None
         postprocessor = None
+        _ds_meta = None
         if _LEROBOT_AVAILABLE:
             processor_kwargs: Dict[str, Any] = {}
             is_groot = 'groot' in self.policy_class_path.lower()
@@ -643,6 +715,9 @@ class PolicyLoader:
                 preprocessor, postprocessor = make_pre_post_processors(
                     policy.config, self.model_repo_id, **processor_kwargs
                 )
+                if _EE_STEPS_AVAILABLE:
+                    # Deserialized EE absolute step has no link to its cached-state twin.
+                    reconnect_ee_relative_steps(preprocessor, postprocessor)
             except Exception as exc:
                 # If the repo ships serialized pipelines, running without them executes
                 # NORMALIZED [-1, 1] actions as radians — refuse instead of degrading silently.
@@ -688,6 +763,55 @@ class PolicyLoader:
             except ImportError:
                 pass
 
+        model_action_feature_names = _resolve_action_names(
+            model_action_feature_names, preprocessor, _dataset_action_names(_ds_meta),
+            log=self.log_info,
+        )
+        model_ee_relative = _check_ee_relative(
+            getattr(policy, 'config', None), preprocessor, postprocessor,
+            model_action_feature_names,
+        )
+        model_ee_rotation = ee_rotation_from_names(model_action_feature_names or [])
+
+        if model_action_feature_names:
+            self.log_info(
+                'Model action_feature_names: {}'.format(
+                    model_action_feature_names
+                )
+            )
+            yaml_features = joint_features + mobile_base_features + (ee_features or [])
+            _alias_rev = {v: k for k, v in self._BASE_KEY_ALIASES.items()}
+            model_names_set = set(model_action_feature_names)
+            missing = [
+                f
+                for f in yaml_features
+                if f not in model_names_set and _alias_rev.get(f) not in model_names_set
+            ]
+            wired = set(yaml_features) | {
+                _alias_rev.get(f, f) for f in yaml_features
+            }
+            unknown = [
+                f for f in model_action_feature_names if f not in wired
+            ]
+            if any(f.startswith('ee.') for f in missing):
+                raise RuntimeError(
+                    'Deploy EE features {} not emitted by the model (its EE rotation: '
+                    '{!r}) -- check model.ee_rotation.'.format(missing, model_ee_rotation)
+                )
+            if missing:
+                raise RuntimeError(
+                    'Deploy joint names do not match model action_feature_names — '
+                    'zeros would be inserted at wrong positions causing bad actions. '
+                    'Missing from model: {}. Update your deploy_config YAML.'.format(
+                        missing
+                    )
+                )
+            if unknown:
+                self.log_warn(
+                    'Model outputs joints not wired to any controller (ignored): '
+                    '{}'.format(unknown)
+                )
+
         expected_state_dim = None
         _state_dim_source = 'disabled'
         if preprocessor is not None:
@@ -720,6 +844,8 @@ class PolicyLoader:
             rtc_enabled=self.rtc_enabled,
             model_action_feature_names=model_action_feature_names,
             model_use_relative_actions=model_relative,
+            model_ee_relative=model_ee_relative,
+            model_ee_rotation=model_ee_rotation,
             expected_state_dim=expected_state_dim,
             preprocessor=preprocessor,
             postprocessor=postprocessor,

@@ -162,6 +162,10 @@ def test_conversion_golden(tmp_path):
     assert ep['skipped_static'] == 0
     assert ep['skipped_tf'] == 0
     assert ep['skipped_img_decode'] == 0
+    assert stats['action_convention'] == {'action_mode': 'absolute'}
+
+    sidecar = json.loads((ds_root / 'meta' / 'sobits_vla_info.json').read_text())
+    assert sidecar['action_convention'] == {'action_mode': 'absolute'}
 
     import pandas as pd
 

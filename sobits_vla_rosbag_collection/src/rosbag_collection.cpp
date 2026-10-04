@@ -25,6 +25,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+// refactor-exempt: file over 600 lines, recorder node; split is a follow-up
+
 #include "sobits_vla_rosbag_collection/rosbag_collection.hpp"
 
 #include <algorithm>
@@ -40,6 +42,7 @@
 #include "rosbag2_cpp/writer.hpp"
 #include "sobits_vla_rosbag_collection/bag_metadata_manager.hpp"
 #include "sobits_vla_rosbag_collection/episode_lifecycle.hpp"
+#include "sobits_vla_rosbag_collection/image_header_size.hpp"
 #include "sobits_vla_rosbag_collection/recording_monitor.hpp"
 #include "sobits_vla_rosbag_collection/robot_descriptor_loader.hpp"
 #include "sobits_vla_rosbag_collection/topic_builder.hpp"
@@ -66,21 +69,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 
   declareAndReadParameters();
 
-  for (const auto & sensor_type : robot_info_.sensor_types) {
-    const auto & info_topics = robot_info_.sensor_info_topics[sensor_type];
-    for (const auto & cam_info_topic : info_topics) {
-      if (cam_info_topic.empty()) {continue;}
-      RCLCPP_INFO(this->get_logger(), "Subscribing to sniff dimensions: %s",
-          cam_info_topic.c_str());
-      camera_info_subs_[cam_info_topic] = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-          cam_info_topic,
-          rclcpp::QoS(1).best_effort(),
-        [this, cam_info_topic](const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
-          this->cameraInfoCallback(msg, cam_info_topic);
-          }
-      );
-    }
-  }
+  subscribeCameraDimensions();
 
   current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
   previous_state_ = current_state_;
@@ -713,16 +702,94 @@ void RosbagCollection::requestWorldReset()
     });
 }
 
+void RosbagCollection::subscribeCameraDimensions()
+{
+  for (const auto & sensor_type : robot_info_.sensor_types) {
+    const auto & names = robot_info_.sensor_names[sensor_type];
+    const auto & info_topics = robot_info_.sensor_info_topics[sensor_type];
+    const auto & comp_topics = robot_info_.sensor_compressed_topics[sensor_type];
+    // The descriptor loader skips empty raw topics, so index them only when aligned.
+    const auto & raw_topics = robot_info_.sensor_topics[sensor_type];
+    const bool raw_aligned = raw_topics.size() == names.size();
+
+    for (size_t i = 0; i < names.size(); ++i) {
+      const std::string cam = names[i];
+      const std::string info_topic = i < info_topics.size() ? info_topics[i] : "";
+      const std::string raw_topic = raw_aligned ? raw_topics[i] : "";
+      const std::string comp_topic = i < comp_topics.size() ? comp_topics[i] : "";
+      camera_info_topic_[cam] = info_topic;
+
+      if (!info_topic.empty()) {
+        info_topic_cameras_[info_topic].push_back(cam);
+        if (camera_info_subs_.count(info_topic) == 0) {
+          RCLCPP_INFO(this->get_logger(), "Subscribing to sniff dimensions: %s",
+              info_topic.c_str());
+          camera_info_subs_[info_topic] =
+            this->create_subscription<sensor_msgs::msg::CameraInfo>(
+            info_topic, rclcpp::QoS(1).best_effort(),
+            [this, info_topic](const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+              this->cameraInfoCallback(msg, info_topic);
+            });
+        }
+      }
+
+      // Fallback: first raw or compressed frame gives the size if CameraInfo never shows.
+      const auto qos = rclcpp::SensorDataQoS().keep_last(1);
+      if (!raw_topic.empty()) {
+        camera_image_subs_[cam].push_back(this->create_subscription<sensor_msgs::msg::Image>(
+            raw_topic, qos,
+            [this, cam, raw_topic](const sensor_msgs::msg::Image::SharedPtr msg) {
+              this->imageSizeCallback(cam, raw_topic, msg->width, msg->height);
+            }));
+      }
+      if (!comp_topic.empty()) {
+        camera_image_subs_[cam].push_back(
+          this->create_subscription<sensor_msgs::msg::CompressedImage>(
+            comp_topic, qos,
+            [this, cam, comp_topic](const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
+              uint32_t width = 0;
+              uint32_t height = 0;
+              if (compressedImageSize(msg->data, width, height)) {
+                this->imageSizeCallback(cam, comp_topic, width, height);
+              }
+            }));
+      }
+    }
+  }
+}
+
 void RosbagCollection::cameraInfoCallback(
   const sensor_msgs::msg::CameraInfo::SharedPtr msg,
   const std::string topic_name)
 {
-  if (camera_dimensions_.find(topic_name) == camera_dimensions_.end()) {
-    camera_dimensions_[topic_name] = {msg->width, msg->height};
-    RCLCPP_INFO(this->get_logger(), "Captured dimensions for %s: %dx%d", topic_name.c_str(),
-        msg->width, msg->height);
-    camera_info_subs_.erase(topic_name);
+  // CameraInfo wins over an image-derived size captured earlier.
+  for (const auto & cam : info_topic_cameras_[topic_name]) {
+    camera_dimensions_[cam] = {msg->width, msg->height, topic_name, "camera_info"};
+    dropImageSizeSubs(cam);
   }
+  RCLCPP_INFO(this->get_logger(), "Captured dimensions for %s: %dx%d", topic_name.c_str(),
+      msg->width, msg->height);
+  camera_info_subs_.erase(topic_name);
+}
+
+void RosbagCollection::imageSizeCallback(
+  const std::string & camera_name, const std::string & topic_name,
+  uint32_t width, uint32_t height)
+{
+  if (camera_dimensions_.count(camera_name) == 0) {
+    camera_dimensions_[camera_name] = {width, height, topic_name, "image"};
+    const std::string & info_topic = camera_info_topic_[camera_name];
+    RCLCPP_INFO(this->get_logger(),
+        "No CameraInfo on '%s' yet; using %ux%u from image topic %s for camera '%s'",
+        info_topic.empty() ? "<none>" : info_topic.c_str(), width, height,
+        topic_name.c_str(), camera_name.c_str());
+  }
+  dropImageSizeSubs(camera_name);
+}
+
+void RosbagCollection::dropImageSizeSubs(const std::string & camera_name)
+{
+  camera_image_subs_.erase(camera_name);
 }
 
 }  // namespace sobits_vla

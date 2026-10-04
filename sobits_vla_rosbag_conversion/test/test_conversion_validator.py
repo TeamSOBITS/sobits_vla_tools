@@ -119,6 +119,16 @@ class TestSensorsMatch:
         b = self._sensors(camera=cam)
         assert not sensors_match(a, b)
 
+    def test_property_provenance_keys_ignored(self):
+        # topic/source vary per session (CameraInfo vs first image frame); only size matters.
+        a = self._sensors()
+        cam = {**self._sensors()['camera'],
+               'properties': {'head_camera': {
+                   'width': 64, 'height': 48,
+                   'topic': '/head/image_raw/compressed', 'source': 'image'}}}
+        b = self._sensors(camera=cam)
+        assert sensors_match(a, b)
+
 
 class TestResolveCameras:
 
@@ -196,3 +206,60 @@ class TestResolveCameras:
 
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))
+
+
+class _Conn:
+    def __init__(self, topic):
+        self.topic = topic
+        self.msgtype = 'x'
+
+
+class _FakeReader:
+    """AnyReader stand-in: rosbags scans every message when connections is empty."""
+
+    def __init__(self, topics, calls):
+        self.connections = [_Conn(t) for t in topics]
+        self._calls = calls
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def messages(self, connections=()):
+        self._calls.append(list(connections))
+        if not connections:
+            raise AssertionError('empty connection filter would scan the whole bag')
+        return iter(())
+
+
+class TestSniffSkipsBagsWithoutTopic:
+
+    def _patch_reader(self, monkeypatch, topics, calls):
+        from sobits_vla_rosbag_conversion.pipeline import validator
+        monkeypatch.setattr(
+            validator, 'AnyReader', lambda paths: _FakeReader(topics, calls))
+        return validator
+
+    def test_camera_info_pass_skips_bags_lacking_the_topic(self, monkeypatch):
+        calls = []
+        opened = []
+        from sobits_vla_rosbag_conversion.pipeline import validator
+        monkeypatch.setattr(
+            validator, 'AnyReader',
+            lambda paths: (opened.append(paths) or _FakeReader(['/cam/image_raw'], calls)))
+        shapes, unresolved = {}, {'cam'}
+        validator._fill_shapes_from_camera_info(
+            shapes, unresolved, {'cam': '/cam/camera_info'}, [f'/b{i}' for i in range(10)])
+        assert calls == []  # never asked to iterate messages
+        assert len(opened) == validator.CAMERA_INFO_MISS_LIMIT  # gives up, not all 10 bags
+        assert unresolved == {'cam'} and shapes == {}
+
+    def test_image_pass_skips_bags_lacking_the_topic(self, monkeypatch):
+        calls = []
+        v = self._patch_reader(monkeypatch, ['/other'], calls)
+        shapes, unresolved = {}, {'cam'}
+        v._fill_shapes_from_images(
+            shapes, unresolved, {'cam': '/cam/image_raw'}, ['/b1'], lambda m: None)
+        assert calls == []

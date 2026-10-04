@@ -85,7 +85,6 @@ ffmpeg = ">=7.1,<9"        # <9 keeps sonames matching a shipped core*.so
 pytest = ">=7"             # lerobot seam tests (sobits_vla_common) run here
 
 # sobits_vla_visualization — no torch of its own, but it shares this env now.
-# pandas/matplotlib also cover sobits_vla_rosbag_conversion's plotting.
 pandas = ">=2.2.2,<2.4"
 matplotlib = "*"
 # sobits_vla_rosbag_conversion — pandas accelerators; scipy/pyarrow/pillow

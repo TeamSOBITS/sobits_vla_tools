@@ -26,6 +26,8 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# refactor-exempt: file over 600 lines, node wiring; play/servo/param modules are a follow-up
+
 from __future__ import annotations
 
 import os
@@ -41,7 +43,9 @@ import rclpy  # noqa: E402
 from rclpy.callback_groups import ReentrantCallbackGroup  # noqa: E402
 from rclpy.executors import MultiThreadedExecutor  # noqa: E402
 from rclpy.node import Node  # noqa: E402
-from rclpy.qos import QoSProfile, ReliabilityPolicy  # noqa: E402
+from rclpy.qos import (  # noqa: E402
+    DurabilityPolicy, QoSProfile, ReliabilityPolicy,
+)
 from sensor_msgs.msg import CompressedImage, Image, JointState, Joy  # noqa: E402
 from sobits_interfaces.srv import VlaCommand, VlaResetWorld, VlaUpdateTask  # noqa: E402
 from sobits_vla_common import runtime_deps  # noqa: E402
@@ -50,13 +54,19 @@ from sobits_vla_common.lerobot_compat import apply_deploy_patches  # noqa: E402
 from sobits_vla_common.param_schema import (  # noqa: E402
     declare_from_schema, P, read_schema, Template,
 )
+from sobits_vla_common.robot_descriptor import (  # noqa: E402
+    EE_ROTATION_AXES,
+)
 from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.action_executor import ActionExecutor  # noqa: E402
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
+from sobits_vla_deploy.ee_control import resolve_ee_control  # noqa: E402
 from sobits_vla_deploy.episode_logger import EpisodeLogger  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
+from sobits_vla_deploy.model_checks import check_action_space_matches_model  # noqa: E402
 from sobits_vla_deploy.obs_builder import ObsBuilder  # noqa: E402
 from sobits_vla_deploy.policy_loader import PolicyLoader  # noqa: E402
+from sobits_vla_deploy.servo_target_publisher import ServoTargetPublisher  # noqa: E402
 from std_msgs.msg import Bool, String  # noqa: E402
 import tf2_ros  # noqa: E402
 from trajectory_msgs.msg import JointTrajectory  # noqa: E402
@@ -75,6 +85,24 @@ _SCHEMA = {
         'use_relative_actions': P(False),
         'default_task_label': P(''),
         'dataset_repo_id': P(''),
+        # 'joint': arm groups command joint trajectories directly (default).
+        # 'ee': the policy emits absolute ee.{arm}.* poses instead of arm
+        # joint angles, streamed to the sobits_teleop servo bridge; arm
+        # groups must be excluded via robot.exclude.groups in that mode.
+        'action_space': P('joint'),
+        # EE rotation of the checkpoint's ee.* features: rotvec (rx,ry,rz) or
+        # rpy (roll,pitch,yaw); quat is refused -- ObsBuilder/servo can't emit it.
+        'ee_rotation': P('rotvec'),
+    },
+    'ee_servo': {
+        # 0.3 m/s at the default 10 Hz control_hz -- caps how far one control
+        # step may move a servo target, independent of the policy's own output.
+        'max_lin_step_m': P(0.03),
+        'max_ang_step_rad': P(0.15),
+        # Max lead of a target over the measured EE pose; a stalled arm must
+        # not bank a chunk's worth of steps and lunge when it frees up.
+        'max_lag_m': P(0.10),
+        'max_lag_rad': P(0.5),
     },
     'runtime': {
         'control_hz': P(10.0),
@@ -111,6 +139,9 @@ _SCHEMA = {
     'logging': {
         'enabled': P(False),
         'log_dir': P('/tmp/vla_logs'),
+        # Frame the logged EE pose is measured in: the robot's world-pose
+        # frame, so the logger can compose ee_pose into world coordinates.
+        'ee_frame': P('base_footprint'),
         'scene_config': P(''),
         'scene_preset': P('default'),
     },
@@ -222,12 +253,16 @@ class LeRobotDeployNode(Node):
             logger=self.get_logger(),
         )
 
-        bundle = loader.load_policy(self._joint_features, self._mobile_base_features)
+        bundle = loader.load_policy(
+            self._joint_features, self._mobile_base_features, self._ee_features
+        )
 
         self._policy = bundle.policy
         self._rtc_enabled = bundle.rtc_enabled
         self._model_action_feature_names = bundle.model_action_feature_names
         self._model_use_relative_actions = bundle.model_use_relative_actions
+        self._model_ee_relative = bundle.model_ee_relative
+        self._model_ee_rotation = bundle.model_ee_rotation
         self._expected_state_dim = bundle.expected_state_dim
         self._preprocessor = bundle.preprocessor
         self._postprocessor = bundle.postprocessor
@@ -247,12 +282,25 @@ class LeRobotDeployNode(Node):
                     self._model_use_relative_actions,
                 )
             )
+        self._check_action_space_matches_model()
+
+    def _check_action_space_matches_model(self) -> None:
+        check_action_space_matches_model(
+            action_space=self._action_space, ee_rotation=self._ee_rotation,
+            rtc_enabled=self._rtc_enabled, model_repo_id=self._model_repo_id,
+            model_action_feature_names=self._model_action_feature_names,
+            model_ee_rotation=self._model_ee_rotation,
+            model_ee_relative=self._model_ee_relative,
+            model_use_relative_actions=self._model_use_relative_actions,
+        )
 
     def _init_collaborators(self) -> None:
         self._obs_builder = ObsBuilder(
             joint_features=self._joint_features,
             mobile_base_features=self._mobile_base_features,
             camera_names=self._camera_names,
+            ee_state_specs=self._ee_state_specs,
+            ee_rotation=self._ee_rotation,
         )
 
         self._play_enabled = False
@@ -285,6 +333,7 @@ class LeRobotDeployNode(Node):
             joint_features=self._joint_features,
             mobile_base_features=self._mobile_base_features,
             relative_exclude_features=self._relative_exclude_features,
+            ee_features=self._ee_features,
             logger=self.get_logger(),
         )
         self._inference_engine.update_task_label(self._task_label)
@@ -409,12 +458,70 @@ class LeRobotDeployNode(Node):
 
         self.add_on_set_parameters_callback(self._on_set_parameters)
 
+        self._init_servo_target_publisher()
+
         self._inference_engine.start(
             obs_builder=self._obs_builder,
             chunk_buffer=self._chunk_buffer,
             tf_buffer=self._tf_buffer,
-            ee_poses=[(ee.name, ee.source_frame, ee.target_frame) for ee in self._ee_poses],
         )
+
+    def _init_servo_target_publisher(self) -> None:
+        """Wire the sobits_teleop servo bridge interface for model.action_space=='ee'."""
+        self._servo_targets: Optional[ServoTargetPublisher] = None
+        if self._action_space != 'ee':
+            return
+
+        enable_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        enable_publishers = {
+            spec.ee_pose: self.create_publisher(
+                Bool, spec.enable_topic, enable_qos, callback_group=self._cb_group,
+            )
+            for spec in self._ee_control
+        }
+        tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+        # Servo TF parent = the descriptor's EE reference_frame, so observed
+        # and commanded poses share one frame. One parent serves every arm.
+        parent_frames = sorted({e.target_frame for e in self._ee_poses})
+        if len(parent_frames) != 1:
+            raise RuntimeError(
+                'EE control needs every descriptor ee entry to share one '
+                f'reference_frame, got {parent_frames}.'
+            )
+
+        self._servo_targets = ServoTargetPublisher(
+            arms=self._ee_control,
+            parent_frame=parent_frames[0],
+            tf_broadcaster=tf_broadcaster,
+            enable_publishers=enable_publishers,
+            max_lin_step_m=self._ee_max_lin_step_m,
+            max_ang_step_rad=self._ee_max_ang_step_rad,
+            max_lag_m=self._ee_max_lag_m,
+            max_lag_rad=self._ee_max_lag_rad,
+            rotation=self._ee_rotation,
+            logger=self.get_logger(),
+        )
+
+    def _refresh_and_engage_servo(self) -> None:
+        """
+        Refresh EE state via TF, then engage the servo targets.
+
+        Snapshots only run while PLAY is on, so without this the first
+        engage of a session would see the zero-initialized EE state and
+        (correctly) refuse to enable the arm.
+        """
+        if not self._obs_builder.refresh_ee_state(self._tf_buffer):
+            self.get_logger().warning(
+                'EE state TF refresh failed at engage -- arms with no prior '
+                'measurement stay disabled until the trigger is re-pressed.'
+            )
+            self._servo_targets.disable_tracking()
+            return
+        self._servo_targets.engage(self._obs_builder.state_vector)
 
     def _init_logging(self) -> None:
         self._episode_logger = EpisodeLogger(
@@ -476,11 +583,13 @@ class LeRobotDeployNode(Node):
         )
 
     def destroy_node(self) -> None:
+        if self._servo_targets is not None:
+            self._servo_targets.disable_tracking()
         self._inference_engine.stop()
         self._episode_logger.shutdown()
         super().destroy_node()
 
-    def _configure_parameters(self) -> None:
+    def _configure_parameters(self) -> None:  # refactor-exempt: parameter wiring
         declare_from_schema(self, _SCHEMA)
         params = read_schema(self, _SCHEMA)
 
@@ -500,6 +609,24 @@ class LeRobotDeployNode(Node):
         self._model_use_relative_actions_set = (
             'model.use_relative_actions' in (getattr(self, '_parameter_overrides', None) or {})
         )
+        self._action_space = str(params.model.action_space).strip().lower()
+        if self._action_space not in ('joint', 'ee'):
+            raise RuntimeError(
+                'model.action_space must be "joint" or "ee", got {!r}.'.format(
+                    self._action_space
+                )
+            )
+        self._ee_rotation = str(params.model.ee_rotation).strip().lower()
+        if self._ee_rotation not in EE_ROTATION_AXES:
+            raise RuntimeError(
+                'model.ee_rotation must be one of {}, got {!r}.'.format(
+                    sorted(EE_ROTATION_AXES), self._ee_rotation
+                )
+            )
+        self._ee_max_lin_step_m = float(params.ee_servo.max_lin_step_m)
+        self._ee_max_ang_step_rad = float(params.ee_servo.max_ang_step_rad)
+        self._ee_max_lag_m = float(params.ee_servo.max_lag_m)
+        self._ee_max_lag_rad = float(params.ee_servo.max_lag_rad)
 
         self._control_hz = float(params.runtime.control_hz)
         self._actions_per_chunk = int(params.runtime.actions_per_chunk)
@@ -522,6 +649,7 @@ class LeRobotDeployNode(Node):
 
         self._logging_enabled = bool(params.logging.enabled)
         self._log_dir = str(params.logging.log_dir)
+        self._log_ee_frame = str(params.logging.ee_frame)
         self._log_tilt_deg = float(params.task.common.tilt_threshold_deg)
         self._episode_timeout_s = float(params.task.common.episode_timeout_s)
         self._success_settle_s = float(params.task.common.success_settle_s)
@@ -574,7 +702,7 @@ class LeRobotDeployNode(Node):
         self._chunk_size_threshold = min(max(self._chunk_size_threshold, 0.0), 1.0)
         self._action_interpolation_multiplier = max(self._action_interpolation_multiplier, 1)
 
-    def _load_robot_profile(self) -> None:
+    def _load_robot_profile(self) -> None:  # refactor-exempt: descriptor -> node fields wiring
         self.declare_parameter('robot.descriptor_id', '')
         desc_id = str(self.get_parameter('robot.descriptor_id').value)
 
@@ -593,14 +721,21 @@ class LeRobotDeployNode(Node):
         # names raise, so a typo fails loudly instead of running a wrong body.
         self.declare_parameter('robot.exclude.groups', [''])
         self.declare_parameter('robot.exclude.cameras', [''])
-        self.declare_parameter('robot.exclude.ee_poses', [''])
+        self.declare_parameter('robot.exclude.ee', [''])
         self.declare_parameter('robot.exclude.joints', [''])
         self.declare_parameter('robot.exclude.mobile_base', False)
+
+        # Deprecated: robot.exclude.ee_poses was renamed to robot.exclude.ee.
+        # rclpy silently ignores yaml params that were never declared, so an
+        # old config setting exclude.ee_poses would otherwise stop excluding
+        # without warning -- declare it and reject it loudly instead.
+        self.declare_parameter('robot.exclude.ee_poses', [''])
+        self._check_no_deprecated_exclude_ee_poses(self._str_list('robot.exclude.ee_poses'))
 
         desc = desc.filtered(
             exclude_groups=self._str_list('robot.exclude.groups'),
             exclude_cameras=self._str_list('robot.exclude.cameras'),
-            exclude_ee_poses=self._str_list('robot.exclude.ee_poses'),
+            exclude_ee=self._str_list('robot.exclude.ee'),
             exclude_joints=self._str_list('robot.exclude.joints'),
         )
         active_groups_list = [g.name for g in desc.active_groups]
@@ -614,6 +749,7 @@ class LeRobotDeployNode(Node):
         self._joint_features = []
         self._joint_feature_to_ros = {}
         self._ee_poses = desc.ee_poses or []
+        self._configure_ee_control(desc, active_groups_list)
 
         for group in desc.groups:
             if group.name in active_groups_list:
@@ -673,6 +809,17 @@ class LeRobotDeployNode(Node):
                     self._camera_topics[cam.name] = cam.raw_topic
                     self._camera_compressed[cam.name] = False
                 self._camera_encodings[cam.name] = cam.encoding if cam.encoding else 'rgb8'
+
+    def _configure_ee_control(self, desc, active_groups_list: List[str]) -> None:
+        """Resolve EE-servo wiring for model.action_space=='ee'; no-op in joint mode."""
+        self._ee_control: List[Any] = []
+        self._ee_features: List[str] = []
+        self._ee_state_specs: List[tuple] = []
+        if self._action_space != 'ee':
+            return
+        self._ee_control, self._ee_features, self._ee_state_specs = resolve_ee_control(
+            desc, active_groups_list, self._ee_rotation,
+        )
 
     def _load_scene_baselines(self) -> None:
         """
@@ -743,6 +890,14 @@ class LeRobotDeployNode(Node):
         """Read a string-array parameter, dropping the empty-default sentinel."""
         raw = self.get_parameter(name).get_parameter_value().string_array_value
         return [s for s in raw if s]
+
+    @staticmethod
+    def _check_no_deprecated_exclude_ee_poses(old_key_values: List[str]) -> None:
+        """Reject a non-empty robot.exclude.ee_poses; pure logic, no Node needed."""
+        if old_key_values:
+            raise ValueError(
+                'robot.exclude.ee_poses was renamed to robot.exclude.ee'
+            )
 
     def _on_set_parameters(self, params: List[Any]) -> Any:
         from rcl_interfaces.msg import SetParametersResult
@@ -847,6 +1002,8 @@ class LeRobotDeployNode(Node):
             self._cmd_vector.clear()
         self._obs_builder.clear_prev_ee_pose()
         self._inference_engine.clear_single_step_result()
+        if self._servo_targets is not None:
+            self._servo_targets.disable_tracking()
         self.get_logger().info('Episode model state reset.')
         Thread(target=self._do_world_reset, args=(outcome,), daemon=True).start()
 
@@ -940,6 +1097,10 @@ class LeRobotDeployNode(Node):
                 None if self._safety_enabled else self.get_clock().now()
             )
             self._play_enabled = True
+        if self._servo_targets is not None and not self._safety_enabled:
+            # With a deadman trigger, engagement happens on first press instead
+            # (see _publish_next_action) -- PLAY alone must not move the arm.
+            self._refresh_and_engage_servo()
         Thread(target=self._do_begin_episode, daemon=True).start()
         return True
 
@@ -1092,7 +1253,7 @@ class LeRobotDeployNode(Node):
         except IndexError:
             return False
 
-    def _publish_next_action(self) -> None:
+    def _publish_next_action(self) -> None:  # refactor-exempt: control tick, ordered
         if not self._play_enabled:
             if self._base_pub is not None:
                 cmd = Twist()
@@ -1116,6 +1277,8 @@ class LeRobotDeployNode(Node):
                         'Safety trigger released — holding commands.'
                     )
                     self._safety_was_pressed = False
+                    if self._servo_targets is not None:
+                        self._servo_targets.disable_tracking()
                 if self._base_pub is not None:
                     self._base_pub.publish(Twist())
                 return
@@ -1125,6 +1288,8 @@ class LeRobotDeployNode(Node):
                 self._chunk_buffer.clear()
                 self._interpolator.reset()
                 self._safety_was_pressed = True
+                if self._servo_targets is not None:
+                    self._refresh_and_engage_servo()
                 if self._episode_t0 is None:
                     # Deferred episode clock: timing/timeout start now, not
                     # while the scene was staged with the trigger released.
@@ -1176,6 +1341,10 @@ class LeRobotDeployNode(Node):
             cmd_vector=self._cmd_vector,
             now_msg=now,
         )
+        if self._servo_targets is not None:
+            self._servo_targets.publish_step(
+                step, now, measured=self._obs_builder.state_vector
+            )
 
         if self._logging_enabled:
             self._log_step(step, joint_log, base_log)
@@ -1195,12 +1364,13 @@ class LeRobotDeployNode(Node):
             'y': float(step.get('y.vel', 0.0)) if step else 0.0,
             'theta': float(step.get('theta.vel', 0.0)) if step else 0.0,
         }
-        # Logger takes one EE pose; use the descriptor's first entry.
+        # Logger takes one EE pose (the descriptor's first arm), in the base
+        # frame rather than the descriptor's reference_frame (body_lift_link).
         ee = None
         if self._ee_poses:
             first = self._ee_poses[0]
             ee = self._obs_builder.get_ee_pose(
-                self._tf_buffer, first.target_frame, first.source_frame
+                self._tf_buffer, self._log_ee_frame, first.source_frame
             )
         self._episode_logger.log_step(
             joints=log_joints,

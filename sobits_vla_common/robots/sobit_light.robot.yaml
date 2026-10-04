@@ -95,7 +95,7 @@ sensors:
       compressed: true
       active: false
 
-ee_poses: []
+ee: []
 
 excluded_joints:
   - hand_sub_joint

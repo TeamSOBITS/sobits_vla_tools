@@ -28,7 +28,7 @@
 """Shared pure-Python quaternion/rotation math, no scipy dependency."""
 
 import math
-from typing import Tuple
+from typing import Sequence, Tuple
 
 
 def quat_to_rpy(x: float, y: float, z: float, w: float) -> Tuple[float, float, float]:
@@ -57,3 +57,131 @@ def rpy_to_quat(
         cr * cp * sy - sr * sp * cy,
         cr * cp * cy + sr * sp * sy,
     )
+
+
+def unwrap_rpy(
+    rpy: Sequence[float], prev: Sequence[float]
+) -> Tuple[float, float, float]:
+    """
+    Shift each rpy axis by +-2pi so it lands within pi of prev on that axis.
+
+    One +-2pi step per axis, the rule conversion applies to consecutive rpy
+    EE samples (fb188e1) -- not a wrap-to-range, a continuity fix against prev.
+    """
+    out = list(rpy)
+    for ax in range(3):
+        diff = out[ax] - prev[ax]
+        if diff > math.pi:
+            out[ax] -= 2 * math.pi
+        elif diff < -math.pi:
+            out[ax] += 2 * math.pi
+    return out[0], out[1], out[2]
+
+
+def quat_shortest_arc(
+    q: Sequence[float], q_ref: Sequence[float]
+) -> Tuple[float, float, float, float]:
+    """
+    Flip the sign of unit quaternion q if dot(q, q_ref) < 0.
+
+    Quaternions q and -q represent the same rotation; without this, a
+    continuous rotation can flip sign between consecutive samples and alias
+    into a huge single-step jump, same failure mode unwrap_rpy fixes for
+    Euler angles.
+    """
+    dot = q[0] * q_ref[0] + q[1] * q_ref[1] + q[2] * q_ref[2] + q[3] * q_ref[3]
+    if dot < 0.0:
+        return -q[0], -q[1], -q[2], -q[3]
+    return q[0], q[1], q[2], q[3]
+
+
+def quat_rotate_vec(
+    q: Sequence[float], v: Sequence[float]
+) -> Tuple[float, float, float]:
+    """
+    Rotate 3-vector v by unit quaternion q (x, y, z, w): q (x)(x) [v,0] (x)(x) q^-1.
+
+    Rotating by the conjugate of q (negate x,y,z) gives the inverse rotation --
+    used to express a delta in the frame's own axes, R^T . v.
+    """
+    x, y, z, w = q
+    vx, vy, vz = v
+    # t = 2 * cross(q_xyz, v); result = v + w*t + cross(q_xyz, t).
+    tx = 2.0 * (y * vz - z * vy)
+    ty = 2.0 * (z * vx - x * vz)
+    tz = 2.0 * (x * vy - y * vx)
+    rx = vx + w * tx + (y * tz - z * ty)
+    ry = vy + w * ty + (z * tx - x * tz)
+    rz = vz + w * tz + (x * ty - y * tx)
+    return rx, ry, rz
+
+
+def quat_relative(
+    q_from: Sequence[float], q_to: Sequence[float]
+) -> Tuple[float, float, float, float]:
+    """
+    Rotation from q_from to q_to: q_from^-1 (x)(x) q_to, unit quaternions (x, y, z, w).
+
+    For a unit quaternion the inverse is the conjugate (negate the vector
+    part). Composition order matches q_from (x)(x) result == q_to.
+    """
+    x1, y1, z1, w1 = q_from
+    x2, y2, z2, w2 = q_to
+    # Conjugate of q_from (its inverse, since it's a unit quaternion).
+    cx, cy, cz, cw = -x1, -y1, -z1, w1
+    return (
+        cw * x2 + cx * w2 + cy * z2 - cz * y2,
+        cw * y2 - cx * z2 + cy * w2 + cz * x2,
+        cw * z2 + cx * y2 - cy * x2 + cz * w2,
+        cw * w2 - cx * x2 - cy * y2 - cz * z2,
+    )
+
+
+def rotvec_to_quat(rx: float, ry: float, rz: float) -> Tuple[float, float, float, float]:
+    """Convert rotation vector (axis * angle) to unit quaternion (x, y, z, w)."""
+    angle = math.sqrt(rx * rx + ry * ry + rz * rz)
+    if angle < 1e-12:
+        return rx * 0.5, ry * 0.5, rz * 0.5, 1.0
+    s = math.sin(0.5 * angle) / angle
+    return rx * s, ry * s, rz * s, math.cos(0.5 * angle)
+
+
+def quat_to_rotvec(x: float, y: float, z: float, w: float) -> Tuple[float, float, float]:
+    """Convert unit quaternion (x, y, z, w) to a rotation vector with angle in [0, pi]."""
+    if w < 0.0:
+        x, y, z, w = -x, -y, -z, -w
+    n = math.sqrt(x * x + y * y + z * z)
+    if n < 1e-12:
+        return 2.0 * x, 2.0 * y, 2.0 * z
+    angle = 2.0 * math.atan2(n, w)
+    return x * angle / n, y * angle / n, z * angle / n
+
+
+def quat_slerp(
+    q0: Sequence[float], q1: Sequence[float], t: float
+) -> Tuple[float, float, float, float]:
+    """Spherical interpolation from unit quaternion q0 to q1 along the shorter arc."""
+    q1 = quat_shortest_arc(q1, q0)
+    dot = max(-1.0, min(1.0, sum(a * b for a, b in zip(q0, q1))))
+    if dot > 0.9995:
+        out = [a + t * (b - a) for a, b in zip(q0, q1)]
+    else:
+        theta0 = math.acos(dot)
+        theta = theta0 * t
+        s1 = math.sin(theta) / math.sin(theta0)
+        s0 = math.cos(theta) - dot * s1
+        out = [s0 * a + s1 * b for a, b in zip(q0, q1)]
+    norm = math.sqrt(sum(v * v for v in out))
+    return out[0] / norm, out[1] / norm, out[2] / norm, out[3] / norm
+
+
+def slerp_rotvec(
+    a: Sequence[float], b: Sequence[float], t: float
+) -> Tuple[float, float, float]:
+    """
+    Interpolate rotation vectors a -> b at fraction t on SO(3).
+
+    Rotvecs near pi flip sign component-wise (angle is kept in [0, pi]), so a
+    per-axis lerp of such a pair sweeps through the identity; this does not.
+    """
+    return quat_to_rotvec(*quat_slerp(rotvec_to_quat(*a), rotvec_to_quat(*b), t))

@@ -29,7 +29,7 @@ many to list here; see
 | `num_gpus`, `wandb.*`, `hub.*` | DDP fan-out, W&B logging, HF Hub push. |
 | `policy_overrides` | Free-form dict merged into the policy config last — the escape hatch for anything not otherwise exposed. |
 | `peft.*` | LoRA fine-tuning knobs (rank, alpha, target modules). |
-| `robot.*` | Robot descriptor passthrough for policies that need morphology at train time. |
+| `robot.*` | Robot descriptor passthrough for policies that need morphology at train time. `ee_rotation` (`rotvec` default, `rpy`, `quat`) must match the dataset's `ee.*` names; `ee_relative_actions: true` inserts the SE(3) EE relative/absolute processor pair so `ee.*` chunks are predicted relative to the observation pose (UMI-style) — datasets stay absolute, relative stats are recomputed at train start, and with `policy_overrides.use_relative_actions` the `ee.*` names are excluded from LeRobot's per-component step. |
 
 ## Topics / services
 

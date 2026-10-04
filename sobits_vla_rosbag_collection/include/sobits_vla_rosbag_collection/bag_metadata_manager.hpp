@@ -28,6 +28,8 @@
 #ifndef SOBITS_VLA_ROSBAG_COLLECTION__BAG_METADATA_MANAGER_HPP_
 #define SOBITS_VLA_ROSBAG_COLLECTION__BAG_METADATA_MANAGER_HPP_
 
+#include <yaml-cpp/yaml.h>
+
 #include <map>
 #include <string>
 #include <utility>
@@ -49,16 +51,14 @@ public:
     const RobotInfo & robot_info,
     const UserInfo & user_info);
 
-  void createOrValidate(
-    const std::map<std::string,
-    std::pair<uint32_t, uint32_t>> & camera_dimensions);
+  void createOrValidate(const CameraDimensionsMap & camera_dimensions);
 
   void updateRosbagYaml(
     const std::string & current_task_dir_name,
     const std::string & current_task_name,
     const std::string & current_task_path,
     const std::string & gamepad_name,
-    const std::map<std::string, std::pair<uint32_t, uint32_t>> & camera_dimensions);
+    const CameraDimensionsMap & camera_dimensions);
 
   void updateEpisodeYaml(
     const std::string & current_task_dir_name,
@@ -71,6 +71,10 @@ public:
     const std::string & current_bag_name);
 
 private:
+  void writeCameraProperties(
+    YAML::Node & yaml_node,
+    const CameraDimensionsMap & camera_dimensions) const;
+
   rclcpp::Node * node_;
   std::string recording_dir_;
   RobotInfo robot_info_;

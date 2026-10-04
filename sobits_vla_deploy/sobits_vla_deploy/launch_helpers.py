@@ -170,6 +170,33 @@ def controller_and_teleop_actions(
     return actions
 
 
+def servo_backend_actions(context, robot_name: str, use_sim_time: bool) -> list:
+    """
+    Bring up sobits_teleop's MoveIt Servo stack for EE action mode.
+
+    No-op unless the ``enable_servo_backend`` launch argument is true. The
+    included launch file itself waits up to 60 s for
+    /<robot_name>/move_group's parameter services and aborts if they never
+    come up -- start move_group first.
+    """
+    if not str_to_bool(LaunchConfiguration('enable_servo_backend').perform(context)):
+        return []
+
+    from ament_index_python.packages import get_package_share_directory
+    from launch.actions import IncludeLaunchDescription
+    from launch.launch_description_sources import PythonLaunchDescriptionSource
+
+    return [IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(
+            get_package_share_directory('sobits_teleop'),
+            'launch', 'include', 'arm_backend_servo.launch.py')),
+        launch_arguments={
+            'robot_name': robot_name,
+            'use_sim_time': 'true' if use_sim_time else 'false',
+        }.items(),
+    )]
+
+
 def str_to_bool(value: str) -> bool:
     """Parse a launch-argument boolean string."""
     return value.strip().lower() in {'1', 'true', 'yes', 'on'}

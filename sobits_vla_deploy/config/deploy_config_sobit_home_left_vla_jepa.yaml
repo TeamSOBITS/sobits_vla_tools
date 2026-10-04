@@ -71,6 +71,6 @@
       exclude:
         groups: [arm_right, hand_right]
         cameras: [hand_right_camera]
-        ee_poses: [right]
+        ee: [right]
         joints: [arm_left_lower_flex_joint]
         mobile_base: false

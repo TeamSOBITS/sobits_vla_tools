@@ -133,3 +133,40 @@ def test_resolve_base_from_ee_equals_chained_single_hops():
 
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))
+
+
+def _dynamic_tree(stamps_s, max_age_s=None) -> OfflineTFTree:
+    tree = OfflineTFTree(max_age_ns=None if max_age_s is None else int(max_age_s * 1e9))
+    for t in stamps_s:
+        ts = _TransformStamped('base', 'ee', _Vector3(x=t), _Quaternion())
+        ts.header.stamp = _Time(int(t), int(round((t - int(t)) * 1e9)))
+        tree.ingest(_TFMessage([ts]), is_static=False)
+    return tree
+
+
+def _x(tree, t_s):
+    mat = tree.resolve('base', 'ee', int(t_s * 1e9))
+    return None if mat is None else float(mat[0, 3])
+
+
+def test_dynamic_lookup_is_zero_order_hold_without_max_age():
+    tree = _dynamic_tree([0.0, 0.1, 0.2])
+    assert _x(tree, 0.15) == pytest.approx(0.1)
+    assert _x(tree, 5.0) == pytest.approx(0.2)   # held forever
+    assert _x(tree, -1.0) == pytest.approx(0.0)  # earliest entry before the first sample
+
+
+def test_dynamic_lookup_stale_beyond_max_age_is_a_miss():
+    tree = _dynamic_tree([0.0, 0.1, 0.2], max_age_s=0.05)
+    assert _x(tree, 0.14) == pytest.approx(0.1)
+    assert _x(tree, 0.16) is None     # 0.06 s after the last sample at 0.1
+    assert _x(tree, 0.25) == pytest.approx(0.2)
+    assert _x(tree, 0.26) is None     # past the end of the recording
+    assert _x(tree, -0.04) == pytest.approx(0.0)
+    assert _x(tree, -0.06) is None    # too early for the earliest-entry fallback
+
+
+def test_static_transforms_ignore_max_age():
+    tree = _build_tree()
+    tree._max_age_ns = 1
+    assert tree.resolve('base', 'ee', 10**12) is not None

@@ -18,6 +18,8 @@ No function over 80 lines, no file over 600. This is a hard cap, not a
 guideline — exceeding it blocks review. Escape hatch: a
 `# refactor-exempt: <reason>` comment on the def line, granted in review, so
 a justified exception is possible but always visible and greppable.
+`sobits_vla_common/test/test_size_caps.py` enforces this repo-wide: an
+unmarked over-cap def or file fails the common test suite.
 
 ## Shared code lives in `sobits_vla_common`
 
@@ -56,8 +58,9 @@ don't compress it.
 
 ## The lerobot seam
 
-`sobits_vla_common/lerobot_adapter.py` is the *only* module allowed to
-import from `lerobot` internals. Every other module — across every package
+`sobits_vla_common/lerobot_adapter.py` (plus `lerobot_compat.py` beside it,
+which holds the version patches) is the *only* module allowed to import from
+`lerobot` internals. Every other module — across every package
 — imports from the adapter, never from `lerobot` directly. This is what
 makes a lerobot version bump a one-file change instead of a repo-wide hunt.
 

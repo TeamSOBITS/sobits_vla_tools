@@ -26,13 +26,14 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import numpy as np
+from sobits_vla_common.robot_descriptor import EE_ROTATION_DEFAULT
 from sobits_vla_rosbag_conversion.offline_tf_tree import OfflineTFTree
+from sobits_vla_rosbag_conversion.progress import progress
 from sobits_vla_rosbag_conversion.sync import images as sync_images
 from sobits_vla_rosbag_conversion.sync import joints as sync_joints
 from sobits_vla_rosbag_conversion.sync import poses as sync_poses
 from sobits_vla_rosbag_conversion.sync.core import get_closest_t, should_downsample
 import torch
-from tqdm import tqdm
 
 
 class FrameSynthesizer:
@@ -43,35 +44,37 @@ class FrameSynthesizer:
         fps: int,
         sync_threshold: float,
         downsample_tolerance: float,
-        use_relative_actions: bool,
         skip_static_threshold: float,
         action_features: list,
         has_mobile_base: bool,
         base_keys: list,
-        ee_pose_enabled: bool,
-        ee_configs: list,
+        tf_enabled: bool,
         skip_cameras: bool,
         primary_camera: str,
         camera_topics: dict,
         subtask_label_to_idx: dict,
         depth_camera_topics: dict | None = None,
+        ee_action_specs: list | None = None,
+        ee_rotation: str = EE_ROTATION_DEFAULT,
+        tf_max_age_s: float = 0.5,
         logger=None,
     ):
         self.fps = fps
         self.sync_threshold = sync_threshold
         self.downsample_tolerance = downsample_tolerance
-        self.use_relative_actions = use_relative_actions
         self.skip_static_threshold = skip_static_threshold
         self.action_features = action_features
         self.has_mobile_base = has_mobile_base
         self.base_keys = base_keys
-        self.ee_pose_enabled = ee_pose_enabled
-        self.ee_configs = ee_configs
+        self.tf_enabled = tf_enabled
         self.skip_cameras = skip_cameras
         self.primary_camera = primary_camera
         self.camera_topics = camera_topics
         self.depth_camera_topics = depth_camera_topics or {}
         self.subtask_label_to_idx = subtask_label_to_idx
+        self.ee_action_specs = list(ee_action_specs or [])
+        self.ee_rotation = ee_rotation
+        self.tf_max_age_s = tf_max_age_s
         self.logger = logger
 
     def log_warn(self, msg: str):
@@ -97,14 +100,13 @@ class FrameSynthesizer:
         sync_deltas = []
         last_frame_time = 0.0
         min_frame_interval = 1.0 / self.fps if self.fps > 0 else 0.0
-        prev_ee_poses = {name: None for name, _, _ in self.ee_configs}
+        prev_ee_action_poses = {name: None for name, _, _ in self.ee_action_specs}
         tf_tree = ctx['tf_tree']
 
         # Inner bar: frames within the current episode; leave=False keeps the
         # episode-level bar as the only persistent line. Auto-off on non-TTY.
-        frame_iter = tqdm(
-            ctx['primary_series'], desc='  frames', unit='f',
-            disable=None, leave=False,
+        frame_iter = progress(
+            ctx['primary_series'], desc='  frames', unit='f', leave=False,
         )
         for t_sec, msg_prim, _primary_raw, _primary_conn in frame_iter:
             if should_downsample(
@@ -128,18 +130,13 @@ class FrameSynthesizer:
             image_times.update(depth_times)
 
             frame_data = self._build_frame_core(
-                t_sec, image_times, ctx, sync_deltas, instruction
+                t_sec, image_times, ctx, sync_deltas, instruction,
+                tf_tree, prev_ee_action_poses, counters,
             )
             if frame_data is None:
-                counters['static'] += 1
                 continue
 
-            state, action, frame = frame_data
-            if tf_tree is not None:
-                ok = self._attach_ee_poses(frame, tf_tree, t_sec, prev_ee_poses, counters)
-                if not ok:
-                    continue
-
+            _, _, frame = frame_data
             self._attach_images(frame, images, depth_images)
             self._attach_subtask(frame, subtasks_map, t_sec)
 
@@ -157,7 +154,9 @@ class FrameSynthesizer:
         cam_series = bag_series['cam_series']
         tf_messages = bag_series['tf_messages']
 
-        tf_tree = OfflineTFTree() if self.ee_pose_enabled else None
+        tf_tree = None
+        if self.tf_enabled:
+            tf_tree = OfflineTFTree(max_age_ns=int(round(self.tf_max_age_s * 1e9)))
         if tf_tree is not None:
             for _, msg, topic in tf_messages:
                 tf_tree.ingest(msg, is_static=(topic == '/tf_static'))
@@ -225,7 +224,10 @@ class FrameSynthesizer:
         image_times.update(secondary_times)
         return images, image_times, False
 
-    def _build_frame_core(self, t_sec, image_times, ctx, sync_deltas, instruction):
+    def _build_frame_core(
+        self, t_sec, image_times, ctx, sync_deltas, instruction,
+        tf_tree=None, prev_ee_action_poses=None, counters=None,
+    ):
         img_times = list(image_times.values())
         max_camera_diff = max(img_times) - min(img_times)
 
@@ -255,6 +257,7 @@ class FrameSynthesizer:
         if self.skip_static_threshold > 0.0:
             joint_vel_vals = [joint_vel[f] for f in self.action_features]
             if not np.any(np.abs(joint_vel_vals) > self.skip_static_threshold):
+                counters['static'] += 1
                 return None
 
         state = [joint_pos[feat] for feat in self.action_features]
@@ -262,8 +265,14 @@ class FrameSynthesizer:
             t_sec, self.fps, self.action_features, ctx['cmd_series_by_feature'],
             ctx['cmd_series_by_feature_times'], ctx['joint_pos_series'], ctx['joint_pos_times'],
         )
-        if self.use_relative_actions:
-            action = sync_joints.to_relative_action(action, state)
+
+        if self.ee_action_specs:
+            ok = self._append_ee_channels(
+                state, action, tf_tree, t_sec, prev_ee_action_poses, counters
+            )
+            if not ok:
+                return None
+
         if self.has_mobile_base:
             state = state + list(odom_vel)
             action = action + list(cmd_vel)
@@ -274,6 +283,40 @@ class FrameSynthesizer:
             'observation.state': torch.tensor(state, dtype=torch.float32),
         }
         return state, action, frame
+
+    def _append_ee_channels(
+        self, state, action, tf_tree, t_sec, prev_ee_action_poses, counters
+    ) -> bool:
+        """Extend state/action in place with absolute EE poses per spec; False = skip frame."""
+        t_ns = int(t_sec * 1e9)
+        for spec in self.ee_action_specs:
+            name, ee_src, ee_tgt = spec
+            # rpy unwrap / quat shortest-arc need the previous state; rotvec is canonical.
+            if self.ee_rotation == 'rotvec':
+                result = sync_poses.synthesize_ee_action_rotvec(
+                    tf_tree, ee_src, ee_tgt, t_ns, self.fps
+                )
+            else:
+                synth_fn = (
+                    sync_poses.synthesize_ee_action_quat if self.ee_rotation == 'quat'
+                    else sync_poses.synthesize_ee_action
+                )
+                result = synth_fn(
+                    tf_tree, ee_src, ee_tgt, t_ns, self.fps, prev_ee_action_poses[name]
+                )
+            if result is None:
+                counters['tf'] += 1
+                if counters['tf'] <= 5:
+                    self.log_warn(
+                        f"EE action TF lookup failed: '{ee_src}' -> '{ee_tgt}' "
+                        f'at t={t_sec:.3f}s. Skipping frame.'
+                    )
+                return False
+            state_pose, action_pose = result
+            state.extend(state_pose.tolist())
+            action.extend(action_pose.tolist())
+            prev_ee_action_poses[name] = state_pose
+        return True
 
     def _sync_component_diffs(self, t_sec, ctx):
         joint_diff = abs(t_sec - get_closest_t(
@@ -289,25 +332,6 @@ class FrameSynthesizer:
                 ctx['odom_series'], t_sec, times=ctx['odom_times']
             ))
         return joint_diff, cmd_vel_diff, odom_diff
-
-    def _attach_ee_poses(self, frame, tf_tree, t_sec, prev_ee_poses, counters) -> bool:
-        stamp_ns = int(t_sec * 1e9)
-        for ee_name, ee_src, ee_tgt in self.ee_configs:
-            ee_mat = sync_poses.resolve_ee_pose(tf_tree, ee_src, ee_tgt, stamp_ns)
-            if ee_mat is None:
-                counters['tf'] += 1
-                if counters['tf'] <= 5:
-                    self.log_warn(
-                        f"TF lookup failed: '{ee_src}' → '{ee_tgt}' "
-                        f'at t={t_sec:.3f}s. Skipping frame.'
-                    )
-                return False
-            ee_abs, ee_rel = sync_poses.compute_ee_pose_and_delta(ee_mat, prev_ee_poses[ee_name])
-            key = f'observation.ee_pose.{ee_name}' if ee_name else 'observation.ee_pose'
-            frame[key] = torch.from_numpy(ee_abs.copy())
-            frame[f'{key}.delta'] = torch.from_numpy(ee_rel)
-            prev_ee_poses[ee_name] = ee_abs.copy()
-        return True
 
     def _attach_images(self, frame, images, depth_images) -> None:
         if not self.skip_cameras:

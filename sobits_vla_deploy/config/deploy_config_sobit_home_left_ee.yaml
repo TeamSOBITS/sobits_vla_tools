@@ -1,0 +1,65 @@
+/**:
+  ros__parameters:
+    model:
+      # EE-abs-actions model: policy emits ee.left.{x,y,z,rx,ry,rz} (rotvec, in
+      # the descriptor's EE reference_frame) instead of arm_left joint angles.
+      repo_id: "team-sobits/sobit_home_left_ee_abs"
+      policy_class: "lerobot.policies.pi05.modeling_pi05.PI05Policy"
+      device: "cuda"
+      use_amp: false
+      use_relative_actions: false
+      action_space: ee
+      # Must match the checkpoint's ee.* names (rotvec default; rpy for legacy models).
+      ee_rotation: rotvec
+      default_task_label: "Pick up the block"
+
+    ee_servo:
+      max_lin_step_m: 0.03
+      max_ang_step_rad: 0.15
+      max_lag_m: 0.10
+      max_lag_rad: 0.5
+
+    runtime:
+      control_hz: 10.0
+      actions_per_chunk: 50
+      chunk_size_threshold: 0.5
+      aggregate_fn_name: newest
+      async_enabled: true
+      single_step_mode: false
+
+    rtc:
+      enabled: true
+      execution_horizon: 16
+      max_guidance_weight: 10.0
+      prefix_attention_schedule: EXP
+      inference_delay: 5
+      debug: false
+
+    logging:
+      enabled: false
+      log_dir: ""
+
+    task:
+      mode: pick
+
+      common:
+        robot_model_name: sobit_home
+        tracked_model_name: box_to_pick
+        episode_timeout_s: 60.0
+        success_settle_s: 2.0
+        tilt_threshold_deg: 30.0
+        fall_z_drop_m: 0.15
+
+      pick:
+        lift_success_m: 0.05
+
+
+    robot:
+      # arm_left/arm_right are excluded from the joint-command path: this
+      # model drives arm_left through the servo bridge instead (ee_control).
+      # arm_right and hand_right are unused by this left-arm-only model.
+      descriptor_id: sobit_home
+      exclude:
+        groups: [arm_left, arm_right, hand_right]
+        cameras: [hand_right_camera]
+        ee: [right]

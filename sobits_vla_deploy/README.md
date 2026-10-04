@@ -31,7 +31,8 @@ Schema-driven (`_SCHEMA` in `deploy_node.py`; see
 
 | Group | Covers |
 |---|---|
-| `model.*` | `repo_id`, `policy_class`, `device`, `use_amp`, `use_relative_actions`. |
+| `model.*` | `repo_id`, `policy_class`, `device`, `use_amp`, `use_relative_actions`, `action_space` (`joint` or `ee`), `ee_rotation` (`rotvec` or `rpy`, must match the checkpoint's `ee.*` names). |
+| `ee_servo.*` | `max_lin_step_m`, `max_ang_step_rad` -- per-step clamp on EE servo targets in `action_space: ee` mode. |
 | `runtime.*` | `control_hz`, `actions_per_chunk`, `async_enabled`, `action_interpolation_multiplier`. |
 | `rtc.*` | Real-Time Chunking guidance knobs. |
 | `gamepad.*` | `command_service` (this node advertises `~/command`), `controller`, per-controller `button_mapping`, deadman safety trigger. |
@@ -73,8 +74,52 @@ ros2 launch sobits_vla_deploy vla_experiment.launch.py deploy_config:=deploy_con
 Verified args (`--show-args`, both files): `enable_gpu` (default `true`,
 runs under the `gpu` pixi env — needed for torch/lerobot), `pixi_env`,
 `pixi_manifest`, `robot_name`, `enable_world_reset`, plus per-file overrides
-(`deploy_config`/`config_file`, `controller`, `model_*` for the first;
-`num_episodes`, `episode_timeout_s`, `done_wait_margin_s` for the second).
+(`deploy_config`/`config_file`, `controller`, `model_*`, `enable_servo_backend`
+for the first; `num_episodes`, `episode_timeout_s`, `done_wait_margin_s` for
+the second).
+
+### EE action mode (`model.action_space: ee`)
+
+`enable_servo_backend:=true` brings up `sobits_teleop`'s
+`arm_backend_servo.launch.py` (MoveIt Servo + `servo_target_bridge`) so the
+deploy node can stream `ee.{arm}.*` actions as TF targets instead of joint
+commands. `/<robot_name>/move_group` must already be running — the include
+fetches robot description/kinematics params from it and waits up to 60 s
+before aborting. If the deploy node dies or stops publishing, the bridge
+holds the last commanded TF target until servo's `incoming_command_timeout`
+(0.5 s) pauses motion — it does not freeze instantly. The bridge also clamps
+commanded targets to a 1.10 m reach from its configured origin frame.
+
+`model.ee_rotation` (`rotvec`, default, or `rpy`) must match the checkpoint's
+`ee.*` feature names; the loader refuses a mismatch, and `quat` checkpoints
+are not deployable (ObsBuilder and the servo publisher handle rotvec and rpy
+only).
+
+#### Relative EE actions
+
+Datasets store absolute EE poses. A checkpoint trained with
+`robot.ee_relative_actions: true` (sobits_vla_training) carries the sobits
+`sobits_ee_relative_actions` / `sobits_ee_absolute_actions` processor pair,
+so each predicted step is a pose relative to the observation pose
+(UMI-style, `A_k = inv(T_obs) · T_k`) and `postprocessor()` composes it back
+as `T_obs · A_k` on the observation the preprocessor cached. Nothing needs
+to be set in the deploy config; the loader re-pairs the steps and refuses:
+
+- LeRobot's per-component `use_relative_actions` on `ee.*` names that are
+  not in `relative_exclude_joints` (a rotation cannot be subtracted per
+  component);
+- an EE relative step without a preprocessor, or an unpaired step;
+- `rtc.enabled` with any relative model — the RTC prefix from the previous
+  chunk is anchored on the previous observation and is not re-anchored yet.
+
+### Limitations
+
+Composed targets are absolute in the descriptor's EE `reference_frame`
+(`body_lift_link` on sobit_home); if the base drives during a chunk they go
+stale (same as absolute mode). `ee_servo.max_lag_m` / `max_lag_rad` bound how
+far a target may lead the measured pose, so a stalled arm does not bank a
+chunk's worth of steps; non-finite targets are dropped. RTC is unavailable with
+relative models until the prefix is re-anchored.
 
 ## How to test
 

@@ -35,6 +35,21 @@ import subprocess
 
 import numpy as np
 import pandas as pd
+
+try:  # HF datasets draws a bar per save_episode map(); under launch it is a blank line.
+    import datasets
+    datasets.disable_progress_bars()
+except (ImportError, AttributeError):
+    pass
+
+try:
+    # lerobot's encoder ends every call with restore_default_callback(), handing
+    # logging back to ffmpeg's INFO-level stderr writer (muxer chatter per episode).
+    import av.logging
+    av.logging.set_level(av.logging.ERROR)
+    av.logging.restore_default_callback = lambda: None
+except ImportError:
+    pass
 from sobits_vla_common.lerobot_adapter import (
     depth_encoder_defaults,
     HF_LEROBOT_HOME,
@@ -49,17 +64,22 @@ import yaml
 _CUSTOM_INFO_FILENAME = 'sobits_vla_info.json'
 
 
-def write_custom_info(dataset_root: Path, robot_info: dict, user_info: dict) -> None:
-    """Persist robot_info/user_info to a sidecar JSON file under meta/."""
+def write_custom_info(
+    dataset_root: Path, robot_info: dict, user_info: dict,
+    action_convention: dict | None = None,
+) -> None:
+    """Persist robot_info/user_info (+ action_convention) to a sidecar JSON file under meta/."""
     meta_dir = Path(dataset_root) / 'meta'
     meta_dir.mkdir(parents=True, exist_ok=True)
     payload = {'robot_info': robot_info, 'user_info': user_info}
+    if action_convention is not None:
+        payload['action_convention'] = action_convention
     with open(meta_dir / _CUSTOM_INFO_FILENAME, 'w') as f:
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
 def read_custom_info(dataset_root: Path) -> dict:
-    """Read back the robot_info/user_info sidecar written by write_custom_info."""
+    """Read back the sidecar written by write_custom_info."""
     path = Path(dataset_root) / 'meta' / _CUSTOM_INFO_FILENAME
     if not path.exists():
         return {}
@@ -146,6 +166,7 @@ class DatasetWriter:
         all_subtasks_list: list,
         push_to_hub: bool,
         hub_private: bool,
+        action_convention: dict | None = None,
         logger=None,
     ):
         """Initialize DatasetWriter and create or clean target dataset directory."""
@@ -162,6 +183,7 @@ class DatasetWriter:
         self.all_subtasks_list = all_subtasks_list
         self.push_to_hub = push_to_hub
         self.hub_private = hub_private
+        self.action_convention = action_convention
         self.logger = logger
         self.dataset = None
 
@@ -242,11 +264,12 @@ class DatasetWriter:
             user_info = provenance
 
         # meta/info.json is a typed dataclass with no robot_info/user_info fields (see
-        # write_custom_info); persisted eagerly so it survives an interrupted conversion.
+        # write_custom_info); written eagerly under meta/ so push_to_hub uploads it too.
         write_custom_info(
             self.dataset.root,
             robot_info=self.robot_info,
             user_info=user_info,
+            action_convention=self.action_convention,
         )
 
     def add_frame(self, frame):

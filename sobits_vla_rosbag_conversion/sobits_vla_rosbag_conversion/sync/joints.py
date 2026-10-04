@@ -26,7 +26,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """
-Joint-state/command alignment: measured state, ZOH commanded action, deltas.
+Joint-state/command alignment: measured state, ZOH commanded action.
 
 Mobile-base cmd_vel/odom velocity lives here too -- the original code always
 appends it onto the same state/action vectors right after the joint terms.
@@ -78,7 +78,3 @@ def synthesize_action(
             )
             action.append(next_joint_pos[feat])
     return action
-
-
-def to_relative_action(action, state):
-    return [act_val - st_val for act_val, st_val in zip(action, state)]

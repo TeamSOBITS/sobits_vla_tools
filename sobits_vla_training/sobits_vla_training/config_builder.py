@@ -133,6 +133,7 @@ def _resolve_pretrained_path(raw: str) -> Path | str:
     return raw
 
 
+# refactor-exempt: one pass params -> TrainPipelineConfig, sections are sequential
 def build_train_config(params: dict[str, Any], output_dir: Path):
     """
     Construct a TrainPipelineConfig from a flat ROS parameter dict.
@@ -160,13 +161,20 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
 
     desc_id = params.get('robot.descriptor_id', '')
     if desc_id:
+        # Deprecated: robot.exclude.ee_poses was renamed to robot.exclude.ee.
+        # rclpy silently ignores yaml params that were never declared, so an
+        # old config setting exclude.ee_poses would otherwise stop excluding
+        # without warning -- reject it loudly instead.
+        if params.get('robot.exclude.ee_poses', []):
+            raise ValueError('robot.exclude.ee_poses was renamed to robot.exclude.ee')
+
         from sobits_vla_common.robot_descriptor import load_robot_descriptor
         desc = load_robot_descriptor(desc_id)
 
         desc = desc.filtered(
             exclude_groups=params.get('robot.exclude.groups', []),
             exclude_cameras=params.get('robot.exclude.cameras', []),
-            exclude_ee_poses=params.get('robot.exclude.ee_poses', []),
+            exclude_ee=params.get('robot.exclude.ee', []),
             exclude_joints=params.get('robot.exclude.joints', []),
         )
         active_groups = [g.name for g in desc.active_groups]
@@ -180,7 +188,10 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
         if desc.mobile_base and active_mobile_base:
             n_base = len(desc.mobile_base.features)
 
-        total_dim = len(active_joint_features) + n_base
+        from sobits_vla_training.ee_params import ee_action_dim
+        n_ee = ee_action_dim(desc, params)
+
+        total_dim = len(active_joint_features) + n_ee + n_base
 
         if 'max_state_dim' not in policy_overrides:
             policy_overrides['max_state_dim'] = max(32, total_dim)
@@ -195,6 +206,14 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
                 active_groups=active_groups,
                 active_mobile_base=active_mobile_base,
             )
+
+        # SE(3) EE step owns the ee.* dims; full names keep lerobot's substring mask off them.
+        if params.get('robot.ee_relative_actions', False) and policy_overrides.get(
+                'use_relative_actions', False):
+            from sobits_vla_training.ee_params import expected_ee_actions
+            exclude = list(policy_overrides.get('relative_exclude_joints') or [])
+            exclude += [n for n in expected_ee_actions(desc, params) if n not in exclude]
+            policy_overrides['relative_exclude_joints'] = exclude
 
     raw_pretrained = params.get('checkpoint.pretrained_path', '')
     if raw_pretrained:

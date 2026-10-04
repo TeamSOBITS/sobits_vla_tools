@@ -38,11 +38,13 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "sobits_vla_rosbag_collection/bag_metadata_manager.hpp"
+#include "sobits_vla_rosbag_collection/image_header_size.hpp"
 
 namespace
 {
 
 using sobits_vla::BagMetadataManager;
+using sobits_vla::CameraDimensionsMap;
 using sobits_vla::RobotInfo;
 using sobits_vla::SubtaskInfo;
 using sobits_vla::UserInfo;
@@ -76,6 +78,7 @@ protected:
     robot_.sensor_types = {"camera"};
     robot_.sensor_names["camera"] = {"head_camera"};
     robot_.sensor_topics["camera"] = {"/head_camera/image_raw"};
+    robot_.sensor_info_topics["camera"] = {"/head_camera/camera_info"};
 
     user_.name = "tester";
     user_.email = "tester@example.com";
@@ -97,7 +100,7 @@ protected:
 TEST_F(BagMetadataManagerTest, CreateOrValidateWritesExpectedYamlFields)
 {
   BagMetadataManager mgr(node_.get(), tmp_dir_.string(), robot_, user_);
-  std::map<std::string, std::pair<uint32_t, uint32_t>> dims;
+  CameraDimensionsMap dims;
   mgr.createOrValidate(dims);
 
   auto yaml_path = tmp_dir_ / "recorded_bags_meta.yaml";
@@ -113,7 +116,7 @@ TEST_F(BagMetadataManagerTest, CreateOrValidateWritesExpectedYamlFields)
 TEST_F(BagMetadataManagerTest, CreateOrValidateAcceptsMatchingExistingFile)
 {
   BagMetadataManager mgr(node_.get(), tmp_dir_.string(), robot_, user_);
-  std::map<std::string, std::pair<uint32_t, uint32_t>> dims;
+  CameraDimensionsMap dims;
   mgr.createOrValidate(dims);
 
   // Second manager over the same dir + same robot/user config -- must not throw.
@@ -124,7 +127,7 @@ TEST_F(BagMetadataManagerTest, CreateOrValidateAcceptsMatchingExistingFile)
 TEST_F(BagMetadataManagerTest, CreateOrValidateThrowsOnMismatchedConfig)
 {
   BagMetadataManager mgr(node_.get(), tmp_dir_.string(), robot_, user_);
-  std::map<std::string, std::pair<uint32_t, uint32_t>> dims;
+  CameraDimensionsMap dims;
   mgr.createOrValidate(dims);
 
   RobotInfo different = robot_;
@@ -136,7 +139,7 @@ TEST_F(BagMetadataManagerTest, CreateOrValidateThrowsOnMismatchedConfig)
 TEST_F(BagMetadataManagerTest, UpdateAndReadBackEpisodeRoundTrip)
 {
   BagMetadataManager mgr(node_.get(), tmp_dir_.string(), robot_, user_);
-  std::map<std::string, std::pair<uint32_t, uint32_t>> dims;
+  CameraDimensionsMap dims;
   mgr.createOrValidate(dims);
 
   std::string task_dir = "pick_and_place_20260101_000000";
@@ -176,7 +179,7 @@ TEST_F(BagMetadataManagerTest, UpdateAndReadBackEpisodeRoundTrip)
 TEST_F(BagMetadataManagerTest, RemoveEpisodeFromYamlDropsEntry)
 {
   BagMetadataManager mgr(node_.get(), tmp_dir_.string(), robot_, user_);
-  std::map<std::string, std::pair<uint32_t, uint32_t>> dims;
+  CameraDimensionsMap dims;
   mgr.createOrValidate(dims);
 
   std::string task_dir = "pick_and_place_20260101_000000";
@@ -205,6 +208,70 @@ TEST_F(BagMetadataManagerTest, RemoveEpisodeOnMissingYamlIsNoop)
 {
   BagMetadataManager mgr(node_.get(), tmp_dir_.string(), robot_, user_);
   EXPECT_NO_THROW(mgr.removeEpisodeFromYaml("no_such_task", "no_such_bag"));
+}
+
+TEST_F(BagMetadataManagerTest, UpdateRosbagYamlWritesImageFallbackProperties)
+{
+  robot_.sensor_names["camera"] = {"head_camera", "hand_camera"};
+  robot_.sensor_topics["camera"] = {"/head_camera/image_raw", "/hand_camera/image_raw"};
+  robot_.sensor_info_topics["camera"] = {"/head_camera/camera_info", "/hand_camera/camera_info"};
+  BagMetadataManager mgr(node_.get(), tmp_dir_.string(), robot_, user_);
+  CameraDimensionsMap dims;
+  mgr.createOrValidate(dims);
+
+  dims["head_camera"] = {640, 480, "/head_camera/camera_info", "camera_info"};
+  dims["hand_camera"] = {424, 240, "/hand_camera/image_raw/compressed", "image"};
+  std::string task_dir = "pick_and_place_20260101_000000";
+  mgr.updateRosbagYaml(task_dir, "pick and place", (tmp_dir_ / task_dir).string(), "quest", dims);
+
+  YAML::Node doc = YAML::LoadFile((tmp_dir_ / "recorded_bags_meta.yaml").string());
+  auto props = doc["robot_info"]["sensors"]["camera"]["properties"];
+  EXPECT_EQ(props["head_camera"]["width"].as<uint32_t>(), 640u);
+  EXPECT_EQ(props["head_camera"]["source"].as<std::string>(), "camera_info");
+  EXPECT_EQ(props["hand_camera"]["width"].as<uint32_t>(), 424u);
+  EXPECT_EQ(props["hand_camera"]["height"].as<uint32_t>(), 240u);
+  EXPECT_EQ(props["hand_camera"]["topic"].as<std::string>(), "/hand_camera/image_raw/compressed");
+  EXPECT_EQ(props["hand_camera"]["source"].as<std::string>(), "image");
+}
+
+TEST(CompressedImageSize, ReadsJpegSofAfterApp0)
+{
+  // SOI, APP0 (len 16), SOF0 (len 17): precision 8, height 240, width 424.
+  std::vector<uint8_t> jpeg = {0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10};
+  jpeg.resize(jpeg.size() + 14, 0x00);
+  const std::vector<uint8_t> sof = {0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0xF0, 0x01, 0xA8, 0x03};
+  jpeg.insert(jpeg.end(), sof.begin(), sof.end());
+  jpeg.resize(jpeg.size() + 9, 0x00);
+  uint32_t w = 0, h = 0;
+  ASSERT_TRUE(sobits_vla::compressedImageSize(jpeg, w, h));
+  EXPECT_EQ(w, 424u);
+  EXPECT_EQ(h, 240u);
+}
+
+TEST(CompressedImageSize, ReadsPngIhdrWithAndWithoutDepthPrefix)
+{
+  std::vector<uint8_t> png = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n',
+    0x00, 0x00, 0x00, 0x0D, 'I', 'H', 'D', 'R',
+    0x00, 0x00, 0x02, 0x80, 0x00, 0x00, 0x01, 0xE0, 0x10, 0x00, 0x00, 0x00, 0x00};
+  uint32_t w = 0, h = 0;
+  ASSERT_TRUE(sobits_vla::compressedImageSize(png, w, h));
+  EXPECT_EQ(w, 640u);
+  EXPECT_EQ(h, 480u);
+
+  std::vector<uint8_t> depth(12, 0x00);  // compressedDepth ConfigHeader
+  depth.insert(depth.end(), png.begin(), png.end());
+  w = h = 0;
+  ASSERT_TRUE(sobits_vla::compressedImageSize(depth, w, h));
+  EXPECT_EQ(w, 640u);
+  EXPECT_EQ(h, 480u);
+}
+
+TEST(CompressedImageSize, RejectsGarbageAndTruncatedData)
+{
+  uint32_t w = 0, h = 0;
+  EXPECT_FALSE(sobits_vla::compressedImageSize({}, w, h));
+  EXPECT_FALSE(sobits_vla::compressedImageSize({0x01, 0x02, 0x03, 0x04}, w, h));
+  EXPECT_FALSE(sobits_vla::compressedImageSize({0xFF, 0xD8, 0xFF, 0xC0, 0x00}, w, h));
 }
 
 }  // namespace

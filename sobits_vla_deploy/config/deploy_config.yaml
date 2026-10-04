@@ -71,7 +71,7 @@
         # Unknown names raise, so a typo fails loudly.
         groups: []
         cameras: []
-        ee_poses: []
+        ee: []
         mobile_base: false
 
     gamepad:

@@ -36,6 +36,7 @@ add_library(${PROJECT_NAME} SHARED
   src/robot_descriptor_loader.cpp
   src/recording_monitor.cpp
   src/bag_metadata_manager.cpp
+  src/image_header_size.cpp
   src/topic_builder.cpp
   src/episode_lifecycle.cpp
   src/rosbag_collection_params.cpp
@@ -101,7 +102,7 @@ if(BUILD_TESTING)
     rosbag2_storage rosbag2_transport)
 
   ament_add_gtest(test_bag_metadata_manager test/test_bag_metadata_manager.cpp
-    src/bag_metadata_manager.cpp)
+    src/bag_metadata_manager.cpp src/image_header_size.cpp)
   target_include_directories(test_bag_metadata_manager PRIVATE include)
   ament_target_dependencies(test_bag_metadata_manager
     rclcpp sensor_msgs rcl_interfaces sobits_interfaces

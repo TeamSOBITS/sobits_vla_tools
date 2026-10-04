@@ -26,8 +26,11 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from collections import deque
+import math
 from threading import Lock
 from typing import Any, Dict, List, Optional
+
+from sobits_vla_deploy.ee_blend import blend_rotvec_groups, is_ee_angle_key as _is_ee_angle_key
 
 
 class ActionChunkBuffer:
@@ -117,8 +120,17 @@ class ActionChunkBuffer:
         out = dict(old_step)
         for key, new_val in new_step.items():
             old_val = old_step.get(key, new_val)
+            if _is_ee_angle_key(key):
+                # Shift new_val by +-2pi so the blend crosses the short way, not through 0.
+                diff = new_val - old_val
+                if diff > math.pi:
+                    new_val -= 2 * math.pi
+                elif diff < -math.pi:
+                    new_val += 2 * math.pi
             if self._aggregate_fn_name == 'newest':
                 out[key] = float(new_val)
             else:
                 out[key] = float(0.5 * old_val + 0.5 * new_val)
+        if self._aggregate_fn_name != 'newest':
+            blend_rotvec_groups(out, old_step, new_step, 0.5)
         return out

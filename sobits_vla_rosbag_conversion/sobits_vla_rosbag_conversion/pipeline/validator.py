@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from rosbags.highlevel import AnyReader
-from tqdm import tqdm
+from sobits_vla_rosbag_conversion.progress import progress
 
 
 def _log(logger, level: str, msg: str) -> None:
@@ -77,9 +77,17 @@ def sensors_match(ref_sensors: dict, other_sensors: dict) -> bool:
         for key in ['names', 'topics', 'compressed_topics', 'info_topics']:
             if rs.get(key, []) != os_.get(key, []):
                 return False
-        if rs.get('properties', {}) != os_.get('properties', {}):
+        if _shapes(rs.get('properties', {})) != _shapes(os_.get('properties', {})):
             return False
     return True
+
+
+def _shapes(properties: dict) -> dict:
+    """Width/height per sensor only: topic/source record where a size came from, not what it is."""
+    return {
+        name: (props.get('width'), props.get('height'))
+        for name, props in properties.items()
+    }
 
 
 def resolve_cameras(
@@ -165,11 +173,17 @@ def _shapes_from_properties(topics, all_cam_props):
     return shapes, set(unresolved)
 
 
+# Bags of one recording share a topic set: this many bags without the wanted
+# camera_info topic means it was never recorded, so stop opening the rest.
+CAMERA_INFO_MISS_LIMIT = 3
+
+
 def _fill_shapes_from_camera_info(shapes, unresolved_set, info_topics, candidate_bag_dirs):
     # First pass over the bags: only runs when metadata lacks the shapes.
-    for bag_dir in tqdm(candidate_bag_dirs, desc='sniffing camera_info',
-                        unit='bag', disable=None, leave=False):
-        if not unresolved_set:
+    misses = 0
+    for bag_dir in progress(candidate_bag_dirs, desc='sniffing camera_info',
+                            unit='bag', leave=False):
+        if not unresolved_set or misses >= CAMERA_INFO_MISS_LIMIT:
             break
         try:
             with AnyReader([Path(bag_dir)]) as reader:
@@ -181,6 +195,9 @@ def _fill_shapes_from_camera_info(shapes, unresolved_set, info_topics, candidate
                 if not info_topic_to_cam:
                     break
                 connections = [c for c in reader.connections if c.topic in info_topic_to_cam]
+                if not connections:
+                    misses += 1
+                    continue  # rosbags reads the WHOLE bag on an empty filter
                 for connection, _, rawdata in reader.messages(connections=connections):
                     cam_name = info_topic_to_cam.get(connection.topic)
                     if not cam_name or cam_name not in unresolved_set:
@@ -195,8 +212,8 @@ def _fill_shapes_from_camera_info(shapes, unresolved_set, info_topics, candidate
 
 
 def _fill_shapes_from_images(shapes, unresolved_set, topics, candidate_bag_dirs, decode_fn):
-    for bag_dir in tqdm(candidate_bag_dirs, desc='sniffing image shapes',
-                        unit='bag', disable=None, leave=False):
+    for bag_dir in progress(candidate_bag_dirs, desc='sniffing image shapes',
+                            unit='bag', leave=False):
         if not unresolved_set:
             break
         try:
@@ -207,6 +224,8 @@ def _fill_shapes_from_images(shapes, unresolved_set, topics, candidate_bag_dirs,
                 if not topic_to_cam:
                     break
                 connections = [c for c in reader.connections if c.topic in topic_to_cam]
+                if not connections:
+                    continue  # rosbags reads the WHOLE bag on an empty filter
                 for connection, _, rawdata in reader.messages(connections=connections):
                     cam_name = topic_to_cam.get(connection.topic)
                     if not cam_name or cam_name not in unresolved_set:

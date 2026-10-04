@@ -71,6 +71,7 @@ class InferenceEngine:
         joint_features: List[str],
         mobile_base_features: List[str],
         relative_exclude_features: Optional[List[str]] = None,
+        ee_features: Optional[List[str]] = None,
         logger=None,
     ):
         self.policy = policy
@@ -91,6 +92,7 @@ class InferenceEngine:
         self.joint_features = joint_features
         self.mobile_base_features = mobile_base_features
         self.relative_exclude_features = set(relative_exclude_features or [])
+        self.ee_features = list(ee_features or [])
         self.logger = logger
 
         self.task_label = ''
@@ -166,7 +168,6 @@ class InferenceEngine:
         obs_builder,
         chunk_buffer,
         tf_buffer,
-        ee_poses,
     ):
         self.chunk_buffer = chunk_buffer
         self.thread = Thread(
@@ -175,7 +176,6 @@ class InferenceEngine:
                 obs_builder,
                 chunk_buffer,
                 tf_buffer,
-                ee_poses,
             ),
             daemon=True,
         )
@@ -188,12 +188,11 @@ class InferenceEngine:
         if hasattr(self, 'thread') and self.thread.is_alive():
             self.thread.join(timeout=2.0)
 
-    def _inference_worker(
+    def _inference_worker(  # refactor-exempt: worker loop
         self,
         obs_builder,
         chunk_buffer,
         tf_buffer,
-        ee_poses,
     ) -> None:
         import rclpy
 
@@ -207,7 +206,6 @@ class InferenceEngine:
 
                 obs_frame = obs_builder.snapshot_observation(
                     tf_buffer,
-                    ee_poses,
                     self.expected_state_dim,
                     self.model_action_feature_names,
                 )
@@ -261,7 +259,6 @@ class InferenceEngine:
             q_len_at_obs = chunk_buffer.size()
             obs_frame = obs_builder.snapshot_observation(
                 tf_buffer,
-                ee_poses,
                 self.expected_state_dim,
                 self.model_action_feature_names,
             )
@@ -299,6 +296,7 @@ class InferenceEngine:
                 else:
                     chunk_buffer.merge_aligned(chunk, q_len_at_obs)
 
+    # refactor-exempt: inference hot path kept linear for latency
     def _predict_actions(self, obs_frame: Dict[str, Any], state_vector: Dict[str, float]):
         device = torch.device(self.model_device)
         model_dtype = next(self.policy.parameters()).dtype
@@ -474,7 +472,8 @@ class InferenceEngine:
         AbsoluteActionsProcessorStep to do it themselves.
 
         Skips mobile-base and relative_exclude features (e.g. a gripper),
-        which must stay absolute regardless of the policy's delta mode.
+        which must stay absolute regardless of the policy's delta mode, and
+        ee.* keys: SE(3) composition belongs only to the checkpoint's EE step.
         """
         has_absolute_step = False
         try:
@@ -495,13 +494,14 @@ class InferenceEngine:
             for key in list(step.keys()):
                 if (
                     key in state_vector
+                    and not key.startswith('ee.')
                     and key not in self.mobile_base_features
                     and key not in self.relative_exclude_features
                 ):
                     step[key] = state_vector[key] + step[key]
 
     def _to_action_steps(self, raw_actions: Any) -> List[Dict[str, float]]:
-        action_keys = self.joint_features + self.mobile_base_features
+        action_keys = self.joint_features + self.mobile_base_features + self.ee_features
         if not action_keys:
             return []
 

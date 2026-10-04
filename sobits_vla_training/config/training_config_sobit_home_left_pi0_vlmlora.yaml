@@ -25,7 +25,8 @@
       exclude:
         groups: [arm_right, hand_right]
         cameras: [hand_right_camera]
-        ee_poses: [left, right]
+        # Dataset carries no EE-pose features.
+        ee: [left, right]
         mobile_base: false
 
     dataset:

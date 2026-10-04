@@ -45,6 +45,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/executors/single_threaded_executor.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <sobits_interfaces/srv/vla_command.hpp>
 #include <sobits_interfaces/srv/vla_reset_world.hpp>
 #include <sobits_interfaces/srv/vla_update_task.hpp>
@@ -87,6 +89,16 @@ public:
   std::map<std::string, std::vector<std::string>> sensor_info_topics;
   std::map<std::string, std::vector<std::string>> sensor_compressed_topics;
 };
+
+// Size of one camera stream and where it came from, keyed by camera name.
+struct CameraDimensions
+{
+  uint32_t width{0};
+  uint32_t height{0};
+  std::string topic;   // topic the size was read from
+  std::string source;  // "camera_info" or "image" (fallback when no CameraInfo arrives)
+};
+using CameraDimensionsMap = std::map<std::string, CameraDimensions>;
 
 class UserInfo
 {
@@ -160,6 +172,11 @@ private:
   void cameraInfoCallback(
     const sensor_msgs::msg::CameraInfo::SharedPtr msg,
     const std::string topic_name);
+  void subscribeCameraDimensions();
+  void imageSizeCallback(
+    const std::string & camera_name, const std::string & topic_name,
+    uint32_t width, uint32_t height);
+  void dropImageSizeSubs(const std::string & camera_name);
 
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr task_update_service_;
   rclcpp::Service<sobits_interfaces::srv::VlaUpdateTask>::SharedPtr subtask_update_service_;
@@ -193,7 +210,11 @@ private:
 
   std::map<std::string,
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr> camera_info_subs_;
-  std::map<std::string, std::pair<uint32_t, uint32_t>> camera_dimensions_;
+  // One-shot raw/compressed image subs per camera, used when no CameraInfo arrives.
+  std::map<std::string, std::vector<rclcpp::SubscriptionBase::SharedPtr>> camera_image_subs_;
+  std::map<std::string, std::vector<std::string>> info_topic_cameras_;
+  std::map<std::string, std::string> camera_info_topic_;
+  CameraDimensionsMap camera_dimensions_;
 
   // Recording health monitoring. The per-topic counters, FPS timer and
   // timestamp-drift state live in RecordingMonitor, not here.

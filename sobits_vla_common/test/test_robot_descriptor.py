@@ -27,15 +27,19 @@
 
 """Unit tests for RobotDescriptor.filtered(), focused on exclude_joints."""
 
+from dataclasses import replace
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import pytest  # noqa: E402
 
 from sobits_vla_common.robot_descriptor import (  # noqa: E402
-    CameraSpec, EEPoseSpec, GroupSpec, JointSpec, MobileBaseSpec, RobotDescriptor,
+    _parse_descriptor_file, CameraSpec, ee_action_features, EEControlSpec,
+    EEPoseSpec, GroupSpec, JointSpec, load_robot_descriptor, MobileBaseSpec,
+    resolve_ee_action_specs, RobotDescriptor, validate_descriptor,
 )
 
 
@@ -150,3 +154,382 @@ def test_exclude_joints_empty_list_is_noop():
     desc = _make_descriptor()
     filtered = desc.filtered(exclude_joints=[])
     assert filtered is desc
+
+
+_MINIMAL_YAML = """
+schema_version: 1
+robot_id: test_robot
+joint_states_topic: /joint_states
+groups:
+  - name: arm_left
+    command_topic: /arm_left/cmd
+    max_joint_delta: 0.0
+    active: true
+    joints:
+      - ros_name: shoulder
+        feature: shoulder
+  - name: arm_right
+    command_topic: /arm_right/cmd
+    max_joint_delta: 0.0
+    active: true
+    joints:
+      - ros_name: shoulder_r
+        feature: shoulder_r
+ee:
+  - name: left
+    ee_link: hand_left_link
+    reference_frame: base_footprint
+    control:
+      group: arm_left
+      command_frame: left_target_link
+      enable_topic: arm_left/moveit_track_enabled
+  - name: right
+    ee_link: hand_right_link
+    reference_frame: base_footprint
+    control:
+      group: arm_right
+      command_frame: right_target_link
+      enable_topic: arm_right/moveit_track_enabled
+"""
+
+
+def _write_yaml(tmp_path, text):
+    path = os.path.join(tmp_path, 'test_robot.robot.yaml')
+    with open(path, 'w') as f:
+        f.write(text)
+    return path
+
+
+def test_ee_control_parses_from_yaml():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    assert len(desc.ee_control) == 2
+    left = next(c for c in desc.ee_control if c.ee_pose == 'left')
+    assert left.group == 'arm_left'
+    assert left.target_frame == 'left_target_link'
+    assert left.enable_topic == 'arm_left/moveit_track_enabled'
+
+
+def test_ee_control_missing_key_defaults_to_empty_list():
+    text = _MINIMAL_YAML.split('ee:')[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        desc = _parse_descriptor_file(path)
+    assert desc.ee_control == []
+    assert desc.ee_poses is None
+
+
+def test_ee_missing_key_yields_none_poses_and_empty_control():
+    """No 'ee:' key at all -> ee_poses stays None, ee_control stays []."""
+    text = _MINIMAL_YAML.split('ee:')[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        desc = _parse_descriptor_file(path)
+    assert desc.ee_poses is None
+    assert desc.ee_control == []
+
+
+def test_ee_empty_list_yields_empty_poses_and_empty_control():
+    text = _MINIMAL_YAML.split('ee:')[0] + 'ee: []\n'
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        desc = _parse_descriptor_file(path)
+    assert desc.ee_poses == []
+    assert desc.ee_control == []
+
+
+def test_ee_entry_without_control_parses_pose_only():
+    text = _MINIMAL_YAML.split('ee:')[0] + """ee:
+  - name: left
+    ee_link: hand_left_link
+    reference_frame: base_footprint
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        desc = _parse_descriptor_file(path)
+    assert len(desc.ee_poses) == 1
+    left = desc.ee_poses[0]
+    assert left.name == 'left'
+    assert left.source_frame == 'hand_left_link'
+    assert left.target_frame == 'base_footprint'
+    assert desc.ee_control == []
+
+
+def test_old_ee_poses_key_raises_value_error():
+    text = _MINIMAL_YAML.split('ee:')[0] + """ee_poses:
+  - name: left
+    source_frame: hand_left_link
+    target_frame: base_footprint
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        with pytest.raises(ValueError, match="removed 'ee_poses'"):
+            _parse_descriptor_file(path)
+
+
+def test_old_ee_control_key_raises_value_error():
+    text = _MINIMAL_YAML.split('ee:')[0] + """ee_control:
+  - ee_pose: left
+    group: arm_left
+    target_frame: left_target_link
+    enable_topic: arm_left/moveit_track_enabled
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, text)
+        with pytest.raises(ValueError, match="removed 'ee_poses'"):
+            _parse_descriptor_file(path)
+
+
+def test_ee_control_validate_unknown_ee_pose():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    bad = desc.ee_control[0]
+    desc.ee_control[0] = replace(bad, ee_pose='center')
+    errors = validate_descriptor(desc)
+    assert any('unknown ee_pose' in e for e in errors)
+
+
+def test_ee_control_validate_unknown_group():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    desc.ee_control[0] = replace(desc.ee_control[0], group='arm_center')
+    errors = validate_descriptor(desc)
+    assert any('unknown group' in e for e in errors)
+
+
+def test_ee_control_validate_empty_enable_topic():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    desc.ee_control[0] = replace(desc.ee_control[0], enable_topic='')
+    errors = validate_descriptor(desc)
+    assert any('empty enable_topic' in e for e in errors)
+
+
+def test_ee_control_validate_duplicate_group():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    desc.ee_control[1] = replace(desc.ee_control[1], group='arm_left')
+    errors = validate_descriptor(desc)
+    assert any('Duplicate ee_control group' in e for e in errors)
+
+
+def test_ee_control_filtered_drops_excluded_ee_pose():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    filtered = desc.filtered(exclude_ee=['right'])
+    assert [c.ee_pose for c in filtered.ee_control] == ['left']
+
+
+def test_ee_action_features_axis_order():
+    assert ee_action_features('left', rotation='rpy') == [
+        'ee.left.x', 'ee.left.y', 'ee.left.z',
+        'ee.left.roll', 'ee.left.pitch', 'ee.left.yaw',
+    ]
+
+
+def test_ee_action_features_default_is_rotvec():
+    assert ee_action_features('left') == [
+        'ee.left.x', 'ee.left.y', 'ee.left.z',
+        'ee.left.rx', 'ee.left.ry', 'ee.left.rz',
+    ]
+
+
+def test_ee_action_features_quat_axis_order():
+    assert ee_action_features('left', rotation='quat') == [
+        'ee.left.x', 'ee.left.y', 'ee.left.z',
+        'ee.left.qx', 'ee.left.qy', 'ee.left.qz', 'ee.left.qw',
+    ]
+
+
+def test_ee_action_features_invalid_rotation_raises():
+    with pytest.raises(ValueError, match='rotation'):
+        ee_action_features('left', rotation='axis_angle')
+
+
+def test_ee_control_for_returns_matching_specs():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    specs = desc.ee_control_for(['left'])
+    assert [s.ee_pose for s in specs] == ['left']
+
+
+def test_ee_control_for_unknown_name_raises():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    with pytest.raises(ValueError, match='Unknown ee_pose'):
+        desc.ee_control_for(['center'])
+
+
+def test_active_ee_control_excludes_removed_ee_pose():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_yaml(tmp, _MINIMAL_YAML)
+        desc = _parse_descriptor_file(path)
+    filtered = desc.filtered(exclude_ee=['right'])
+    assert [c.ee_pose for c in filtered.active_ee_control] == ['left']
+
+
+def test_filtered_all_groups_excluded_without_ee_control_raises():
+    desc = _make_descriptor()
+    with pytest.raises(ValueError, match='every joint group'):
+        desc.filtered(exclude_groups=['arm', 'gripper'])
+
+
+def test_filtered_all_groups_excluded_allowed_in_pure_ee_mode():
+    desc = replace(_make_descriptor(), ee_control=[EEControlSpec(
+        ee_pose='left', group='arm', target_frame='left_target_link',
+        enable_topic='arm/moveit_track_enabled',
+    )])
+    filtered = desc.filtered(exclude_groups=['arm', 'gripper'])
+    assert filtered.active_groups == []
+    assert [c.ee_pose for c in filtered.ee_control] == ['left']
+
+
+# ── active: false on ee[] entries ───────────────────────────────────────────
+
+def _descriptor_two_ee(left_active=True, right_active=True):
+    arm_left = GroupSpec(
+        name='arm_left', command_topic='/arm_left/cmd', command_action=None,
+        state_topic='', max_joint_delta=0.0, active=True,
+        joints=[_joint('arm_left_j1')],
+    )
+    arm_right = GroupSpec(
+        name='arm_right', command_topic='/arm_right/cmd', command_action=None,
+        state_topic='', max_joint_delta=0.0, active=True,
+        joints=[_joint('arm_right_j1')],
+    )
+    return RobotDescriptor(
+        robot_id='test_robot', joint_states_topic='/joint_states',
+        groups=[arm_left, arm_right],
+        ee_poses=[
+            EEPoseSpec(
+                name='left', source_frame='hand_left', target_frame='base',
+                active=left_active,
+            ),
+            EEPoseSpec(
+                name='right', source_frame='hand_right', target_frame='base',
+                active=right_active,
+            ),
+        ],
+        ee_control=[
+            EEControlSpec(
+                ee_pose='left', group='arm_left',
+                target_frame='left_target', enable_topic='arm_left/enabled',
+            ),
+            EEControlSpec(
+                ee_pose='right', group='arm_right',
+                target_frame='right_target', enable_topic='arm_right/enabled',
+            ),
+        ],
+    )
+
+
+def test_active_false_ee_entry_dropped_by_filtered_with_no_other_args():
+    desc = _descriptor_two_ee(left_active=True, right_active=False)
+    filtered = desc.filtered()
+    assert [e.name for e in filtered.ee_poses] == ['left']
+    assert [c.ee_pose for c in filtered.ee_control] == ['left']
+
+
+def test_active_true_ee_entries_untouched_by_filtered_no_args_shortcut():
+    """No inactive ee + no excludes -> the identity shortcut still applies."""
+    desc = _make_descriptor()
+    assert desc.filtered() is desc
+
+
+def test_active_false_ee_entry_combines_with_explicit_exclude_ee():
+    desc = _descriptor_two_ee(left_active=False, right_active=True)
+    filtered = desc.filtered(exclude_ee=['right'])
+    assert filtered.ee_poses == []
+    assert filtered.ee_control == []
+
+
+# ── derived_ee_action_arms ───────────────────────────────────────────────────
+
+def test_derived_ee_action_arms_empty_when_all_groups_active():
+    desc = _descriptor_two_ee()
+    assert desc.derived_ee_action_arms() == []
+
+
+def test_derived_ee_action_arms_both_when_all_groups_excluded():
+    desc = _descriptor_two_ee().filtered(exclude_groups=['arm_left', 'arm_right'])
+    assert sorted(desc.derived_ee_action_arms()) == ['left', 'right']
+
+
+def test_derived_ee_action_arms_only_arm_whose_group_excluded():
+    desc = _descriptor_two_ee().filtered(exclude_groups=['arm_left'])
+    assert desc.derived_ee_action_arms() == ['left']
+
+
+def test_derived_ee_action_arms_excludes_inactive_ee_even_if_group_excluded():
+    desc = _descriptor_two_ee(right_active=False).filtered(
+        exclude_groups=['arm_left', 'arm_right']
+    )
+    assert desc.derived_ee_action_arms() == ['left']
+
+
+def test_derived_ee_action_arms_excludes_ee_pose_excluded_via_exclude_ee():
+    desc = _descriptor_two_ee().filtered(
+        exclude_groups=['arm_left', 'arm_right'], exclude_ee=['right'],
+    )
+    assert desc.derived_ee_action_arms() == ['left']
+
+
+def test_derived_ee_action_arms_none_without_ee_control():
+    arm = GroupSpec(
+        name='arm', command_topic='/arm/cmd', command_action=None, state_topic='',
+        max_joint_delta=0.0, active=False, joints=[_joint('j1')],
+    )
+    desc = RobotDescriptor(
+        robot_id='test_robot', joint_states_topic='/joint_states', groups=[arm],
+        ee_poses=[EEPoseSpec(name='left', source_frame='hand_left', target_frame='base')],
+    )
+    assert desc.derived_ee_action_arms() == []
+
+
+@pytest.mark.parametrize('robot_id', ['sobit_home', 'sobit_home_v1_1'])
+def test_shipped_sobit_home_measures_ee_in_body_lift_link(robot_id):
+    # cfbc386: both arms hang from body_lift_link, so EE poses must not mix in the lift.
+    desc = load_robot_descriptor(robot_id)
+    assert desc.ee_poses
+    assert {e.target_frame for e in desc.ee_poses} == {'body_lift_link'}
+    assert {c.ee_pose for c in desc.ee_control} == {e.name for e in desc.ee_poses}
+
+
+def _two_arm_desc(exclude_groups=()):
+    groups = [
+        GroupSpec(name=f'arm_{side}', command_topic='/cmd', command_action=None,
+                  state_topic='', max_joint_delta=0.0, active=True,
+                  joints=[JointSpec(ros_name=f'{side}_j1', feature=f'arm_{side}_j1')])
+        for side in ('left', 'right')
+    ]
+    desc = RobotDescriptor(
+        robot_id='r', joint_states_topic='/joint_states', groups=groups,
+        ee_poses=[EEPoseSpec(name=s, source_frame=f'ee_{s}', target_frame='lift')
+                  for s in ('left', 'right')],
+        ee_control=[EEControlSpec(ee_pose=s, group=f'arm_{s}', target_frame=f'{s}_t',
+                                  enable_topic=f'{s}/en') for s in ('left', 'right')],
+    )
+    return desc.filtered(exclude_groups=list(exclude_groups)) if exclude_groups else desc
+
+
+def test_resolve_ee_action_specs_derives_from_excluded_groups():
+    assert resolve_ee_action_specs(_two_arm_desc()) == []
+    specs = resolve_ee_action_specs(_two_arm_desc(['arm_left']))
+    assert [s.ee_pose for s in specs] == ['left']
+
+
+def test_resolve_ee_action_specs_explicit_arm_must_satisfy_rule():
+    specs = resolve_ee_action_specs(_two_arm_desc(['arm_left']), ['left'])
+    assert [s.ee_pose for s in specs] == ['left']
+    with pytest.raises(ValueError, match='not excluded.*derivation rule'):
+        resolve_ee_action_specs(_two_arm_desc(['arm_left']), ['right'], param='x.arms')
+    with pytest.raises(ValueError, match='x.arms: Unknown ee_pose'):
+        resolve_ee_action_specs(_two_arm_desc(['arm_left']), ['ghost'], param='x.arms')

@@ -62,5 +62,5 @@
         # joint but the model does not know it.
         joints: ["arm_left_lower_flex_joint"]
         cameras: ["hand_right_camera"]
-        ee_poses: ["right"]
+        ee: ["right"]
         mobile_base: false

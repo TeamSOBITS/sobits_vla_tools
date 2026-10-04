@@ -1,0 +1,89 @@
+# Copyright (c) 2026, Team SOBITS
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from this
+#   software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+"""progress(): bars on a TTY, plain lines under ros2 launch."""
+
+import io
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from sobits_vla_rosbag_conversion.progress import (  # noqa: E402
+    bar_mode, progress, PROGRESS_ENV, TqdmLogger,
+)
+
+
+def test_line_mode_emits_newline_terminated_lines(monkeypatch):
+    monkeypatch.setenv(PROGRESS_ENV, 'lines')
+    err = io.StringIO()
+    monkeypatch.setattr(sys, 'stderr', err)
+    for _ in progress(range(3), desc='episodes', unit='ep', mininterval=0, delay=0):
+        pass
+    out = err.getvalue()
+    assert '\r' not in out and '\x1b' not in out
+    assert all(ln.strip() for ln in out.splitlines())  # no blank lines
+    lines = [ln for ln in out.splitlines() if ln]
+    assert lines and all('episodes' in ln for ln in lines)
+
+
+def test_default_mode_is_plain_tqdm(monkeypatch):
+    monkeypatch.delenv(PROGRESS_ENV, raising=False)
+    bar = progress(total=2, desc='x')
+    assert bar.disable in (True, False)  # disable=None resolved by tqdm against the TTY
+    bar.close()
+
+
+class _Rec:
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, level):
+        return lambda msg: self.calls.append((level, msg))
+
+
+def test_tqdm_logger_forwards_and_prints_in_bar_mode(monkeypatch):
+    monkeypatch.delenv(PROGRESS_ENV, raising=False)
+    err = io.StringIO()
+    err.isatty = lambda: True
+    monkeypatch.setattr(sys, 'stderr', err)
+    assert bar_mode()
+    rec = _Rec()
+    TqdmLogger(rec).info('hello')
+    TqdmLogger(rec).warn('careful')
+    assert rec.calls == [('info', 'hello'), ('warning', 'careful')]
+    assert '[INFO] hello' in err.getvalue() and '[WARNING] careful' in err.getvalue()
+
+
+def test_tqdm_logger_only_forwards_in_line_mode(monkeypatch):
+    monkeypatch.setenv(PROGRESS_ENV, 'lines')
+    err = io.StringIO()
+    monkeypatch.setattr(sys, 'stderr', err)
+    rec = _Rec()
+    TqdmLogger(rec).error('boom')
+    assert rec.calls == [('error', 'boom')] and err.getvalue() == ''

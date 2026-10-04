@@ -25,7 +25,10 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import math
 from typing import Dict, List, Optional
+
+from sobits_vla_deploy.ee_blend import blend_rotvec_groups, is_ee_angle_key as _is_ee_angle_key
 
 
 class ActionInterpolator:
@@ -56,7 +59,18 @@ class ActionInterpolator:
             self._buffer = []
             for i in range(1, self.multiplier + 1):
                 t = i / self.multiplier
-                interp = {k: prev.get(k, v) + t * (v - prev.get(k, v)) for k, v in action.items()}
+                interp = {}
+                for k, v in action.items():
+                    pv = prev.get(k, v)
+                    if _is_ee_angle_key(k):
+                        # Shift v by +-2pi so interpolation crosses the short way, not through 0.
+                        diff = v - pv
+                        if diff > math.pi:
+                            v -= 2 * math.pi
+                        elif diff < -math.pi:
+                            v += 2 * math.pi
+                    interp[k] = pv + t * (v - pv)
+                blend_rotvec_groups(interp, prev, action, t)
                 self._buffer.append(interp)
         else:
             # First step: no previous action yet, run at base rate.

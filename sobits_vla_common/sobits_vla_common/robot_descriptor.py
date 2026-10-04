@@ -26,6 +26,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+# refactor-exempt: file over 600 lines, descriptor schema, loader and filter belong together
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -43,6 +45,75 @@ BASE_KEY_ALIASES: Dict[str, str] = {
     'base_z': 'z.vel',
     'base_theta': 'theta.vel',
 }
+
+# EE pose axes in feature-name order, expressed in each arm's reference_frame.
+# Datasets store absolute poses; relative-to-observation is a training processor.
+# rpy = scipy 'xyz' extrinsic (ROS RPY); rotvec = axis-angle, no wrap/gimbal.
+EE_ACTION_AXES = ('x', 'y', 'z', 'roll', 'pitch', 'yaw')
+EE_ACTION_AXES_ROTVEC = ('x', 'y', 'z', 'rx', 'ry', 'rz')
+EE_ACTION_AXES_QUAT = ('x', 'y', 'z', 'qx', 'qy', 'qz', 'qw')
+
+EE_ROTATION_AXES: Dict[str, tuple] = {
+    'rotvec': EE_ACTION_AXES_ROTVEC,
+    'rpy': EE_ACTION_AXES,
+    'quat': EE_ACTION_AXES_QUAT,
+}
+EE_ROTATION_DEFAULT = 'rotvec'
+
+
+def ee_action_features(name: str, rotation: str = EE_ROTATION_DEFAULT) -> List[str]:
+    """
+    Dataset action feature names for one EE pose, e.g. 'ee.left.x'.
+
+    rotation='rotvec' (default) -> 6D (x,y,z,rx,ry,rz); 'rpy' -> 6D
+    (x,y,z,roll,pitch,yaw); 'quat' -> 7D (x,y,z,qx,qy,qz,qw).
+    """
+    try:
+        axes = EE_ROTATION_AXES[rotation]
+    except KeyError:
+        raise ValueError(
+            f'rotation must be one of {sorted(EE_ROTATION_AXES)}, got {rotation!r}') from None
+    return [f'ee.{name}.{ax}' for ax in axes]
+
+
+def ee_rotation_from_names(names: List[str]) -> str:
+    """Infer the EE rotation representation from dataset feature names; '' if no ee.* names."""
+    for rotation, axes in EE_ROTATION_AXES.items():
+        if any(n.startswith('ee.') and n.endswith('.' + axes[-1]) for n in names):
+            return rotation
+    return ''
+
+
+def resolve_ee_action_specs(
+    desc: 'RobotDescriptor', arms: Optional[List[str]] = None, *, param: str = 'ee_action_arms',
+) -> List['EEControlSpec']:
+    """
+    Return the EEControlSpec per EE-action arm: derived, or *arms* validated by the same rule.
+
+    One resolver for conversion (ee_actions.arms) and training (robot.ee_action_arms):
+    an explicit arm must still satisfy derived_ee_action_arms(), or joint and EE
+    features would both count for it. *param* names the setting in errors.
+    """
+    arms = [a for a in (arms or []) if a]
+    if not arms:
+        return desc.ee_control_for(desc.derived_ee_action_arms())
+    derived = set(desc.derived_ee_action_arms())
+    try:
+        specs = desc.ee_control_for(arms)
+    except ValueError as exc:
+        raise ValueError(
+            f'{param}: {exc} (an arm must have a surviving ee entry -- check exclude.ee)'
+        ) from exc
+    invalid = [s.ee_pose for s in specs if s.ee_pose not in derived]
+    if invalid:
+        still_active = [s.group for s in specs if s.ee_pose in invalid]
+        raise ValueError(
+            f'{param} names arm(s) {invalid} whose group is not excluded ({still_active} '
+            'still active). The EE-action derivation rule needs the arm active and its '
+            'control.group not active: add the group to exclude.groups, or mark it '
+            'active: false in the descriptor, so joint and EE features do not both count.'
+        )
+    return specs
 
 
 @dataclass
@@ -103,6 +174,17 @@ class EEPoseSpec:
     name: str
     source_frame: str
     target_frame: str
+    # Mirrors GroupSpec.active: filtered() treats active=False like an
+    # excluded entry (see its docstring) -- it drops out of ee_poses.
+    active: bool = True
+
+
+@dataclass
+class EEControlSpec:
+    ee_pose: str        # references an ee[].name ('left'/'right')
+    group: str          # joint group superseded by servo control ('arm_left')
+    target_frame: str   # TF child frame streamed to the servo bridge
+    enable_topic: str   # relative topic, e.g. 'arm_left/moveit_track_enabled'
 
 
 @dataclass
@@ -115,6 +197,7 @@ class RobotDescriptor:
     mobile_base: Optional[MobileBaseSpec] = None
     sensors: Dict[str, List[Any]] = field(default_factory=dict)
     ee_poses: Optional[List[EEPoseSpec]] = None
+    ee_control: List[EEControlSpec] = field(default_factory=list)
     excluded_joints: List[str] = field(default_factory=list)
 
     @property
@@ -156,11 +239,49 @@ class RobotDescriptor:
                     ros_names.append(j.ros_name)
         return ros_names
 
-    def filtered(
+    @property
+    def active_ee_control(self) -> List[EEControlSpec]:
+        known = {e.name for e in (self.ee_poses or [])}
+        return [c for c in self.ee_control if c.ee_pose in known]
+
+    def ee_control_for(self, names: List[str]) -> List[EEControlSpec]:
+        """Return EEControlSpec entries matching the given ee_pose names, in order."""
+        by_pose = {c.ee_pose: c for c in self.ee_control}
+        unknown = [n for n in names if n not in by_pose]
+        if unknown:
+            raise ValueError(
+                f'Unknown ee_pose name(s) in ee_control_for: {unknown}. '
+                f'Available: {sorted(by_pose)}'
+            )
+        return [by_pose[n] for n in names]
+
+    def derived_ee_action_arms(self) -> List[str]:
+        """
+        ee_pose names whose EE channels should become dataset ACTION features.
+
+        Single source of truth for the derivation rule shared by conversion
+        (ee_actions.arms) and training (robot.ee_action_arms): an ee entry
+        contributes an EE action iff it survived filtering (active, not
+        excluded via exclude.ee -- filtered() already dropped anything else
+        from ee_poses) AND its ee_control.group is NOT active (excluded via
+        exclude.groups or active: false on the group) -- i.e. the group is
+        no longer commanding that arm via joint features, so the EE channels
+        replace them instead of duplicating them. An active ee_pose whose
+        group is still active is state/observation-only (existing
+        joint-dataset behaviour) and is correctly excluded here. An ee_pose
+        with no ee_control block at all cannot drive an action either.
+        """
+        active_group_names = {g.name for g in self.active_groups}
+        return [
+            c.ee_pose for c in self.ee_control
+            if c.group not in active_group_names
+        ]
+
+    def filtered(  # refactor-exempt: exclude rules must be applied together
         self,
         exclude_groups: Optional[List[str]] = None,
         exclude_cameras: Optional[List[str]] = None,
-        exclude_ee_poses: Optional[List[str]] = None,
+        exclude_ee: Optional[List[str]] = None,
         exclude_joints: Optional[List[str]] = None,
     ) -> 'RobotDescriptor':
         """
@@ -175,12 +296,19 @@ class RobotDescriptor:
         ros_names fold into ``excluded_joints`` the same way; a group left
         with no joints is dropped entirely. Unknown names raise ValueError so
         a typo fails loudly instead of silently converting a wrong morphology.
+
+        An ee[] entry with ``active: false`` in the yaml is dropped from
+        ``ee_poses`` here too, exactly as if it had been named in
+        ``exclude_ee`` -- there is exactly one code path that removes ee
+        entries, so consumers iterating ``desc.ee_poses`` never need to
+        separately check an active flag.
         """
         ex_g = list(exclude_groups or [])
         ex_c = list(exclude_cameras or [])
-        ex_e = list(exclude_ee_poses or [])
+        ex_e = list(exclude_ee or [])
         ex_j = list(exclude_joints or [])
-        if not (ex_g or ex_c or ex_e or ex_j):
+        inactive_ee = [e.name for e in (self.ee_poses or []) if not e.active]
+        if not (ex_g or ex_c or ex_e or ex_j or inactive_ee):
             return self
 
         cameras = self.sensors.get('cameras', [])
@@ -220,10 +348,22 @@ class RobotDescriptor:
                 trimmed.append(replace(g, joints=kept) if len(kept) != len(g.joints) else g)
             groups = trimmed
 
-        if not any(g.active for g in groups):
+        ex_e_all = set(ex_e) | set(inactive_ee)
+        ee_poses = (
+            [e for e in self.ee_poses if e.name not in ex_e_all]
+            if self.ee_poses is not None
+            else None
+        )
+        surviving_ee = {e.name for e in ee_poses} if ee_poses is not None else set()
+        ee_control = [c for c in self.ee_control if c.ee_pose in surviving_ee]
+
+        # Zero active joint groups is valid only in pure-EE mode, where every
+        # arm is driven through a surviving ee_control spec instead.
+        if not any(g.active for g in groups) and not ee_control:
             raise ValueError(
                 'exclude.groups would deactivate every joint group; '
-                'at least one must remain active.'
+                'at least one must remain active (or an ee_control spec '
+                'must survive for pure-EE action mode).'
             )
 
         sensors = dict(self.sensors)
@@ -231,15 +371,10 @@ class RobotDescriptor:
             replace(c, active=False) if c.name in ex_c else c
             for c in cameras
         ]
-        ee_poses = (
-            [e for e in self.ee_poses if e.name not in ex_e]
-            if self.ee_poses is not None
-            else None
-        )
         excluded_joints = list(self.excluded_joints) + removed_ros_names
         return replace(
             self, groups=groups, sensors=sensors, ee_poses=ee_poses,
-            excluded_joints=excluded_joints,
+            ee_control=ee_control, excluded_joints=excluded_joints,
         )
 
     # Maps mobile_base feature keys (x.vel/...) to dataset action feature names.
@@ -272,6 +407,7 @@ class RobotDescriptor:
         return features
 
 
+# refactor-exempt: yaml schema parse, one block per section
 def _parse_descriptor_file(path: Path) -> RobotDescriptor:
     with open(path) as f:
         data = yaml.safe_load(f)
@@ -332,17 +468,33 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
         else:
             sensors[s_type] = s_list
 
+    if 'ee_poses' in data or 'ee_control' in data:
+        raise ValueError(
+            "descriptor uses removed 'ee_poses'/'ee_control' blocks; migrate "
+            "to the merged 'ee:' block (name/ee_link/reference_frame + "
+            'optional control.group/command_frame/enable_topic)'
+        )
+
     ee_poses = None
-    ee_list = data.get('ee_poses')
-    if ee_list:
-        ee_poses = [
-            EEPoseSpec(
+    ee_control = []
+    ee_list = data.get('ee')
+    if ee_list is not None:
+        ee_poses = []
+        for e in ee_list:
+            ee_poses.append(EEPoseSpec(
                 name=e['name'],
-                source_frame=e['source_frame'],
-                target_frame=e['target_frame']
-            )
-            for e in ee_list
-        ]
+                source_frame=e['ee_link'],
+                target_frame=e['reference_frame'],
+                active=bool(e.get('active', True)),
+            ))
+            c = e.get('control')
+            if c:
+                ee_control.append(EEControlSpec(
+                    ee_pose=e['name'],
+                    group=c['group'],
+                    target_frame=c['command_frame'],
+                    enable_topic=c['enable_topic'],
+                ))
 
     return RobotDescriptor(
         robot_id=data['robot_id'],
@@ -353,6 +505,7 @@ def _parse_descriptor_file(path: Path) -> RobotDescriptor:
         mobile_base=mobile_base,
         sensors=sensors,
         ee_poses=ee_poses,
+        ee_control=ee_control,
         excluded_joints=list(data.get('excluded_joints') or [])
     )
 
@@ -440,5 +593,42 @@ def validate_descriptor(desc: RobotDescriptor) -> List[str]:
                     f"Active camera '{c.name}' must have "
                     'compressed_topic or raw_topic defined.'
                 )
+
+    # 4. ee_control specs must reference real ee poses/groups, non-empty
+    # frame/topic, and not double-claim an ee_pose or a group. Unreachable
+    # via yaml today (control is nested under its ee[] entry) but kept for
+    # dataclasses constructed directly.
+    known_ee = {e.name for e in (desc.ee_poses or [])}
+    known_groups = {g.name for g in desc.groups}
+    ee_poses_seen = []
+    groups_seen = []
+    for c in desc.ee_control:
+        if c.ee_pose not in known_ee:
+            errors.append(
+                f"ee_control entry references unknown ee_pose '{c.ee_pose}'."
+            )
+        if c.group not in known_groups:
+            errors.append(
+                f"ee_control entry references unknown group '{c.group}'."
+            )
+        if not c.target_frame:
+            errors.append(
+                f"ee_control entry for ee_pose '{c.ee_pose}' has an empty "
+                'target_frame.'
+            )
+        if not c.enable_topic:
+            errors.append(
+                f"ee_control entry for ee_pose '{c.ee_pose}' has an empty "
+                'enable_topic.'
+            )
+        ee_poses_seen.append(c.ee_pose)
+        groups_seen.append(c.group)
+
+    dup_ee = {n for n in ee_poses_seen if ee_poses_seen.count(n) > 1}
+    if dup_ee:
+        errors.append(f'Duplicate ee_control ee_pose name(s): {sorted(dup_ee)}')
+    dup_groups = {n for n in groups_seen if groups_seen.count(n) > 1}
+    if dup_groups:
+        errors.append(f'Duplicate ee_control group name(s): {sorted(dup_groups)}')
 
     return errors

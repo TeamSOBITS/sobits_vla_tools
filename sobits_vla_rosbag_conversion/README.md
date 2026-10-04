@@ -14,7 +14,6 @@ descriptor, and writes a HuggingFace `LeRobotDataset` that
 | Executable | Role |
 |---|---|
 | `ros2bag_to_lerobotdataset` | Console-script name (stable); runs `sobits_vla_rosbag_conversion.conversion_node:main`, node name `rosbag_conversion_node`. One-shot: converts on startup, then exits. |
-| `scripts/visualize_ee_pose.py` | Standalone plotting script, not a console entry point. |
 
 `conversion_node.py` is the thin ROS wrapper; the actual conversion logic
 lives in `pipeline/` (`discovery.py`, `validator.py`, `episode_pipeline.py`,
@@ -27,10 +26,19 @@ composed by the `FrameSynthesizer` facade in `frame_synthesizer.py`. None of
 Schema-driven (`_SCHEMA` in `conversion_node.py`, no dynamic sections):
 `rosbag_directory`, `recorded_bags_meta_file`, `dataset_name`,
 `output_directory`, `fps`, `vcodec`, `sync_threshold`,
-`downsample_tolerance`, `push_to_hub`, `use_relative_actions`,
-`skip_static_threshold`, `exclude.{groups,cameras,ee_poses}` (trims the
-shared descriptor), `cameras.primary`, `robot_descriptor_id`. See
+`downsample_tolerance`, `push_to_hub`, `skip_static_threshold`,
+`exclude.{groups,cameras,ee}` (trims the shared descriptor),
+`cameras.primary`, `robot_descriptor_id`, `ee_actions.{arms,rotation}`. See
 `sobits_vla_rosbag_conversion/sobits_vla_rosbag_conversion/conversion_node.py:77`.
+
+Actions are always **absolute**. `ee_actions.rotation` picks the EE rotation
+encoding: `rotvec` (default, `ee.<arm>.{x,y,z,rx,ry,rz}`), `rpy` (scipy `xyz`
+extrinsic, `...roll,pitch,yaw`) or `quat` (`...qx,qy,qz,qw`); poses are in each
+ee entry's `target_frame`. `use_relative_actions: true` and `ee_actions.frame`
+were removed and now raise: relative actions are a training-time option
+(`robot.ee_relative_actions`, `policy_overrides.use_relative_actions`). The
+convention is recorded as `action_convention` in `meta/sobits_vla_info.json`
+and `conversion_stats.yaml`.
 
 ## Topics / services
 
@@ -48,6 +56,17 @@ resolved via `output_root('sobits_vla_rosbag_conversion', 'lerobotdataset')`
 
 ```
 ros2 launch sobits_vla_rosbag_conversion rosbag_conversion.launch.py robot:=sobit_home
+```
+
+`ros2 launch` relays the node's output one complete line at a time, so
+progress is printed as a line every 10 s (`episodes: 40%|... 80/200`), never
+as an in-place bar. For live bars run the node directly in a terminal:
+
+```
+P=$(ros2 pkg prefix sobits_vla_rosbag_conversion)
+pixi run -e gpu python $P/lib/sobits_vla_rosbag_conversion/ros2bag_to_lerobotdataset \
+  --ros-args --params-file $P/share/sobits_vla_rosbag_conversion/config/conversion_config_sobit_home_left_ee.yaml \
+  -p overwrite:=true
 ```
 
 Verified args (`--show-args`): `robot`, `config_file`, `rosbag_directory`,

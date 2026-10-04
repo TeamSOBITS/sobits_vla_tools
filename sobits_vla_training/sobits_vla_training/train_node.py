@@ -168,10 +168,25 @@ _SCHEMA = {
         'exclude': {
             'groups': P(['']),
             'cameras': P(['']),
-            'ee_poses': P(['']),
+            'ee': P(['']),
             'joints': P(['']),
             'mobile_base': P(False, descriptor=_pd('Exclude the mobile base')),
+            # Deprecated: renamed to 'ee' above. rclpy silently ignores yaml
+            # params that were never declared, so an old config with
+            # ee_poses: here would silently stop excluding -- declared and
+            # rejected loudly in config_builder/preflight instead.
+            'ee_poses': P(['']),
         },
+        # ee_pose names whose EE channels replace joint features in the
+        # dataset. Empty (default) DERIVES the list from the descriptor
+        # (RobotDescriptor.derived_ee_action_arms); joint mode derives to [].
+        # An explicit list overrides derivation but is validated against it.
+        'ee_action_arms': P(['']),
+        # Must match the rotation representation the dataset was converted
+        # with (conversion_node.py ee_actions.rotation): rotvec | rpy (6D) | quat (7D).
+        'ee_rotation': P('rotvec'),
+        # Train ee.* actions as SE(3) poses relative to the observed EE pose (UMI-style).
+        'ee_relative_actions': P(False),
     },
 }
 
@@ -271,7 +286,7 @@ class TrainNode(Node):
             self._shutdown_event.set()
             rclpy.shutdown()
 
-    def _run_training(self) -> None:
+    def _run_training(self) -> None:  # refactor-exempt: lerobot_train driver, ordered setup steps
         params = self._collect_params()
 
         policy_type: str = params.get('policy', 'smolvla')
@@ -386,6 +401,7 @@ class TrainNode(Node):
             self.get_logger().info(f'Resuming from checkpoint: {ckpt_cfg}')
 
         apply_training_patches()
+        self._install_relative_training(params, train_cfg)
 
         from sobits_vla_common.lerobot_adapter import train
         train(train_cfg, accelerator=accelerator)
@@ -399,6 +415,18 @@ class TrainNode(Node):
             self.get_logger().info('hub.repo_id not set — Hub push skipped.')
         else:
             self.get_logger().info('hub.push_to_hub=false — Hub push skipped.')
+
+    def _install_relative_training(self, params: dict, train_cfg) -> None:
+        """Wire relative-space stats and the SE(3) EE steps into lerobot_train."""
+        from sobits_vla_common.lerobot_compat import install_ee_relative_training
+        from sobits_vla_training.preflight import load_dataset_info
+        from sobits_vla_training.relative_training import relative_training_spec
+
+        info = load_dataset_info(params.get('dataset.repo_id', ''))
+        spec = relative_training_spec(
+            params, train_cfg.policy, info, self.get_logger().warning)
+        if spec is not None:
+            install_ee_relative_training(spec)
 
 
 def main(args=None) -> None:

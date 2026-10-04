@@ -31,6 +31,7 @@
     hub_private: false
     overwrite: true
 
+    # Datasets are absolute-only; true now raises (use the training relative flags).
     use_relative_actions: false
 
     # Skip frames where no joint exceeds this velocity (rad/s). 0.0 = disabled.
@@ -44,9 +45,9 @@
     exclude:
       groups: ["arm_right", "hand_right"]
       cameras: ["hand_right_camera"]
-      ee_poses: ["left", "right"]
+      ee: ["left", "right"]
 
-    # EE poses follow exclude.ee_poses above: emitted when any frame survives,
+    # EE poses follow exclude.ee above: emitted when any frame survives,
     # skipped when all are excluded. Exclude every name to drop them entirely.
 
     # primary = sync trigger camera (one frame assembled per primary image;

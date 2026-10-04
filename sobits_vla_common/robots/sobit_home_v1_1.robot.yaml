@@ -166,13 +166,28 @@ sensors:
     #   active: true
     #   is_depth: true
 
-ee_poses:
+# End effectors: where each is measured (ee_link in reference_frame) and,
+# when a servo backend can drive it, how (control -> sobits_teleop
+# servo_target_bridge contract). reference_frame is body_lift_link, the link
+# both arms hang from: the EE pose then depends on the arm joints only, and
+# body_lift_joint (a separate action) no longer shifts it.
+ee:
   - name: left
-    source_frame: hand_left_end_effector_link
-    target_frame: base_footprint
+    active: true
+    ee_link: hand_left_end_effector_link
+    reference_frame: body_lift_link
+    control:
+      group: arm_left
+      command_frame: left_target_link
+      enable_topic: arm_left/moveit_track_enabled
   - name: right
-    source_frame: hand_right_end_effector_link
-    target_frame: base_footprint
+    active: true
+    ee_link: hand_right_end_effector_link
+    reference_frame: body_lift_link
+    control:
+      group: arm_right
+      command_frame: right_target_link
+      enable_topic: arm_right/moveit_track_enabled
 
 excluded_joints:
   # Passive mimic joints of the arm parallel linkage (present in

@@ -1,0 +1,64 @@
+/**:
+  ros__parameters:
+    # Empty = defaults to sobits_vla_rosbag_collection/rosbags/, which also holds
+    # other bind-mounted sets, so point at the one to convert explicitly.
+    # pnp_sim_pear_bowl = KEITH-SSD sobit-x/sobit_home/pnp_sim_pear_bowl bound
+    # into rosbags/ (200 sim episodes over 5 sessions, 2026-08-13).
+    rosbag_directory: "/home/rg-station-04-keith/colcon_ws/src/sobits_vla_tools/sobits_vla_rosbag_collection/rosbags/pnp_sim_pear_bowl"
+
+    # The merged 200-episode meta (5 bag_dirs). Set explicitly because
+    # rosbag_directory is searched recursively for metas.
+    recorded_bags_meta_file: "/home/rg-station-04-keith/colcon_ws/src/sobits_vla_tools/sobits_vla_rosbag_collection/rosbags/pnp_sim_pear_bowl/recorded_bags_meta.yaml"
+
+    # HuggingFace repo ID for the output dataset.
+    dataset_name: "team-sobits/sobit_home_left_sim-pnp_pear_bowl-ee-abs-200ep"
+
+    # The dataset is written to <output_directory>/<dataset_name>.
+    # Empty = <package_src>/lerobotdataset/<dataset_name>
+    output_directory: ""
+
+    fps: 10
+
+    # Video codec used by LeRobotDataset writer. Use "auto" for portable defaults.
+    vcodec: "auto"
+
+    # Max allowed temporal gap (seconds) between sensor readings per frame.
+    sync_threshold: 0.1
+
+    # Tolerance margin (seconds) to accept frames arriving slightly early due to scheduling jitter.
+    downsample_tolerance: 0.015
+
+    push_to_hub: true
+    hub_private: false
+    overwrite: true
+
+    # Skip frames where no joint exceeds this velocity (rad/s). 0.0 = disabled.
+    skip_static_threshold: 0.0
+
+    # Robot morphology, joints, EE frames, and cameras all come from this descriptor.
+    robot_descriptor_id: sobit_home
+
+    # Left arm's joints are superseded by ee_actions below (arm_left is the
+    # ee_control-claimed group); right side stays excluded as in the joint config.
+    exclude:
+      groups: ["arm_left", "arm_right", "hand_right"]
+      cameras: ["hand_right_camera"]
+      ee: ["right"]
+
+    # EE poses follow exclude.ee above: emitted when any frame survives,
+    # skipped when all are excluded. Exclude every name to drop them entirely.
+
+    # Synthesize absolute EE pose actions from offline TF for the left arm,
+    # replacing its joint-space action/state with ee.left.* (see ee_control
+    # in the robot descriptor for the servo-bridge frame this corresponds to).
+    # EE actions derive from exclude.groups vs the descriptor's active ee entries.
+    ee_actions:
+      # Absolute pose, axis-angle rotation; relative is training's robot.ee_relative_actions.
+      rotation: rotvec
+      # A /tf sample older than this at the frame's stamp is a dropout: skip the frame.
+      tf_max_age_s: 0.5
+
+    # primary = sync trigger camera (one frame assembled per primary image;
+    # other cameras are sampled at the nearest timestamp).
+    cameras:
+      primary: "head_camera"

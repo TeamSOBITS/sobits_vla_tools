@@ -67,19 +67,27 @@ class _DynamicEntry:
         self.parents.insert(idx, parent)
         self.matrices.insert(idx, mat)
 
-    def query(self, stamp_ns: int) -> tuple[str, np.ndarray] | None:
+    def query(
+        self, stamp_ns: int, max_age_ns: int | None = None
+    ) -> tuple[str, np.ndarray] | None:
         """
         Return (parent, matrix) for the latest entry at or before *stamp_ns*.
 
         If stamp_ns precedes all recorded entries (e.g. first bag frame arrives before
         the first /tf message in message order), fall back to the earliest entry so that
         static-ish transforms (robot description, fixed joints) still resolve rather than
-        causing a spurious lookup failure.
+        causing a spurious lookup failure. With *max_age_ns*, an entry farther than that
+        from stamp_ns (a /tf dropout, or a stamp past the end of the recording) is a
+        miss rather than a held pose.
         """
         idx = bisect.bisect_right(self.stamps, stamp_ns) - 1
         if idx < 0:
-            if self.stamps:
-                return self.parents[0], self.matrices[0]
+            if not self.stamps:
+                return None
+            if max_age_ns is not None and self.stamps[0] - stamp_ns > max_age_ns:
+                return None
+            return self.parents[0], self.matrices[0]
+        if max_age_ns is not None and stamp_ns - self.stamps[idx] > max_age_ns:
             return None
         return self.parents[idx], self.matrices[idx]
 
@@ -101,6 +109,20 @@ def mat_to_pose6d(mat: np.ndarray) -> np.ndarray:
     return np.concatenate([xyz, rpy])
 
 
+def mat_to_pose6d_rotvec(mat: np.ndarray) -> np.ndarray:
+    """Convert 4x4 homogeneous matrix to [x, y, z, rx, ry, rz] axis-angle (float32)."""
+    xyz = mat[:3, 3].astype(np.float32)
+    rotvec = Rotation.from_matrix(mat[:3, :3]).as_rotvec().astype(np.float32)
+    return np.concatenate([xyz, rotvec])
+
+
+def mat_to_pose7d(mat: np.ndarray) -> np.ndarray:
+    """Convert 4x4 homogeneous matrix to [x, y, z, qx, qy, qz, qw] (float32)."""
+    xyz = mat[:3, 3].astype(np.float32)
+    quat = Rotation.from_matrix(mat[:3, :3]).as_quat().astype(np.float32)
+    return np.concatenate([xyz, quat])
+
+
 class OfflineTFTree:
     """
     Reads /tf and /tf_static messages and resolves arbitrary frame chains.
@@ -116,10 +138,11 @@ class OfflineTFTree:
         pose = mat_to_pose6d(mat)
     """
 
-    def __init__(self) -> None:
-        """Initialize empty static and dynamic transform caches."""
+    def __init__(self, max_age_ns: int | None = None) -> None:
+        """Initialize empty caches; *max_age_ns* bounds how stale a dynamic transform may be."""
         self._static: dict[str, tuple[str, np.ndarray]] = {}
         self._dynamic: dict[str, _DynamicEntry] = {}
+        self._max_age_ns = max_age_ns
 
     def ingest(self, tf_msg, *, is_static: bool) -> None:
         """Add all transforms from a tf2_msgs/TFMessage."""
@@ -140,7 +163,7 @@ class OfflineTFTree:
     def _parent_and_mat(self, child: str, stamp_ns: int) -> tuple[str, np.ndarray] | None:
         """Best-effort lookup: prefer dynamic, fall back to static."""
         if child in self._dynamic:
-            result = self._dynamic[child].query(stamp_ns)
+            result = self._dynamic[child].query(stamp_ns, self._max_age_ns)
             if result is not None:
                 return result
         if child in self._static:

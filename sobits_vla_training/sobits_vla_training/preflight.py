@@ -34,17 +34,28 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def load_dataset_info(repo_id: str) -> dict | None:
-    """Read info.json from local cache or HF hub without instantiating LeRobotDataset."""
+def _local_dataset_root(repo_id: str) -> Path | None:
+    """Local dataset root (HF_LEROBOT_HOME/repo_id, else repo_id as a path), or None."""
     try:
         from sobits_vla_common.lerobot_adapter import HF_LEROBOT_HOME
-        candidate = HF_LEROBOT_HOME / repo_id / 'meta' / 'info.json'
-        if not candidate.exists():
-            candidate = Path(repo_id) / 'meta' / 'info.json'
-        if not candidate.exists():
+        candidates = [Path(HF_LEROBOT_HOME) / repo_id, Path(repo_id)]
+    except Exception:
+        candidates = [Path(repo_id)]
+    for root in candidates:
+        if (root / 'meta').is_dir():
+            return root
+    return None
+
+
+def load_dataset_meta_file(repo_id: str, name: str) -> dict | None:
+    """Read meta/<name> (JSON) from local cache or HF hub without instantiating LeRobotDataset."""
+    try:
+        root = _local_dataset_root(repo_id)
+        candidate = root / 'meta' / name if root is not None else None
+        if candidate is None or not candidate.exists():
             from huggingface_hub import hf_hub_download
             candidate = Path(
-                hf_hub_download(repo_id, 'meta/info.json', repo_type='dataset')
+                hf_hub_download(repo_id, f'meta/{name}', repo_type='dataset')
             )
         with open(candidate) as f:
             return json.load(f)
@@ -52,6 +63,145 @@ def load_dataset_info(repo_id: str) -> dict | None:
         return None
 
 
+def load_dataset_info(repo_id: str) -> dict | None:
+    """Read meta/info.json; see load_dataset_meta_file."""
+    return load_dataset_meta_file(repo_id, 'info.json')
+
+
+def _load_conversion_stats(repo_id: str) -> dict | None:
+    """Local-only conversion_stats.yaml (written at the dataset root, never pushed)."""
+    root = _local_dataset_root(repo_id)
+    path = root / 'conversion_stats.yaml' if root is not None else None
+    if path is None or not path.exists():
+        return None
+    try:
+        import yaml
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return None
+
+
+from sobits_vla_training.ee_params import expected_ee_actions, robot_ee_rotation  # noqa: E402
+
+
+# Legacy delta detection: an absolute EE action tracks its state, so the means
+# agree within a fraction of the state spread (+2 cm floor for idle arms).
+_DELTA_STD_FRACTION = 0.5
+_DELTA_FLOOR_M = 0.02
+
+
+def _delta_axes_from_stats(stats: dict, action_names: list, state_names: list) -> list:
+    """EE translation action names whose mean is far from the state mean (per-step deltas)."""
+    try:
+        a_mean = stats['action']['mean']
+        s_mean = stats['observation.state']['mean']
+        s_std = stats['observation.state']['std']
+    except (KeyError, TypeError):
+        return []
+    flagged = []
+    for i, name in enumerate(action_names):
+        if not (name.startswith('ee.') and name.rsplit('.', 1)[-1] in ('x', 'y', 'z')):
+            continue
+        if name not in state_names:
+            continue
+        j = state_names.index(name)
+        if abs(a_mean[i] - s_mean[j]) > _DELTA_STD_FRACTION * s_std[j] + _DELTA_FLOOR_M:
+            flagged.append(name)
+    return flagged
+
+
+def _check_action_convention(
+    repo_id: str, info: dict, params: dict, log_warn, log_info,
+) -> None:
+    """Refuse datasets whose action encoding does not match what training assumes."""
+    from sobits_vla_common.robot_descriptor import ee_rotation_from_names
+
+    features = info.get('features', {})
+    action_names = features.get('action', {}).get('names') or []
+    state_names = features.get('observation.state', {}).get('names') or []
+    has_ee = any(n.startswith('ee.') for n in action_names)
+
+    sidecar = load_dataset_meta_file(repo_id, 'sobits_vla_info.json') or {}
+    conv_stats = _load_conversion_stats(repo_id) or {}
+    convention = sidecar.get('action_convention') or conv_stats.get('action_convention')
+
+    if convention:
+        mode = convention.get('action_mode', 'absolute')
+        if mode != 'absolute':
+            raise RuntimeError(
+                f"Dataset '{repo_id}' has action_mode={mode!r}; training expects absolute "
+                'actions. Reconvert it (relative is now a training-time option).'
+            )
+        rotation = convention.get('ee_rotation') or ee_rotation_from_names(action_names)
+    else:
+        rotation = ee_rotation_from_names(action_names)
+        if conv_stats.get('use_relative_actions', False):
+            raise RuntimeError(
+                f"Dataset '{repo_id}' was converted with use_relative_actions=true "
+                '(per-step deltas). Reconvert it as absolute.'
+            )
+        if has_ee:
+            stats = load_dataset_meta_file(repo_id, 'stats.json') or {}
+            delta_axes = _delta_axes_from_stats(stats, action_names, state_names)
+            if delta_axes:
+                raise RuntimeError(
+                    f"Dataset '{repo_id}' EE actions {delta_axes} look like per-step deltas "
+                    '(action mean far from state mean). Reconvert it as absolute.'
+                )
+        rot_note = f' with {rotation} rotation' if rotation else ''
+        log_warn(
+            f"Legacy dataset without action_convention: '{repo_id}'; "
+            f'assuming absolute actions{rot_note}.'
+        )
+
+    if has_ee:
+        expected = robot_ee_rotation(params)
+        if rotation != expected:
+            raise RuntimeError(
+                f"Dataset '{repo_id}' EE rotation is {rotation!r} but robot.ee_rotation is "
+                f'{expected!r}. Set robot.ee_rotation to match or reconvert.'
+            )
+        arms = sorted({n.split('.')[1] for n in action_names if n.startswith('ee.')})
+        _check_ee_frames(repo_id, (convention or {}).get('ee_frames') or {}, params, arms)
+    log_info(f"Action convention pre-flight passed for '{repo_id}'.")
+
+
+def _check_ee_frames(repo_id: str, ee_frames: dict, params: dict, arms: list) -> None:
+    """Refuse an EE dataset whose frames are unknown or differ from the descriptor's."""
+    desc_id = params.get('robot.descriptor_id', '')
+    if not desc_id:
+        raise RuntimeError(
+            f"Dataset '{repo_id}' has ee.* actions; set robot.descriptor_id so its EE "
+            'frames can be checked against the descriptor.'
+        )
+    from sobits_vla_common.robot_descriptor import load_robot_descriptor
+    by_name = {e.name: e for e in (load_robot_descriptor(desc_id).ee_poses or [])}
+    for arm in arms:
+        frames = ee_frames.get(arm)
+        if frames is None:
+            raise RuntimeError(
+                f"Dataset '{repo_id}' records no action_convention.ee_frames for ee.{arm}: "
+                'it was converted before EE frames were tracked, so its frame cannot be '
+                'verified. Reconvert the dataset.'
+            )
+        spec = by_name.get(arm)
+        if spec is None:
+            raise RuntimeError(
+                f"Dataset '{repo_id}' has ee.{arm} actions but descriptor '{desc_id}' "
+                'declares no such ee entry.'
+            )
+        got = (frames.get('source'), frames.get('target'))
+        want = (spec.source_frame, spec.target_frame)
+        if got != want:
+            raise RuntimeError(
+                f"Dataset '{repo_id}' measures ee.{arm} as {got[0]} in {got[1]}, but "
+                f"descriptor '{desc_id}' now uses {want[0]} in {want[1]}. Reconvert the "
+                'dataset (a policy trained on it would command targets in the wrong frame).'
+            )
+
+
+# refactor-exempt: ordered checks sharing one loaded info.json
 def run_preflight_checks(params: dict, ros_logger=None) -> None:
     """Run dataset-aware pre-flight checks that require info.json."""
     def log_warn(msg: str):
@@ -108,12 +258,20 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
     desc_id = params.get('robot.descriptor_id', '')
     if desc_id:
         try:
+            # Deprecated: robot.exclude.ee_poses was renamed to robot.exclude.ee.
+            # rclpy silently ignores yaml params that were never declared, so an
+            # old config setting exclude.ee_poses would otherwise stop excluding
+            # without warning -- reject it loudly instead.
+            if params.get('robot.exclude.ee_poses', []):
+                raise ValueError('robot.exclude.ee_poses was renamed to robot.exclude.ee')
+
             from sobits_vla_common.robot_descriptor import load_robot_descriptor
             desc = load_robot_descriptor(desc_id)
+
             desc = desc.filtered(
                 exclude_groups=params.get('robot.exclude.groups', []),
                 exclude_cameras=params.get('robot.exclude.cameras', []),
-                exclude_ee_poses=params.get('robot.exclude.ee_poses', []),
+                exclude_ee=params.get('robot.exclude.ee', []),
                 exclude_joints=params.get('robot.exclude.joints', []),
             )
 
@@ -134,6 +292,8 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
             for g in desc.active_groups:
                 active_joint_features.extend([j.feature for j in g.joints])
 
+            ee_features = expected_ee_actions(desc, params)
+
             active_base_features = []
             if desc.mobile_base and active_mobile_base:
                 # active_groups=[] so only base features come back, not group joints
@@ -142,7 +302,8 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
                     active_groups=[], active_mobile_base=active_mobile_base,
                 )
 
-            expected_actions = active_joint_features + active_base_features
+            # Layout: [joints..., ee..., base...] to match dataset action order.
+            expected_actions = active_joint_features + ee_features + active_base_features
 
             if action_names:
                 missing = [a for a in expected_actions if a not in action_names]
@@ -158,12 +319,25 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
                         f"not specified in active robot descriptor '{desc_id}' configuration."
                     )
         except Exception as exc:
-            if isinstance(exc, RuntimeError):
+            # ValueError: robot.ee_action_arms group-exclusion violation, must
+            # surface like config_builder's; RuntimeError: dim/camera checks
+            # above. Anything else is an unexpected descriptor/dataset issue.
+            if isinstance(exc, (RuntimeError, ValueError)):
                 raise
             log_warn(f'Failed to run robot-descriptor-based pre-flight checks: {exc}')
 
+    _check_action_convention(repo_id, info, params, log_warn, log_info)
+
+    ee_names = [a for a in action_names if a.startswith('ee.')]
+    ee_relative = bool(params.get('robot.ee_relative_actions', False))
+    if ee_names and po.get('use_relative_actions', False) and not ee_relative:
+        raise RuntimeError(
+            f"Dataset '{repo_id}' has EE actions {ee_names}: per-component relative EE is "
+            'refused; set robot.ee_relative_actions (SE(3) relative) instead.'
+        )
+
     # relative_exclude_joints validation (config_builder derives this from the
-    # descriptor; warn only if it still looks wrong against the dataset).
+    # descriptor and appends ee.* names when ee_relative_actions is on).
     if po.get('use_relative_actions', False):
         exclude = po.get('relative_exclude_joints', [])
         if not exclude:
@@ -171,6 +345,8 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
                 'use_relative_actions=true but relative_exclude_joints is empty — '
                 'all features, including mobile-base velocities, would be delta-converted. '
                 'Set robot.descriptor_id or an explicit override.'
+                + (" ee.* names are excluded from LeRobot's per-component step "
+                   'automatically (robot.ee_relative_actions).' if ee_names else '')
             )
         elif action_names:
             unknown = [j for j in exclude if j not in action_names]
