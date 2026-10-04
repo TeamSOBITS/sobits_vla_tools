@@ -38,8 +38,8 @@ import pytest  # noqa: E402
 
 from sobits_vla_common.robot_descriptor import (  # noqa: E402
     _parse_descriptor_file, CameraSpec, ee_action_features, EEControlSpec,
-    EEPoseSpec, GroupSpec, JointSpec, MobileBaseSpec, RobotDescriptor,
-    validate_descriptor,
+    EEPoseSpec, GroupSpec, JointSpec, load_robot_descriptor, MobileBaseSpec,
+    resolve_ee_action_specs, RobotDescriptor, validate_descriptor,
 )
 
 
@@ -492,3 +492,44 @@ def test_derived_ee_action_arms_none_without_ee_control():
         ee_poses=[EEPoseSpec(name='left', source_frame='hand_left', target_frame='base')],
     )
     assert desc.derived_ee_action_arms() == []
+
+
+@pytest.mark.parametrize('robot_id', ['sobit_home', 'sobit_home_v1_1'])
+def test_shipped_sobit_home_measures_ee_in_body_lift_link(robot_id):
+    # cfbc386: both arms hang from body_lift_link, so EE poses must not mix in the lift.
+    desc = load_robot_descriptor(robot_id)
+    assert desc.ee_poses
+    assert {e.target_frame for e in desc.ee_poses} == {'body_lift_link'}
+    assert {c.ee_pose for c in desc.ee_control} == {e.name for e in desc.ee_poses}
+
+
+def _two_arm_desc(exclude_groups=()):
+    groups = [
+        GroupSpec(name=f'arm_{side}', command_topic='/cmd', command_action=None,
+                  state_topic='', max_joint_delta=0.0, active=True,
+                  joints=[JointSpec(ros_name=f'{side}_j1', feature=f'arm_{side}_j1')])
+        for side in ('left', 'right')
+    ]
+    desc = RobotDescriptor(
+        robot_id='r', joint_states_topic='/joint_states', groups=groups,
+        ee_poses=[EEPoseSpec(name=s, source_frame=f'ee_{s}', target_frame='lift')
+                  for s in ('left', 'right')],
+        ee_control=[EEControlSpec(ee_pose=s, group=f'arm_{s}', target_frame=f'{s}_t',
+                                  enable_topic=f'{s}/en') for s in ('left', 'right')],
+    )
+    return desc.filtered(exclude_groups=list(exclude_groups)) if exclude_groups else desc
+
+
+def test_resolve_ee_action_specs_derives_from_excluded_groups():
+    assert resolve_ee_action_specs(_two_arm_desc()) == []
+    specs = resolve_ee_action_specs(_two_arm_desc(['arm_left']))
+    assert [s.ee_pose for s in specs] == ['left']
+
+
+def test_resolve_ee_action_specs_explicit_arm_must_satisfy_rule():
+    specs = resolve_ee_action_specs(_two_arm_desc(['arm_left']), ['left'])
+    assert [s.ee_pose for s in specs] == ['left']
+    with pytest.raises(ValueError, match='not excluded.*derivation rule'):
+        resolve_ee_action_specs(_two_arm_desc(['arm_left']), ['right'], param='x.arms')
+    with pytest.raises(ValueError, match='x.arms: Unknown ee_pose'):
+        resolve_ee_action_specs(_two_arm_desc(['arm_left']), ['ghost'], param='x.arms')

@@ -82,6 +82,38 @@ def ee_rotation_from_names(names: List[str]) -> str:
     return ''
 
 
+def resolve_ee_action_specs(
+    desc: 'RobotDescriptor', arms: Optional[List[str]] = None, *, param: str = 'ee_action_arms',
+) -> List['EEControlSpec']:
+    """
+    Return the EEControlSpec per EE-action arm: derived, or *arms* validated by the same rule.
+
+    One resolver for conversion (ee_actions.arms) and training (robot.ee_action_arms):
+    an explicit arm must still satisfy derived_ee_action_arms(), or joint and EE
+    features would both count for it. *param* names the setting in errors.
+    """
+    arms = [a for a in (arms or []) if a]
+    if not arms:
+        return desc.ee_control_for(desc.derived_ee_action_arms())
+    derived = set(desc.derived_ee_action_arms())
+    try:
+        specs = desc.ee_control_for(arms)
+    except ValueError as exc:
+        raise ValueError(
+            f'{param}: {exc} (an arm must have a surviving ee entry -- check exclude.ee)'
+        ) from exc
+    invalid = [s.ee_pose for s in specs if s.ee_pose not in derived]
+    if invalid:
+        still_active = [s.group for s in specs if s.ee_pose in invalid]
+        raise ValueError(
+            f'{param} names arm(s) {invalid} whose group is not excluded ({still_active} '
+            'still active). The EE-action derivation rule needs the arm active and its '
+            'control.group not active: add the group to exclude.groups, or mark it '
+            'active: false in the descriptor, so joint and EE features do not both count.'
+        )
+    return specs
+
+
 @dataclass
 class JointSpec:
     ros_name: str
