@@ -44,8 +44,9 @@ from sobits_vla_common import runtime_deps
 from sobits_vla_common.lerobot_compat import apply_conversion_patches
 from sobits_vla_common.output_root import output_root
 from sobits_vla_common.param_schema import declare_from_schema, P, read_schema
-from sobits_vla_common.robot_descriptor import ee_action_features, EE_ROTATION_AXES
+from sobits_vla_common.robot_descriptor import ee_action_features
 from sobits_vla_rosbag_conversion.dataset_writer import DatasetWriter
+from sobits_vla_rosbag_conversion.ee_actions import action_convention, resolve_ee_actions
 from sobits_vla_rosbag_conversion.frame_synthesizer import FrameSynthesizer
 from sobits_vla_rosbag_conversion.pipeline.discovery import candidate_bag_dirs, discover_episodes
 from sobits_vla_rosbag_conversion.pipeline.episode_pipeline import EpisodePipeline
@@ -316,69 +317,17 @@ class RosbagConversionNode(Node):
         return bool(self.ee_action_specs)
 
     def _resolve_ee_actions(self, desc, params) -> list:
-        """
-        Resolve which arms get EE actions; return (name, src, tgt) TF triples.
-
-        ee_actions.arms is now an optional override: empty (default) derives
-        the arm list from the descriptor (RobotDescriptor.derived_ee_action_arms
-        -- active ee entries whose control.group is not active), an explicit
-        list is validated against that same rule instead of replacing it.
-        """
-        rotation = params.ee_actions.rotation
-        if rotation not in EE_ROTATION_AXES:
-            raise ValueError(
-                f'ee_actions.rotation must be one of {sorted(EE_ROTATION_AXES)}, '
-                f'got {rotation!r}'
-            )
-        self.ee_rotation = rotation
-
-        arms = params.ee_actions.arms
-        if arms:
-            # Explicit override: each named arm must independently satisfy the
-            # derivation rule (surviving ee_control entry whose group is not
-            # active), or the config is asking for something the descriptor
-            # cannot support (double-counted or non-existent arm).
-            derived = set(desc.derived_ee_action_arms())
-            try:
-                specs = desc.ee_control_for(arms)
-            except ValueError as exc:
-                raise ValueError(
-                    f'{exc} (an ee_actions arm must have a surviving ee_poses entry -- '
-                    'check exclude.ee.)'
-                ) from exc
-            invalid = [spec.ee_pose for spec in specs if spec.ee_pose not in derived]
-            if invalid:
-                raise ValueError(
-                    f'ee_actions.arms names arm(s) {invalid} that do not satisfy the '
-                    'EE-action derivation rule: the arm must be active (not excluded '
-                    'via exclude.ee, not active: false) and its control.group must '
-                    'NOT be active (exclude it via exclude.groups, or mark it '
-                    'active: false in the descriptor).'
-                )
-        else:
-            derived_names = desc.derived_ee_action_arms()
-            specs = desc.ee_control_for(derived_names)
-            if derived_names:
-                self.log.info(
-                    f'ee_actions.arms not set -- derived from descriptor: {derived_names}'
-                )
-
-        if not specs:
-            return []
-
-        if self.skip_static_threshold > 0.0:
+        """Resolve which arms get EE actions; return (name, src, tgt) TF triples."""
+        self.ee_rotation = params.ee_actions.rotation
+        specs = resolve_ee_actions(
+            desc, params.ee_actions.arms, self.ee_rotation, self.log.info)
+        if specs and self.skip_static_threshold > 0.0:
             self.log.warning(
                 'skip_static_threshold > 0 with ee_actions active: static detection '
                 'only looks at joint velocities, so arm-only motion via EE actions '
                 'will not be detected as non-static.'
             )
-
-        ee_by_name = {ee.name: ee for ee in (desc.ee_poses or [])}
-        return [
-            (spec.ee_pose, ee_by_name[spec.ee_pose].source_frame,
-             ee_by_name[spec.ee_pose].target_frame)
-            for spec in specs
-        ]
+        return specs
 
     def timer_callback(self):
         """One-shot timer callback to trigger the conversion."""
@@ -622,17 +571,7 @@ class RosbagConversionNode(Node):
         return features
 
     def _action_convention(self) -> dict:
-        """Describe how action/state are encoded; persisted in the sidecar and stats."""
-        convention = {'action_mode': 'absolute'}
-        if self.ee_action_specs:
-            convention['ee_rotation'] = self.ee_rotation
-            if self.ee_rotation == 'rpy':
-                convention['rpy_convention'] = 'xyz_extrinsic'
-            convention['ee_frames'] = {
-                name: {'source': src, 'target': tgt}
-                for name, src, tgt in self.ee_action_specs
-            }
-        return convention
+        return action_convention(self.ee_action_specs, self.ee_rotation)
 
     def _make_writer(self, features: dict, robot_info: dict, all_users: list) -> DatasetWriter:
         return DatasetWriter(
