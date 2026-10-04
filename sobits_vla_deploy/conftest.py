@@ -35,6 +35,7 @@ _EVAL = ['test/test_eval_metrics.py', 'test/test_eval_resample_context.py',
          'sobits_vla_deploy/eval']
 _NEEDS = {
     'torch': ['test/test_ee_relative_deploy.py', 'test/test_vla_deploy_unit.py'],
+    'sobits_interfaces': ['test/test_deploy_status_wire.py'],
     'pandas': _EVAL,
     'matplotlib': _EVAL,
 }
