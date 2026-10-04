@@ -100,11 +100,14 @@ void RosbagCollection::transition(uint8_t state, Event ev, const std::string & d
     case Event::Started: record_status_.start(now, current_bag_name_); break;
     case Event::Paused: record_status_.pause(now); break;
     case Event::Resumed: record_status_.resume(now); break;
-    case Event::Error: record_status_.error(detail); break;
     default:
-      // Stop events freeze elapsed at "now", not at the last heartbeat.
+      // Errors and stops freeze elapsed at "now", not at the last heartbeat.
       record_status_.elapsedSec(now);
-      record_status_.stop(ev, detail);
+      if (ev == Event::Error) {
+        record_status_.error(detail);
+      } else {
+        record_status_.stop(ev, detail);
+      }
       break;
   }
   publishLocked();

@@ -84,6 +84,9 @@ void RecordStatus::stop(Event how, const std::string & detail)
 
 void RecordStatus::error(const std::string & detail)
 {
+  if (state_ == State::Recording) {
+    accumulated_ += std::chrono::duration<double>(last_now_ - segment_start_).count();
+  }
   state_ = State::Error;
   raise(Event::Error, detail);
 }

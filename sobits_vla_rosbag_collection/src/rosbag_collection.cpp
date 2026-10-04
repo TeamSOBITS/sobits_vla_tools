@@ -436,9 +436,12 @@ bool RosbagCollection::saveRosbag()
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
 
-  // Episode duration validation (steady_clock: monotonic, unaffected by sim_time or NTP)
-  auto elapsed = std::chrono::steady_clock::now() - recording_start_time_;
-  double duration_sec = std::chrono::duration<double>(elapsed).count();
+  // Recorded time only (pauses excluded), on the monotonic clock.
+  double duration_sec;
+  {
+    std::lock_guard<std::mutex> lk(record_status_mutex_);
+    duration_sec = record_status_.elapsedSec(RecordStatus::Clock::now());
+  }
 
   // Min-duration + integrity check; EpisodeLifecycle logs its own messages.
   auto decision = episode_lifecycle_->decideSave(
