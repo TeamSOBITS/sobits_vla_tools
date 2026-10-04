@@ -34,8 +34,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sobits_vla_common.geometry import (  # noqa: E402
-    quat_relative, quat_rotate_vec, quat_shortest_arc, quat_to_rpy, rpy_to_quat,
-    unwrap_rpy,
+    quat_relative, quat_rotate_vec, quat_shortest_arc, quat_slerp, quat_to_rotvec,
+    quat_to_rpy, rotvec_to_quat, rpy_to_quat, slerp_rotvec, unwrap_rpy,
 )
 
 
@@ -164,3 +164,50 @@ def _quat_mul(q1, q2):
         w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
         w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
     )
+
+
+def _rot_angle_between(a, b) -> float:
+    """Geodesic angle between two rotvecs, via scipy as the independent reference."""
+    from scipy.spatial.transform import Rotation
+    return float((Rotation.from_rotvec(a).inv() * Rotation.from_rotvec(b)).magnitude())
+
+
+def test_rotvec_quat_roundtrip_matches_scipy():
+    from scipy.spatial.transform import Rotation
+    for rv in ((0.0, 0.0, 0.0), (0.3, -0.4, 1.2), (3.0, 0.1, -0.2), (1e-9, 0.0, 0.0)):
+        q = rotvec_to_quat(*rv)
+        qs = Rotation.from_rotvec(rv).as_quat()
+        q = quat_shortest_arc(q, qs)
+        assert all(math.isclose(a, b, abs_tol=1e-9) for a, b in zip(q, qs))
+        back = quat_to_rotvec(*q)
+        assert all(math.isclose(a, b, abs_tol=1e-9) for a, b in zip(back, rv))
+
+
+def test_quat_to_rotvec_angle_in_0_pi():
+    q = rotvec_to_quat(0.0, 0.0, 4.0)  # 4 rad about z == -2.283 rad about z
+    rv = quat_to_rotvec(*q)
+    assert math.isclose(rv[2], 4.0 - 2.0 * math.pi, abs_tol=1e-9)
+
+
+def test_quat_slerp_endpoints_and_midpoint_match_scipy():
+    from scipy.spatial.transform import Rotation, Slerp
+    a, b = (0.3, -0.4, 1.2), (-1.5, 0.7, -2.9)
+    ref = Slerp([0.0, 1.0], Rotation.from_rotvec([a, b]))
+    for t in (0.0, 0.25, 0.5, 1.0):
+        got = quat_to_rotvec(*quat_slerp(rotvec_to_quat(*a), rotvec_to_quat(*b), t))
+        assert _rot_angle_between(got, ref(t).as_rotvec()) < 1e-9
+
+
+def test_slerp_rotvec_near_pi_does_not_collapse_to_identity():
+    # 3.1 rad and -3.1 rad about x are 0.083 rad apart as rotations; a
+    # per-axis average gives 0 (identity), 3.1 rad away from both.
+    mid = slerp_rotvec((3.1, 0.0, 0.0), (-3.1, 0.0, 0.0), 0.5)
+    assert _rot_angle_between(mid, (3.1, 0.0, 0.0)) < 0.05
+    assert _rot_angle_between(mid, (-3.1, 0.0, 0.0)) < 0.05
+    assert abs(abs(mid[0]) - math.pi) < 0.05
+
+
+def test_slerp_rotvec_identical_inputs_is_stable():
+    rv = (0.2, 0.1, -0.3)
+    for t in (0.0, 0.5, 1.0):
+        assert all(math.isclose(a, b, abs_tol=1e-12) for a, b in zip(slerp_rotvec(rv, rv, t), rv))

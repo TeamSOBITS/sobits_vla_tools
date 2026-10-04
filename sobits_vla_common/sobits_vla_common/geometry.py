@@ -135,3 +135,53 @@ def quat_relative(
         cw * z2 + cx * y2 - cy * x2 + cz * w2,
         cw * w2 - cx * x2 - cy * y2 - cz * z2,
     )
+
+
+def rotvec_to_quat(rx: float, ry: float, rz: float) -> Tuple[float, float, float, float]:
+    """Convert rotation vector (axis * angle) to unit quaternion (x, y, z, w)."""
+    angle = math.sqrt(rx * rx + ry * ry + rz * rz)
+    if angle < 1e-12:
+        return rx * 0.5, ry * 0.5, rz * 0.5, 1.0
+    s = math.sin(0.5 * angle) / angle
+    return rx * s, ry * s, rz * s, math.cos(0.5 * angle)
+
+
+def quat_to_rotvec(x: float, y: float, z: float, w: float) -> Tuple[float, float, float]:
+    """Convert unit quaternion (x, y, z, w) to a rotation vector with angle in [0, pi]."""
+    if w < 0.0:
+        x, y, z, w = -x, -y, -z, -w
+    n = math.sqrt(x * x + y * y + z * z)
+    if n < 1e-12:
+        return 2.0 * x, 2.0 * y, 2.0 * z
+    angle = 2.0 * math.atan2(n, w)
+    return x * angle / n, y * angle / n, z * angle / n
+
+
+def quat_slerp(
+    q0: Sequence[float], q1: Sequence[float], t: float
+) -> Tuple[float, float, float, float]:
+    """Spherical interpolation from unit quaternion q0 to q1 along the shorter arc."""
+    q1 = quat_shortest_arc(q1, q0)
+    dot = max(-1.0, min(1.0, sum(a * b for a, b in zip(q0, q1))))
+    if dot > 0.9995:
+        out = [a + t * (b - a) for a, b in zip(q0, q1)]
+    else:
+        theta0 = math.acos(dot)
+        theta = theta0 * t
+        s1 = math.sin(theta) / math.sin(theta0)
+        s0 = math.cos(theta) - dot * s1
+        out = [s0 * a + s1 * b for a, b in zip(q0, q1)]
+    norm = math.sqrt(sum(v * v for v in out))
+    return out[0] / norm, out[1] / norm, out[2] / norm, out[3] / norm
+
+
+def slerp_rotvec(
+    a: Sequence[float], b: Sequence[float], t: float
+) -> Tuple[float, float, float]:
+    """
+    Interpolate rotation vectors a -> b at fraction t on SO(3).
+
+    Rotvecs near pi flip sign component-wise (angle is kept in [0, pi]), so a
+    per-axis lerp of such a pair sweeps through the identity; this does not.
+    """
+    return quat_to_rotvec(*quat_slerp(rotvec_to_quat(*a), rotvec_to_quat(*b), t))
