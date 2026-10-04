@@ -21,7 +21,6 @@ find_package(rosbag2_storage REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(sobits_interfaces REQUIRED)
-find_package(std_msgs REQUIRED)
 
 find_package(yaml_cpp_vendor REQUIRED)
 find_package(yaml-cpp REQUIRED)
@@ -42,6 +41,7 @@ add_library(${PROJECT_NAME} SHARED
   src/episode_lifecycle.cpp
   src/record_status.cpp
   src/rosbag_collection_params.cpp
+  src/rosbag_collection_status.cpp
   src/rosbag_collection.cpp
 )
 
@@ -56,7 +56,6 @@ ament_target_dependencies(${PROJECT_NAME}
   "rclcpp_components"
   "rosbag2_cpp"
   "rosbag2_storage"
-  "std_msgs"
   "sensor_msgs"
   "rcl_interfaces"
   "sobits_interfaces"

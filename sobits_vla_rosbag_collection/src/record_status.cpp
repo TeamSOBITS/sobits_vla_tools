@@ -34,6 +34,7 @@ namespace sobits_vla
 
 void RecordStatus::raise(Event ev, const std::string & detail)
 {
+  if (ev == Event::None) {return;}  // a silent state change is not an event
   pending_ = ev;
   detail_ = detail;
   ++seq_;

@@ -186,3 +186,14 @@ TEST(RecordStatus, EventSeqCountsEventsOnly) {
 TEST(RecordStatus, ErrorValueMatchesWireConstant) {
   EXPECT_EQ(static_cast<uint8_t>(State::Error), 4);
 }
+
+TEST(RecordStatus, SilentStopIsNotAnEvent) {
+  RecordStatus r;
+  r.start(at(0), "e");
+  r.snapshot(at(1));
+  r.stop(Event::None);
+  auto s = r.snapshot(at(2));
+  EXPECT_EQ(s.state, State::Stopped);
+  EXPECT_EQ(s.event, Event::None);
+  EXPECT_EQ(s.event_seq, 1u);
+}
