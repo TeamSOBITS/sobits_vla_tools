@@ -188,7 +188,7 @@ class InferenceEngine:
         if hasattr(self, 'thread') and self.thread.is_alive():
             self.thread.join(timeout=2.0)
 
-    def _inference_worker(
+    def _inference_worker(  # refactor-exempt: worker loop
         self,
         obs_builder,
         chunk_buffer,
@@ -296,6 +296,7 @@ class InferenceEngine:
                 else:
                     chunk_buffer.merge_aligned(chunk, q_len_at_obs)
 
+    # refactor-exempt: inference hot path kept linear for latency
     def _predict_actions(self, obs_frame: Dict[str, Any], state_vector: Dict[str, float]):
         device = torch.device(self.model_device)
         model_dtype = next(self.policy.parameters()).dtype

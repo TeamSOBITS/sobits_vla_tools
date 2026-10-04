@@ -286,7 +286,7 @@ class TrainNode(Node):
             self._shutdown_event.set()
             rclpy.shutdown()
 
-    def _run_training(self) -> None:
+    def _run_training(self) -> None:  # refactor-exempt: lerobot_train driver, ordered setup steps
         params = self._collect_params()
 
         policy_type: str = params.get('policy', 'smolvla')

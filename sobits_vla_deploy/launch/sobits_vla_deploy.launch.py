@@ -129,6 +129,7 @@ def _create_deploy_node(context, *args, **kwargs):
     return actions
 
 
+# refactor-exempt: launch description, declarative
 def generate_launch_description() -> LaunchDescription:
     default_config = PathJoinSubstitution(
         [

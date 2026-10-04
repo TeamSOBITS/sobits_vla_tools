@@ -201,6 +201,7 @@ def _check_ee_frames(repo_id: str, ee_frames: dict, params: dict, arms: list) ->
             )
 
 
+# refactor-exempt: ordered checks sharing one loaded info.json
 def run_preflight_checks(params: dict, ros_logger=None) -> None:
     """Run dataset-aware pre-flight checks that require info.json."""
     def log_warn(msg: str):

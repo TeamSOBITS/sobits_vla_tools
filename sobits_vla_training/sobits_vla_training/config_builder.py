@@ -133,6 +133,7 @@ def _resolve_pretrained_path(raw: str) -> Path | str:
     return raw
 
 
+# refactor-exempt: one pass params -> TrainPipelineConfig, sections are sequential
 def build_train_config(params: dict[str, Any], output_dir: Path):
     """
     Construct a TrainPipelineConfig from a flat ROS parameter dict.

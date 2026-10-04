@@ -25,6 +25,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+// refactor-exempt: file over 600 lines, recorder node; split is a follow-up
+
 #include "sobits_vla_rosbag_collection/rosbag_collection.hpp"
 
 #include <algorithm>

@@ -43,6 +43,7 @@ from sobits_vla_common.launch.utils import (
 _DEFAULT_PIXI_MANIFEST = default_pixi_manifest()
 
 
+# refactor-exempt: launch description, declarative
 def generate_launch_description_impl(context, *args, **kwargs):
     conversion_share = get_package_share_directory('sobits_vla_rosbag_conversion')
     collection_share = get_package_share_directory('sobits_vla_rosbag_collection')

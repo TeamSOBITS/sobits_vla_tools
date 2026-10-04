@@ -26,6 +26,8 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# refactor-exempt: file over 600 lines, node wiring; play/servo/param modules are a follow-up
+
 from __future__ import annotations
 
 import os
@@ -587,7 +589,7 @@ class LeRobotDeployNode(Node):
         self._episode_logger.shutdown()
         super().destroy_node()
 
-    def _configure_parameters(self) -> None:
+    def _configure_parameters(self) -> None:  # refactor-exempt: parameter wiring
         declare_from_schema(self, _SCHEMA)
         params = read_schema(self, _SCHEMA)
 
@@ -700,7 +702,7 @@ class LeRobotDeployNode(Node):
         self._chunk_size_threshold = min(max(self._chunk_size_threshold, 0.0), 1.0)
         self._action_interpolation_multiplier = max(self._action_interpolation_multiplier, 1)
 
-    def _load_robot_profile(self) -> None:
+    def _load_robot_profile(self) -> None:  # refactor-exempt: descriptor -> node fields wiring
         self.declare_parameter('robot.descriptor_id', '')
         desc_id = str(self.get_parameter('robot.descriptor_id').value)
 
@@ -1251,7 +1253,7 @@ class LeRobotDeployNode(Node):
         except IndexError:
             return False
 
-    def _publish_next_action(self) -> None:
+    def _publish_next_action(self) -> None:  # refactor-exempt: control tick, ordered
         if not self._play_enabled:
             if self._base_pub is not None:
                 cmd = Twist()

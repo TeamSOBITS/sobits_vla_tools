@@ -25,6 +25,8 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# refactor-exempt: file over 600 lines, per-policy checkpoint handling; split is a follow-up
+
 from dataclasses import dataclass
 import gc
 from importlib import import_module
@@ -467,6 +469,7 @@ class PolicyLoader:
         except Exception:
             return False
 
+    # refactor-exempt: ordered checkpoint load with per-policy branches; split is a follow-up
     def load_policy(
         self,
         joint_features: List[str],

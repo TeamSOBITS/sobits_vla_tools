@@ -46,7 +46,7 @@ from sobits_vla_common.robot_descriptor import (
 )
 
 
-def generate_descriptor_yaml(
+def generate_descriptor_yaml(  # refactor-exempt: template emitter
     robot_id: str, dof: int, cameras: list[str], mobile_base: str
 ) -> str:
     """Generate structured YAML content for a robot descriptor scaffold."""
@@ -228,7 +228,7 @@ def check_placeholders(desc_path: Path) -> list[str]:
     return warnings
 
 
-def main() -> None:
+def main() -> None:  # refactor-exempt: CLI entry, linear scaffold generation
     """Execute new_robot CLI scaffold utility script."""
     parser = argparse.ArgumentParser(
         description='Scaffold a new robot descriptor configuration.'

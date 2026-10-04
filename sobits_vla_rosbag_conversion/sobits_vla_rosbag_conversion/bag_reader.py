@@ -48,7 +48,7 @@ class BagReader:
             missing = wanted_topics - available
             return missing
 
-    def read_topic_series(
+    def read_topic_series(  # refactor-exempt: bag read loop with per-topic branches
         self,
         wanted_topics: set,
         topic_to_cam: dict,

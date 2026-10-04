@@ -184,7 +184,7 @@ class ObsBuilder:
                 [pose[0], pose[1], pose[2], roll, pitch, yaw], dtype=np.float32
             )
 
-    def snapshot_observation(
+    def snapshot_observation(  # refactor-exempt: one atomic snapshot under the lock
         self,
         tf_buffer,
         expected_state_dim: Optional[int],

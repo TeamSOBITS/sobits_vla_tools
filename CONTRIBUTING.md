@@ -18,6 +18,8 @@ No function over 80 lines, no file over 600. This is a hard cap, not a
 guideline — exceeding it blocks review. Escape hatch: a
 `# refactor-exempt: <reason>` comment on the def line, granted in review, so
 a justified exception is possible but always visible and greppable.
+`sobits_vla_common/test/test_size_caps.py` enforces this repo-wide: an
+unmarked over-cap def or file fails the common test suite.
 
 ## Shared code lives in `sobits_vla_common`
 

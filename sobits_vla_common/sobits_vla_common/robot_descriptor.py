@@ -26,6 +26,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+# refactor-exempt: file over 600 lines, descriptor schema, loader and filter belong together
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -275,7 +277,7 @@ class RobotDescriptor:
             if c.group not in active_group_names
         ]
 
-    def filtered(
+    def filtered(  # refactor-exempt: exclude rules must be applied together
         self,
         exclude_groups: Optional[List[str]] = None,
         exclude_cameras: Optional[List[str]] = None,
@@ -405,6 +407,7 @@ class RobotDescriptor:
         return features
 
 
+# refactor-exempt: yaml schema parse, one block per section
 def _parse_descriptor_file(path: Path) -> RobotDescriptor:
     with open(path) as f:
         data = yaml.safe_load(f)

@@ -33,6 +33,7 @@ synthesize_ee_action is tested against a stub tf_tree (no OfflineTFTree
 dependency); _build_features and ee_actions validation are tested against
 RobotDescriptor fixtures built in-line rather than real robot yaml.
 """
+# refactor-exempt: file over 600 lines, test module
 
 import importlib.util
 from pathlib import Path

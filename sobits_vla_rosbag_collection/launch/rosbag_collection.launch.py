@@ -37,6 +37,7 @@ from launch_ros.descriptions import ComposableNode
 from sobits_vla_common.launch.utils import config_declares
 
 
+# refactor-exempt: launch description, declarative
 def generate_launch_description_impl(context, *args, **kwargs):
     robot_name = LaunchConfiguration('robot_name').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time').perform(context).lower() == 'true'

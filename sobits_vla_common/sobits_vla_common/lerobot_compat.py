@@ -34,6 +34,7 @@ see docs/lerobot_v060_migration_plan.md). Each patch below documents why it
 is still needed against the 0.6.0 source; patches that upstream fixed are
 removed rather than kept as version-gated no-ops.
 """
+# refactor-exempt: file over 600 lines, one patch set per lerobot pin
 
 from __future__ import annotations
 
@@ -122,6 +123,7 @@ def _patch_bool_quantile_normalization() -> None:
         _bool_quantile_normalization_patched = True
 
 
+# refactor-exempt: verbatim lerobot upstream body with the fix applied
 def _patch_pi05_action_dim_padding() -> None:
     """
     Zero-pad/truncate pi0/pi05/pi0fast action & state projections on load.
@@ -313,6 +315,7 @@ def _patch_pi0fast_peft_targets() -> None:
         _pi0fast_peft_targets_patched = True
 
 
+# refactor-exempt: verbatim lerobot upstream body with the fix applied
 def _patch_pi05_from_pretrained() -> None:
     """
     Load PI05 on CPU (skeleton) then dtype-cast the safetensors state dict.
