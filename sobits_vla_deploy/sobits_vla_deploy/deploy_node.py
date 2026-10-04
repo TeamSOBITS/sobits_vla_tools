@@ -60,6 +60,7 @@ from sobits_vla_common.robot_descriptor import (  # noqa: E402
 from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.action_executor import ActionExecutor  # noqa: E402
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
+from sobits_vla_deploy.deadman import DeadmanGate, Edge  # noqa: E402
 from sobits_vla_deploy.ee_control import resolve_ee_control  # noqa: E402
 from sobits_vla_deploy.episode_logger import EpisodeLogger  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
@@ -563,7 +564,7 @@ class LeRobotDeployNode(Node):
         # clock so a paused sim can't keep a stale press alive).
         self._last_joy: Optional[Joy] = None
         self._last_joy_rx: float = 0.0
-        self._safety_was_pressed = False
+        self._deadman = DeadmanGate()
         if self._safety_enabled:
             self._joy_sub = self.create_subscription(
                 Joy, 'joy', self._on_joy, QoSProfile(depth=10)
@@ -1097,6 +1098,7 @@ class LeRobotDeployNode(Node):
                 None if self._safety_enabled else self.get_clock().now()
             )
             self._play_enabled = True
+            self._deadman.reset()
         if self._servo_targets is not None and not self._safety_enabled:
             # With a deadman trigger, engagement happens on first press instead
             # (see _publish_next_action) -- PLAY alone must not move the arm.
@@ -1110,6 +1112,7 @@ class LeRobotDeployNode(Node):
             if not self._play_enabled:
                 return False
             self._play_enabled = False
+            self._deadman.reset()
         # Serialize against an in-flight _do_begin_episode so end_episode()
         # cannot land before begin_episode() has opened the episode file.
         with self._episode_start_lock:
@@ -1253,6 +1256,22 @@ class LeRobotDeployNode(Node):
         except IndexError:
             return False
 
+    def _on_deadman_released(self) -> None:
+        self.get_logger().warning('Safety trigger released — holding commands.')
+        if self._servo_targets is not None:
+            self._servo_targets.disable_tracking()
+
+    def _on_deadman_engaged(self) -> None:
+        # Drop actions queued while held so execution resumes on fresh chunks.
+        self._chunk_buffer.clear()
+        self._interpolator.reset()
+        if self._servo_targets is not None:
+            self._refresh_and_engage_servo()
+        if self._episode_t0 is None:
+            # Deferred episode clock: starts at first engagement, not at PLAY.
+            self._episode_t0 = self.get_clock().now()
+        self.get_logger().info('Safety trigger engaged — resuming with fresh actions.')
+
     def _publish_next_action(self) -> None:  # refactor-exempt: control tick, ordered
         if not self._play_enabled:
             if self._base_pub is not None:
@@ -1271,32 +1290,15 @@ class LeRobotDeployNode(Node):
                 return
 
         if self._safety_enabled:
-            if not self._safety_pressed():
-                if self._safety_was_pressed:
-                    self.get_logger().warning(
-                        'Safety trigger released — holding commands.'
-                    )
-                    self._safety_was_pressed = False
-                    if self._servo_targets is not None:
-                        self._servo_targets.disable_tracking()
+            edge = self._deadman.update(self._safety_pressed())
+            if edge is Edge.RELEASED:
+                self._on_deadman_released()
+            elif edge is Edge.ENGAGED:
+                self._on_deadman_engaged()
+                return
+            if not self._deadman.engaged:
                 if self._base_pub is not None:
                     self._base_pub.publish(Twist())
-                return
-            if not self._safety_was_pressed:
-                # (Re)engaged: drop actions queued while held so execution
-                # resumes only with freshly inferred chunks.
-                self._chunk_buffer.clear()
-                self._interpolator.reset()
-                self._safety_was_pressed = True
-                if self._servo_targets is not None:
-                    self._refresh_and_engage_servo()
-                if self._episode_t0 is None:
-                    # Deferred episode clock: timing/timeout start now, not
-                    # while the scene was staged with the trigger released.
-                    self._episode_t0 = self.get_clock().now()
-                self.get_logger().info(
-                    'Safety trigger engaged — resuming with fresh actions.'
-                )
                 return
 
         if self._single_step_mode:
