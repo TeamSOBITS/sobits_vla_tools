@@ -50,6 +50,21 @@
 namespace sobits_vla
 {
 
+using CmdResponse = sobits_interfaces::srv::VlaCommand::Response;
+using CmdRequest = sobits_interfaces::srv::VlaCommand::Request;
+
+namespace
+{
+
+void fillResponse(CmdResponse & r, bool success, const std::string & msg, uint8_t status)
+{
+  r.success = success;
+  r.message = msg;
+  r.status = status;
+}
+
+}  // namespace
+
 RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 : Node("rosbag_collection", options)
 {
@@ -190,7 +205,13 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
     std::bind(&RosbagCollection::handleVlaCommand, this, std::placeholders::_1,
       std::placeholders::_2));
 
+  record_status_pub_ = this->create_publisher<sobits_interfaces::msg::VlaStatus>(
+    "~/status", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+  record_status_timer_ = this->create_wall_timer(
+    std::chrono::seconds(1), std::bind(&RosbagCollection::publishRecordStatus, this));
+
   createRosbagYaml();
+  publishRecordStatus();
 
   RCLCPP_INFO(this->get_logger(), "RosbagCollection initialized");
 }
@@ -198,6 +219,7 @@ RosbagCollection::RosbagCollection(const rclcpp::NodeOptions & options)
 RosbagCollection::~RosbagCollection()
 {
   RCLCPP_INFO(this->get_logger(), "RosbagCollection destructor called");
+  if (record_status_timer_) {record_status_timer_->cancel();}  // before saveRosbag() below
   node_alive_->store(false);  // prevent late auto-save from starting saveRosbag()
   stopRecordingMonitor();     // cancel timer before any further teardown
   // join any in-flight auto-save before members it uses (this) get torn down
@@ -282,8 +304,7 @@ void RosbagCollection::createRosbag()
 
   recording_start_time_ = std::chrono::steady_clock::now();
   max_duration_triggered_ = false;
-  previous_state_ = current_state_;
-  current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
+  transition(CmdResponse::STATE_RECORDING, RecordStatus::Event::Started);
 
   rosbag2_storage::StorageOptions storage_options;
   storage_options.uri = current_bag_path_;
@@ -324,7 +345,7 @@ void RosbagCollection::createRosbag()
           recorder_executor_->spin();  // processes subscription callbacks until cancel()
         } catch (const std::exception & e) {
           RCLCPP_ERROR(this->get_logger(), "Error during bag recording: %s", e.what());
-          current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
+          transition(CmdResponse::STATE_ERROR, RecordStatus::Event::Error, e.what());
         }
   });
 
@@ -365,8 +386,8 @@ void RosbagCollection::removeRosbag()
     if (episode_lifecycle_->removeBagDir(current_bag_path_)) {
       RCLCPP_INFO(this->get_logger(), "Removed bag directory: %s", current_bag_path_.c_str());
     } else {
-      previous_state_ = current_state_;
-      current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
+      transition(CmdResponse::STATE_ERROR, RecordStatus::Event::Error,
+          "Failed to remove bag directory");
       throw std::runtime_error("Failed to remove bag directory");
     }
   }
@@ -377,8 +398,7 @@ void RosbagCollection::removeRosbag()
   current_bag_name_ = previous_bag_name_;
   current_bag_path_ = previous_bag_path_;
 
-  previous_state_ = current_state_;
-  current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
+  transition(CmdResponse::STATE_STOPPED, RecordStatus::Event::Deleted);
 
   RCLCPP_INFO(this->get_logger(), "Rosbag removed successfully");
 }
@@ -392,8 +412,7 @@ bool RosbagCollection::saveRosbag()
 
   if (!is_recording_) {
     RCLCPP_WARN(this->get_logger(), "No rosbag process to terminate");
-    previous_state_ = current_state_;
-    current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
+    transition(CmdResponse::STATE_STOPPED, RecordStatus::Event::None);
     return false;
   }
 
@@ -417,9 +436,12 @@ bool RosbagCollection::saveRosbag()
   previous_state_ = current_state_;
   current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
 
-  // Episode duration validation (steady_clock: monotonic, unaffected by sim_time or NTP)
-  auto elapsed = std::chrono::steady_clock::now() - recording_start_time_;
-  double duration_sec = std::chrono::duration<double>(elapsed).count();
+  // Recorded time only (pauses excluded), on the monotonic clock.
+  double duration_sec;
+  {
+    std::lock_guard<std::mutex> lk(record_status_mutex_);
+    duration_sec = record_status_.elapsedSec(RecordStatus::Clock::now());
+  }
 
   // Min-duration + integrity check; EpisodeLifecycle logs its own messages.
   auto decision = episode_lifecycle_->decideSave(
@@ -427,10 +449,12 @@ bool RosbagCollection::saveRosbag()
   if (!decision.keep) {
     episode_lifecycle_->removeBagDir(current_bag_path_);
     removeEpisodeFromYaml();
+    transition(CmdResponse::STATE_STOPPED, RecordStatus::Event::Discarded, decision.discard_reason);
     return false;
   }
 
   updateEpisodeYaml();
+  transition(CmdResponse::STATE_STOPPED, RecordStatus::Event::Saved);
 
   RCLCPP_INFO(this->get_logger(), "Rosbag saved successfully (duration: %.1fs)", duration_sec);
   return true;
@@ -473,6 +497,31 @@ void RosbagCollection::removeEpisodeFromYaml()
   }
 }
 
+void RosbagCollection::handleRecord(CmdResponse & response)
+{
+  if (current_state_ != CmdResponse::STATE_STOPPED &&
+    current_state_ != CmdResponse::STATE_PAUSED)
+  {
+    rejectCommand(
+      response, "Cannot start/resume recording while already in state: " +
+      std::to_string(current_state_), current_state_);
+    return;
+  }
+
+  if (current_state_ == CmdResponse::STATE_STOPPED) {
+    createRosbag();
+    fillResponse(response, true, "Recording started successfully", CmdResponse::STATE_RECORDING);
+  } else if (current_state_ == CmdResponse::STATE_PAUSED) {
+    if (recorder_node_) {
+      recorder_node_->resume();
+      transition(CmdResponse::STATE_RECORDING, RecordStatus::Event::Resumed);
+      fillResponse(response, true, "Recording resumed successfully", CmdResponse::STATE_RECORDING);
+    } else {
+      fillResponse(response, false, "Recorder node not initialized", CmdResponse::STATE_ERROR);
+    }
+  }
+}
+
 void RosbagCollection::handleVlaCommand(
   const std::shared_ptr<sobits_interfaces::srv::VlaCommand::Request> request,
   std::shared_ptr<sobits_interfaces::srv::VlaCommand::Response> response)
@@ -480,118 +529,69 @@ void RosbagCollection::handleVlaCommand(
   RCLCPP_INFO(this->get_logger(), "Received VlaCommand service request: %d", request->command);
 
   if (!task_has_been_set_) {
-    response->success = false;
-    response->message =
-      "Please set a task name via the vla_task_update service before sending commands.";
-    response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
+    rejectCommand(
+      *response,
+      "Please set a task name via the vla_task_update service before sending commands.",
+      CmdResponse::STATE_ERROR);
     return;
   }
 
-  if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR) {
-    response->success = false;
-    response->message = "Cannot process command while in ERROR state.";
-    response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
+  if (current_state_ == CmdResponse::STATE_ERROR) {
+    rejectCommand(*response, "Cannot process command while in ERROR state.",
+      CmdResponse::STATE_ERROR);
     return;
   }
 
-  if (request->command == sobits_interfaces::srv::VlaCommand::Request::RECORD) {
-    if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED &&
-      current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED)
-    {
-      response->success = false;
-      response->message = "Cannot start/resume recording while already in state: " +
-        std::to_string(current_state_);
-      response->status = current_state_;
-      return;
-    }
-
-    if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
-      createRosbag();
-      response->success = true;
-      response->message = "Recording started successfully";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
-    } else if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED) {
-      if (recorder_node_) {
-        recorder_node_->resume();
-        current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
-        response->success = true;
-        response->message = "Recording resumed successfully";
-        response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
-      } else {
-        response->success = false;
-        response->message = "Recorder node not initialized";
-        response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
-      }
-    }
-  } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::PAUSE) {
-    if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING) {
-      response->success = false;
-      response->message = "Cannot pause while not recording";
-      response->status = current_state_;
+  if (request->command == CmdRequest::RECORD) {
+    handleRecord(*response);
+  } else if (request->command == CmdRequest::PAUSE) {
+    if (current_state_ != CmdResponse::STATE_RECORDING) {
+      rejectCommand(*response, "Cannot pause while not recording", current_state_);
       return;
     }
 
     if (recorder_node_) {
       recorder_node_->pause();
-      current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED;
-      response->success = true;
-      response->message = "Recording paused successfully";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED;
+      transition(CmdResponse::STATE_PAUSED, RecordStatus::Event::Paused);
+      fillResponse(*response, true, "Recording paused successfully", CmdResponse::STATE_PAUSED);
     } else {
-      response->success = false;
-      response->message = "Recorder node not initialized";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
+      fillResponse(*response, false, "Recorder node not initialized", CmdResponse::STATE_ERROR);
     }
-  } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::RESUME) {
-    if (current_state_ != sobits_interfaces::srv::VlaCommand::Response::STATE_PAUSED) {
-      response->success = false;
-      response->message = "Cannot resume while not paused";
-      response->status = current_state_;
+  } else if (request->command == CmdRequest::RESUME) {
+    if (current_state_ != CmdResponse::STATE_PAUSED) {
+      rejectCommand(*response, "Cannot resume while not paused", current_state_);
       return;
     }
 
     if (recorder_node_) {
       recorder_node_->resume();
-      current_state_ = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
-      response->success = true;
-      response->message = "Recording resumed successfully";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_RECORDING;
+      transition(CmdResponse::STATE_RECORDING, RecordStatus::Event::Resumed);
+      fillResponse(*response, true, "Recording resumed successfully", CmdResponse::STATE_RECORDING);
     } else {
-      response->success = false;
-      response->message = "Recorder node not initialized";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_ERROR;
+      fillResponse(*response, false, "Recorder node not initialized", CmdResponse::STATE_ERROR);
     }
-  } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::SAVE) {
-    if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED) {
-      response->success = false;
-      response->message = "Cannot save recording while not in RECORDING or PAUSED state";
-      response->status = current_state_;
+  } else if (request->command == CmdRequest::SAVE) {
+    if (current_state_ == CmdResponse::STATE_STOPPED) {
+      rejectCommand(*response, "Cannot save recording while not in RECORDING or PAUSED state",
+          current_state_);
       return;
     }
     if (saveRosbag()) {
-      response->success = true;
-      response->message = "Recording saved successfully";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
+      fillResponse(*response, true, "Recording saved successfully", CmdResponse::STATE_STOPPED);
     } else {
-      response->success = false;
-      response->message = "Recording was discarded (too short or integrity failed)";
-      response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
+      fillResponse(*response, false, "Recording was discarded (too short or integrity failed)",
+          CmdResponse::STATE_STOPPED);
     }
-  } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::DELETE) {
+  } else if (request->command == CmdRequest::DELETE) {
     removeRosbag();
-    response->success = true;
-    response->message = "Recording deleted successfully";
-    response->status = sobits_interfaces::srv::VlaCommand::Response::STATE_STOPPED;
-  } else if (request->command == sobits_interfaces::srv::VlaCommand::Request::RESET) {
+    fillResponse(*response, true, "Recording deleted successfully", CmdResponse::STATE_STOPPED);
+  } else if (request->command == CmdRequest::RESET) {
     requestWorldReset();
-    response->success = true;
-    response->message = "World reset requested";
-    response->status = current_state_;
+    fillResponse(*response, true, "World reset requested", current_state_);
   } else {
     RCLCPP_ERROR(this->get_logger(), "Unknown command received: %d", request->command);
-    response->success = false;
-    response->message = "Unknown command received: " + std::to_string(request->command);
-    response->status = current_state_;
+    rejectCommand(
+      *response, "Unknown command received: " + std::to_string(request->command), current_state_);
   }
 }
 
@@ -605,6 +605,11 @@ void RosbagCollection::taskUpdateCallback(
     RCLCPP_WARN(this->get_logger(), "Cannot update task name while recording is in progress");
     response->success = false;
     response->message = "Cannot update task name while recording is in progress";
+    {
+      std::lock_guard<std::mutex> lk(record_status_mutex_);
+      record_status_.reject(response->message);
+      publishLocked();
+    }
     return;
   }
 
@@ -641,6 +646,11 @@ void RosbagCollection::taskUpdateCallback(
   response->success = true;
   response->message = "Task name updated successfully and rosbag YAML file updated";
   task_has_been_set_ = true;
+  {
+    std::lock_guard<std::mutex> lk(record_status_mutex_);
+    record_status_.setTask(current_task_name_);
+    publishLocked();
+  }
 }
 
 void RosbagCollection::subtaskUpdateCallback(

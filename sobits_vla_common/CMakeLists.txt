@@ -77,6 +77,10 @@ if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
 
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_gamepad_status_topic test/test_gamepad_status_topic.cpp)
+  target_include_directories(test_gamepad_status_topic PRIVATE include)
+
   # lerobot seam smoke-test suite — the pass/fail gate for lerobot upgrades.
   # lerobot lives in the repo's pixi environments (not system python), so
   # the test runs on the first materialized env interpreter that ships both

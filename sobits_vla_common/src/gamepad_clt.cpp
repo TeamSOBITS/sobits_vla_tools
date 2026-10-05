@@ -26,9 +26,13 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "sobits_vla_common/gamepad_clt.hpp"
+#include "sobits_vla_common/status_topic.hpp"
 
 namespace sobits_vla
 {
+
+// VlaStatus.STATE_RESETTING; status-only, so absent from VlaCommand::Response.
+static constexpr uint8_t kStateResetting = 5;
 
 GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
 : Node("gamepad_client", options),
@@ -88,6 +92,15 @@ GamepadClient::GamepadClient(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "Cooldown duration: %.2f s", button_cooldown_duration_);
 
   service_client_ = this->create_client<sobits_interfaces::srv::VlaCommand>(command_service_name_);
+
+  const std::string status_topic = statusTopicFromService(command_service_name_);
+  if (!status_topic.empty()) {
+    // Transient-local so a late joiner gets the stage node's current state at once.
+    status_subscriber_ = this->create_subscription<sobits_interfaces::msg::VlaStatus>(
+      status_topic, rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
+      std::bind(&GamepadClient::statusCallback, this, std::placeholders::_1));
+    RCLCPP_INFO(this->get_logger(), "Following status: %s", status_topic.c_str());
+  }
 
   timer_ = this->create_wall_timer(
       std::chrono::milliseconds(250),
@@ -155,7 +168,10 @@ void GamepadClient::timerCallback()
     }
     // Play button: PLAY when stopped, STOP while playing.
     if (!button_pressed && play_button_ != -1 && pressed(play_button_)) {
-      if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_PLAYING) {
+      if (current_state_ == kStateResetting) {
+        // A PLAY during the world reset would race the re-pose.
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Reset in progress, play ignored");
+      } else if (current_state_ == sobits_interfaces::srv::VlaCommand::Response::STATE_PLAYING) {
         callService(sobits_interfaces::srv::VlaCommand::Request::STOP);
       } else {
         callService(sobits_interfaces::srv::VlaCommand::Request::PLAY);
@@ -262,6 +278,17 @@ void GamepadClient::callService(const uint8_t & command)
         this->current_state_ = response->status;
       }
     });
+}
+
+void GamepadClient::statusCallback(const sobits_interfaces::msg::VlaStatus::SharedPtr msg)
+{
+  if (msg->state == current_state_) {
+    return;
+  }
+  RCLCPP_INFO(this->get_logger(), "Stage state: %s -> %s",
+    vlaStateName(current_state_), vlaStateName(msg->state));
+  previous_state_ = current_state_;
+  current_state_ = msg->state;
 }
 
 }  // namespace sobits_vla

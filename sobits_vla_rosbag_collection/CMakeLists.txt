@@ -39,7 +39,9 @@ add_library(${PROJECT_NAME} SHARED
   src/image_header_size.cpp
   src/topic_builder.cpp
   src/episode_lifecycle.cpp
+  src/record_status.cpp
   src/rosbag_collection_params.cpp
+  src/rosbag_collection_status.cpp
   src/rosbag_collection.cpp
 )
 
@@ -93,6 +95,10 @@ if(BUILD_TESTING)
     src/episode_lifecycle.cpp)
   target_include_directories(test_episode_lifecycle PRIVATE include)
   ament_target_dependencies(test_episode_lifecycle rosbag2_cpp rosbag2_storage)
+
+  ament_add_gtest(test_record_status test/test_record_status.cpp
+    src/record_status.cpp)
+  target_include_directories(test_record_status PRIVATE include)
 
   ament_add_gtest(test_topic_builder test/test_topic_builder.cpp
     src/topic_builder.cpp)

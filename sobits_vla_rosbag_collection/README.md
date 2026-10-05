@@ -16,7 +16,9 @@ and writes `recorded_bags_meta.yaml` alongside each episode so
 | `rosbag_collection_node` | `sobits_vla::RosbagCollection` | Owns the recorder, task/episode bookkeeping, and the `VlaCommand` service that drives record/pause/save/delete/reset. |
 
 Internally split into `episode_lifecycle.{hpp,cpp}` (bag naming, min/max
-duration + integrity checks, ROS-free), `rosbag_collection_params.cpp` (the
+duration + integrity checks, ROS-free), `record_status.{hpp,cpp}` (recorder
+state + last event tracker, ROS-free), `rosbag_collection_status.cpp` (publishes
+it), `rosbag_collection_params.cpp` (the
 ~40 `declare_parameter` calls), `bag_metadata_manager.cpp`,
 `recording_monitor.cpp`, `topic_builder.cpp`, and `robot_descriptor_loader.cpp`.
 
@@ -43,6 +45,18 @@ Owner-private naming (see `sobits_vla_common`'s README): this node's name is
 |---|---|
 | `~/command` (`VlaCommand`) — resolves to `/<robot>/vla_rosbag_collection/command` | Robot I/O (joint states, cameras, cmd_vel — absolute, from the descriptor) |
 | `~/vla_task_update`, `~/vla_subtask_update` (`VlaUpdateTask`) | `world_reset_node/reset_world` (consumer form; only when `enable_world_reset:=true`) |
+| `~/status` (`sobits_interfaces/msg/VlaStatus`; reliable · transient-local · depth 1; 1 Hz heartbeat + on events) — resolves to `/<robot>/vla_rosbag_collection/status` | |
+
+### Status feed
+
+`~/status` carries the stage (`STAGE_COLLECTION` here), the recorder state, the last event (started, paused,
+resumed, saved, discarded, deleted, error, task set, rejected), the task and
+episode names, and the recorded time with pauses excluded. A late subscriber
+gets the latest message at once. Watch it with:
+
+```sh
+ros2 topic echo /<robot>/vla_rosbag_collection/status
+```
 
 ## Outputs
 
@@ -72,5 +86,5 @@ colcon test --packages-select sobits_vla_rosbag_collection --test-result-base bu
 colcon test-result --test-result-base build/sobits_vla_rosbag_collection
 ```
 
-gtest suites: `test_episode_lifecycle.cpp`, `test_topic_builder.cpp`,
-`test_bag_metadata_manager.cpp` (`sobits_vla_rosbag_collection/test/`).
+gtest suites: `test_episode_lifecycle.cpp`, `test_record_status.cpp`,
+`test_topic_builder.cpp`, `test_bag_metadata_manager.cpp` (`sobits_vla_rosbag_collection/test/`).
