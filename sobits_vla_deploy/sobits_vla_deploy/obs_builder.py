@@ -33,7 +33,10 @@ from sobits_vla_common.geometry import unwrap_rpy
 from sobits_vla_common.robot_descriptor import (
     BASE_KEY_ALIASES, EE_ROTATION_AXES, EE_ROTATION_DEFAULT,
 )
-import torch
+try:
+    import torch
+except ImportError:  # fake_policy dry run: only reached on the lerobot path
+    torch = None
 
 try:
     from sobits_vla_common.lerobot_adapter import build_dataset_frame, hw_to_dataset_features

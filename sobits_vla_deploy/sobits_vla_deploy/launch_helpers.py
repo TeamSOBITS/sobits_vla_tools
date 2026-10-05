@@ -83,6 +83,7 @@ def world_reset_actions(
             namespace=robot_name,
             output='screen',
             prefix=prefix or None,
+            additional_env={'PYTHONNOUSERSITE': '1'} if not prefix else None,
             parameters=[
                 world_reset_config,
                 {'use_sim_time': use_sim_time},

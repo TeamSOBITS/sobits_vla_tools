@@ -74,10 +74,10 @@ def _create_deploy_node(context, *args, **kwargs):
     node_name = LaunchConfiguration('node_name').perform(context)
     use_sim_time = str_to_bool(LaunchConfiguration('use_sim_time').perform(context))
 
-    prefix = pixi_prefix(
-        resolve_pixi_env(context),
-        LaunchConfiguration('pixi_manifest').perform(context),
-    )
+    fake_policy = str_to_bool(LaunchConfiguration('fake_policy').perform(context))
+    # The dry run needs no ML stack, so it runs on the system python without pixi.
+    prefix = '' if fake_policy else pixi_prefix(
+        resolve_pixi_env(context), LaunchConfiguration('pixi_manifest').perform(context))
 
     model_repo_id = LaunchConfiguration('model_repo_id').perform(context).strip()
     model_policy_class = LaunchConfiguration('model_policy_class').perform(context).strip()
@@ -97,6 +97,8 @@ def _create_deploy_node(context, *args, **kwargs):
         overrides['model.device'] = model_device
     if model_use_amp_raw:
         overrides['model.use_amp'] = str_to_bool(model_use_amp_raw)
+    if fake_policy:
+        overrides['model.fake_policy'] = True
 
     actions = [
         Node(
@@ -106,6 +108,7 @@ def _create_deploy_node(context, *args, **kwargs):
             namespace=robot_name,
             output='screen',
             prefix=prefix or None,
+            additional_env={'PYTHONNOUSERSITE': '1'} if not prefix else None,
             parameters=[
                 gamepad_config,
                 config_file,
@@ -216,6 +219,14 @@ def generate_launch_description() -> LaunchDescription:
                 'model_use_amp',
                 default_value='',
                 description='Override model.use_amp when non-empty (true/false).',
+            ),
+            DeclareLaunchArgument(
+                'fake_policy',
+                default_value='false',
+                description=(
+                    'Dry run with a hold-pose stand-in policy: no pixi, lerobot '
+                    'or torch. Pair with deploy_config:=deploy_config_sobit_home_fake.'
+                ),
             ),
             DeclareLaunchArgument(
                 'enable_servo_backend',

@@ -273,15 +273,22 @@ void GamepadClient::callService(const uint8_t & command)
       }
       // Status authoritative on both paths: a failed SAVE still stops the server when
       // it discards a too-short episode. Ignoring it strands the client in PAUSED.
-      if (response->status != this->current_state_) {
+      // A live status feed knows more (RESETTING), so it wins while it is fresh.
+      if (!this->statusFeedFresh() && response->status != this->current_state_) {
         this->previous_state_ = this->current_state_;
         this->current_state_ = response->status;
       }
     });
 }
 
+bool GamepadClient::statusFeedFresh() const
+{
+  return std::chrono::steady_clock::now() - last_status_rx_ < std::chrono::seconds(3);
+}
+
 void GamepadClient::statusCallback(const sobits_interfaces::msg::VlaStatus::SharedPtr msg)
 {
+  last_status_rx_ = std::chrono::steady_clock::now();
   if (msg->state == current_state_) {
     return;
   }

@@ -1,0 +1,45 @@
+# Dry run: no checkpoint, lerobot or torch. A stand-in policy holds the
+# measured pose so the whole deploy path (status, deadman, reset) can run in sim.
+# ros2 launch sobits_vla_deploy sobits_vla_deploy.launch.py \
+#   deploy_config:=deploy_config_sobit_home_fake fake_policy:=true use_sim_time:=true
+/**:
+  ros__parameters:
+    model:
+      repo_id: "fake"
+      fake_policy: true
+      device: "cpu"
+      use_amp: false
+      default_task_label: "dry run"
+
+    runtime:
+      control_hz: 10.0
+      actions_per_chunk: 20
+      chunk_size_threshold: 0.6
+      aggregate_fn_name: weighted_average
+      async_enabled: true
+      single_step_mode: false
+
+    rtc:
+      enabled: false
+
+    logging:
+      enabled: false
+      log_dir: ""
+
+    task:
+      mode: pick
+      common:
+        robot_model_name: sobit_home
+        tracked_model_name: box_to_pick
+        episode_timeout_s: 60.0
+      pick:
+        lift_success_m: 0.05
+
+    robot:
+      descriptor_id: sobit_home
+      # Only head_camera must stream; the right side is not driven.
+      exclude:
+        groups: ["arm_right", "hand_right"]
+        cameras: ["hand_left_camera", "hand_right_camera"]
+        ee: ["right"]
+        mobile_base: false

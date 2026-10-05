@@ -60,12 +60,14 @@ from sobits_vla_common.robot_descriptor import (  # noqa: E402
 from sobits_vla_deploy.action_chunk_buffer import ActionChunkBuffer  # noqa: E402
 from sobits_vla_deploy.action_executor import ActionExecutor  # noqa: E402
 from sobits_vla_deploy.action_interpolator import ActionInterpolator  # noqa: E402
+from sobits_vla_deploy.deadman import DeadmanGate, Edge  # noqa: E402
+from sobits_vla_deploy.deploy_status_feed import DeployStatusFeed  # noqa: E402
 from sobits_vla_deploy.ee_control import resolve_ee_control  # noqa: E402
 from sobits_vla_deploy.episode_logger import EpisodeLogger  # noqa: E402
+from sobits_vla_deploy.fake_policy import fake_bundle  # noqa: E402
 from sobits_vla_deploy.inference_engine import InferenceEngine  # noqa: E402
 from sobits_vla_deploy.model_checks import check_action_space_matches_model  # noqa: E402
 from sobits_vla_deploy.obs_builder import ObsBuilder  # noqa: E402
-from sobits_vla_deploy.policy_loader import PolicyLoader  # noqa: E402
 from sobits_vla_deploy.servo_target_publisher import ServoTargetPublisher  # noqa: E402
 from std_msgs.msg import Bool, String  # noqa: E402
 import tf2_ros  # noqa: E402
@@ -85,6 +87,8 @@ _SCHEMA = {
         'use_relative_actions': P(False),
         'default_task_label': P(''),
         'dataset_repo_id': P(''),
+        # Dry run: hold-pose stand-in policy, no lerobot/torch needed.
+        'fake_policy': P(False),
         # 'joint': arm groups command joint trajectories directly (default).
         # 'ee': the policy emits absolute ee.{arm}.* poses instead of arm
         # joint angles, streamed to the sobits_teleop servo bridge; arm
@@ -93,6 +97,9 @@ _SCHEMA = {
         # EE rotation of the checkpoint's ee.* features: rotvec (rx,ry,rz) or
         # rpy (roll,pitch,yaw); quat is refused -- ObsBuilder/servo can't emit it.
         'ee_rotation': P('rotvec'),
+    },
+    'status': {
+        'rate_hz': P(1.0),
     },
     'ee_servo': {
         # 0.3 m/s at the default 10 Hz control_hz -- caps how far one control
@@ -204,12 +211,19 @@ class JointGroupConfig:
 class LeRobotDeployNode(Node):
     def __init__(self) -> None:
         super().__init__('sobits_vla_deploy')
+        self._configure_parameters()
+        if not self._model_fake_policy:
+            runtime_deps.ensure({
+                'lerobot': 'pip install lerobot[training]~=0.6.0',
+                'huggingface_hub': 'pip install huggingface_hub',
+                'safetensors': 'pip install lerobot[training]~=0.6.0',
+            })
 
         from sobits_vla_common.lerobot_adapter import describe
         seam = describe()
         self.get_logger().info(
-            f'lerobot seam: version={seam["version"]} is_v06={seam["is_v06"]} '
-            f'unresolvable={seam["unresolvable"]}'
+            f'lerobot seam: version={seam["version"]} available={seam["available"]} '
+            f'is_v06={seam["is_v06"]} unresolvable={seam["unresolvable"]}'
         )
 
         self._cb_group = ReentrantCallbackGroup()
@@ -217,7 +231,6 @@ class LeRobotDeployNode(Node):
         self._reset_lock = Lock()
         self._episode_start_lock = Lock()
 
-        self._configure_parameters()
         self._load_robot_profile()
 
         self._init_policy()
@@ -237,6 +250,17 @@ class LeRobotDeployNode(Node):
         )
 
     def _init_policy(self) -> None:
+        if self._model_fake_policy:
+            action_keys = self._joint_features + self._mobile_base_features + self._ee_features
+            self._apply_bundle(fake_bundle(action_keys, self._actions_per_chunk))
+            self.get_logger().warning('model.fake_policy: holding pose, no real inference.')
+        else:
+            self._apply_bundle(self._load_policy_bundle())
+        self._check_model_flags()
+
+    def _load_policy_bundle(self):
+        # Imported here: policy_loader pulls torch, absent in the fake dry run.
+        from sobits_vla_deploy.policy_loader import PolicyLoader
         loader = PolicyLoader(
             model_repo_id=self._model_repo_id,
             policy_class_path=self._policy_class_path,
@@ -252,11 +276,11 @@ class LeRobotDeployNode(Node):
             control_hz=self._control_hz,
             logger=self.get_logger(),
         )
-
-        bundle = loader.load_policy(
+        return loader.load_policy(
             self._joint_features, self._mobile_base_features, self._ee_features
         )
 
+    def _apply_bundle(self, bundle) -> None:
         self._policy = bundle.policy
         self._rtc_enabled = bundle.rtc_enabled
         self._model_action_feature_names = bundle.model_action_feature_names
@@ -267,6 +291,7 @@ class LeRobotDeployNode(Node):
         self._preprocessor = bundle.preprocessor
         self._postprocessor = bundle.postprocessor
 
+    def _check_model_flags(self) -> None:
         # model.use_relative_actions was dead (checkpoint always won silently);
         # enforce that an explicit config value agrees with the checkpoint.
         if (
@@ -309,6 +334,10 @@ class LeRobotDeployNode(Node):
         self._interpolator = ActionInterpolator(self._action_interpolation_multiplier)
 
         self._task_label = str(self.get_parameter('model.default_task_label').value)
+        self._status = DeployStatusFeed(
+            self, self._model_repo_id, self._safety_enabled, self._task_label,
+            self._status_rate_hz,
+        )
 
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
@@ -335,6 +364,8 @@ class LeRobotDeployNode(Node):
             relative_exclude_features=self._relative_exclude_features,
             ee_features=self._ee_features,
             logger=self.get_logger(),
+            predict_fn=self._policy.predict if self._model_fake_policy else None,
+            on_chunk=self._status.chunk,
         )
         self._inference_engine.update_task_label(self._task_label)
 
@@ -563,7 +594,7 @@ class LeRobotDeployNode(Node):
         # clock so a paused sim can't keep a stale press alive).
         self._last_joy: Optional[Joy] = None
         self._last_joy_rx: float = 0.0
-        self._safety_was_pressed = False
+        self._deadman = DeadmanGate()
         if self._safety_enabled:
             self._joy_sub = self.create_subscription(
                 Joy, 'joy', self._on_joy, QoSProfile(depth=10)
@@ -603,6 +634,8 @@ class LeRobotDeployNode(Node):
         self._model_device = str(params.model.device)
         self._model_use_amp = bool(params.model.use_amp)
         self._model_dataset_repo_id = str(params.model.dataset_repo_id)
+        self._model_fake_policy = bool(params.model.fake_policy)
+        self._status_rate_hz = float(params.status.rate_hz)
         self._model_use_relative_actions_param = bool(params.model.use_relative_actions)
         # Only enforce when the config explicitly set this key -- otherwise
         # it's just the declared default, not an operator claim to check.
@@ -1028,6 +1061,7 @@ class LeRobotDeployNode(Node):
             finally:
                 if outcome is not None:
                     self._publish_episode_done(outcome)
+                self._status.reset_done()
 
     def _run_world_reset(self) -> None:
         """Call VlaResetWorld on the shared reset node; blocking."""
@@ -1073,6 +1107,7 @@ class LeRobotDeployNode(Node):
         if hasattr(self._policy, 'reset'):
             self._policy.reset()
         self._task_label = request.label
+        self._status.task_set(request.label)
         self._inference_engine.update_task_label(request.label)
         self.get_logger().info('Task label updated to {!r}.'.format(request.label))
         response.success = True
@@ -1097,10 +1132,12 @@ class LeRobotDeployNode(Node):
                 None if self._safety_enabled else self.get_clock().now()
             )
             self._play_enabled = True
+            self._deadman.reset()
         if self._servo_targets is not None and not self._safety_enabled:
             # With a deadman trigger, engagement happens on first press instead
             # (see _publish_next_action) -- PLAY alone must not move the arm.
             self._refresh_and_engage_servo()
+        self._status.started(clock_running=not self._safety_enabled)
         Thread(target=self._do_begin_episode, daemon=True).start()
         return True
 
@@ -1110,11 +1147,13 @@ class LeRobotDeployNode(Node):
             if not self._play_enabled:
                 return False
             self._play_enabled = False
+            self._deadman.reset()
         # Serialize against an in-flight _do_begin_episode so end_episode()
         # cannot land before begin_episode() has opened the episode file.
         with self._episode_start_lock:
             self._episode_logger.end_episode(outcome)
         self._inference_engine.update_play_enabled(False)
+        self._status.stopped(outcome)
         self._reset_episode_state(outcome=outcome)
         return True
 
@@ -1137,6 +1176,7 @@ class LeRobotDeployNode(Node):
                 # Idle STOP resets the world to start pose — the experiment
                 # runner issues this before episode 1 to avoid a stale pose.
                 self.get_logger().info('STOP while idle → resetting world to start pose.')
+                self._status.resetting()
                 self._reset_episode_state(outcome='reset')
             response.success = True
             response.message = 'STOP execution disabled'
@@ -1148,6 +1188,7 @@ class LeRobotDeployNode(Node):
                 self.get_logger().info('World reset requested via RESET (was playing).')
             else:
                 self.get_logger().info('World reset requested via RESET (was idle).')
+                self._status.resetting()
                 self._reset_episode_state(outcome='reset')
             response.success = True
             response.message = 'World reset triggered'
@@ -1155,6 +1196,7 @@ class LeRobotDeployNode(Node):
         else:
             response.success = False
             response.message = f'Command code {cmd} not supported in deploy stage.'
+            self._status.rejected(response.message)
             response.status = (
                 VlaCommand.Response.STATE_PLAYING if self._play_enabled
                 else VlaCommand.Response.STATE_STOPPED
@@ -1193,6 +1235,7 @@ class LeRobotDeployNode(Node):
             if hasattr(self._policy, 'reset'):
                 self._policy.reset()
             self._task_label = label
+            self._status.task_set(label)
             self._inference_engine.update_task_label(label)
             self.get_logger().info('Task label updated to {!r} via ~/task topic.'.format(label))
 
@@ -1253,6 +1296,24 @@ class LeRobotDeployNode(Node):
         except IndexError:
             return False
 
+    def _on_deadman_released(self) -> None:
+        self.get_logger().warning('Safety trigger released — holding commands.')
+        if self._servo_targets is not None:
+            self._servo_targets.disable_tracking()
+        self._status.released()
+
+    def _on_deadman_engaged(self) -> None:
+        # Drop actions queued while held so execution resumes on fresh chunks.
+        self._chunk_buffer.clear()
+        self._interpolator.reset()
+        if self._servo_targets is not None:
+            self._refresh_and_engage_servo()
+        if self._episode_t0 is None:
+            # Deferred episode clock: starts at first engagement, not at PLAY.
+            self._episode_t0 = self.get_clock().now()
+        self.get_logger().info('Safety trigger engaged — resuming with fresh actions.')
+        self._status.engaged()
+
     def _publish_next_action(self) -> None:  # refactor-exempt: control tick, ordered
         if not self._play_enabled:
             if self._base_pub is not None:
@@ -1271,32 +1332,15 @@ class LeRobotDeployNode(Node):
                 return
 
         if self._safety_enabled:
-            if not self._safety_pressed():
-                if self._safety_was_pressed:
-                    self.get_logger().warning(
-                        'Safety trigger released — holding commands.'
-                    )
-                    self._safety_was_pressed = False
-                    if self._servo_targets is not None:
-                        self._servo_targets.disable_tracking()
+            edge = self._deadman.update(self._safety_pressed())
+            if edge is Edge.RELEASED:
+                self._on_deadman_released()
+            elif edge is Edge.ENGAGED:
+                self._on_deadman_engaged()
+                return
+            if not self._deadman.engaged:
                 if self._base_pub is not None:
                     self._base_pub.publish(Twist())
-                return
-            if not self._safety_was_pressed:
-                # (Re)engaged: drop actions queued while held so execution
-                # resumes only with freshly inferred chunks.
-                self._chunk_buffer.clear()
-                self._interpolator.reset()
-                self._safety_was_pressed = True
-                if self._servo_targets is not None:
-                    self._refresh_and_engage_servo()
-                if self._episode_t0 is None:
-                    # Deferred episode clock: timing/timeout start now, not
-                    # while the scene was staged with the trigger released.
-                    self._episode_t0 = self.get_clock().now()
-                self.get_logger().info(
-                    'Safety trigger engaged — resuming with fresh actions.'
-                )
                 return
 
         if self._single_step_mode:
@@ -1341,6 +1385,7 @@ class LeRobotDeployNode(Node):
             cmd_vector=self._cmd_vector,
             now_msg=now,
         )
+        self._status.step()
         if self._servo_targets is not None:
             self._servo_targets.publish_step(
                 step, now, measured=self._obs_builder.state_vector
@@ -1381,13 +1426,6 @@ class LeRobotDeployNode(Node):
 
 
 def main(args: Optional[List[str]] = None) -> None:
-    # Checked here, not at module import, so lint/pytest collection of this
-    # package still works on environments without the ML stack installed.
-    runtime_deps.ensure({
-        'lerobot': 'pip install lerobot[training]~=0.6.0',
-        'huggingface_hub': 'pip install huggingface_hub',
-        'safetensors': 'pip install lerobot[training]~=0.6.0',
-    })
     rclpy.init(args=args)
     node = LeRobotDeployNode()
     executor = MultiThreadedExecutor(num_threads=4)

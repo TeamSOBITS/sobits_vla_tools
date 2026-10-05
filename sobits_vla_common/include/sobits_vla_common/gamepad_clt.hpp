@@ -28,6 +28,7 @@
 #ifndef SOBITS_VLA_COMMON__GAMEPAD_CLT_HPP_
 #define SOBITS_VLA_COMMON__GAMEPAD_CLT_HPP_
 
+#include <chrono>
 #include <string>
 
 #include <sensor_msgs/msg/joy.hpp>
@@ -54,6 +55,9 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
   rclcpp::Subscription<sobits_interfaces::msg::VlaStatus>::SharedPtr status_subscriber_;
+  // Newest status message; while fresh the feed overrides service-response states.
+  std::chrono::steady_clock::time_point last_status_rx_{};
+  bool statusFeedFresh() const;
   rclcpp::Client<sobits_interfaces::srv::VlaCommand>::SharedPtr service_client_;
   rclcpp::TimerBase::SharedPtr timer_;
 

@@ -477,7 +477,10 @@ def _register_ee_relative_steps() -> None:
     if _ee_relative_registered:
         return
     # Always this exact module path: the registry raises on a re-register from another path.
-    import sobits_vla_common.ee_relative_processor  # noqa: F401
+    try:
+        import sobits_vla_common.ee_relative_processor  # noqa: F401
+    except ImportError:
+        return  # no lerobot (fake_policy dry run): there are no pipelines to register into
     _ee_relative_registered = True
 
 
