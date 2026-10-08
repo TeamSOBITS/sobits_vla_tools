@@ -3,8 +3,8 @@
 # Morphology comes entirely from the robot descriptor named by
 # robot.descriptor_id. That key is REQUIRED -- the node raises rather than
 # guessing a morphology, and there is no inline robot.* fallback.
-# Generate a descriptor for a new robot with:
-#   ros2 run sobits_vla_common new_robot --robot_id <robot_id>
+# Scaffold a new robot's descriptor with:
+#   ros2 run sobits_robot_descriptor new_robot --robot-id <robot_id>
 /**:
   ros__parameters:
     model:

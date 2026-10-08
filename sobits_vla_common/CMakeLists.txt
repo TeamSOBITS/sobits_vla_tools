@@ -63,7 +63,6 @@ install(DIRECTORY robots config
 
 # Install executable scripts
 install(PROGRAMS
-  scripts/new_robot
   scripts/world_reset_node
   DESTINATION lib/${PROJECT_NAME}
 )

@@ -16,11 +16,10 @@ supplying the config/robot-descriptor plumbing every stage reads.
 |---|---|---|
 | `gamepad_clt_node` | C++ | Translates `/joy` button presses into `sobits_interfaces/srv/VlaCommand` requests against the collection or deploy stage. |
 | `world_reset_node` | Python (`scripts/world_reset_node`) | Teleports the scene/robot back to a preset between episodes in Gazebo. |
-| `new_robot` | Python (`scripts/new_robot`) | Scaffolds a new robot descriptor YAML from a template. |
 
 None of these are meant to be run standalone in production — they are
 brought up by the collection/deploy launch files (see those packages'
-READMEs) or invoked directly for scaffolding.
+READMEs).
 
 ## Parameters
 
@@ -61,7 +60,6 @@ per-package Outputs sections for the `output_root()` convention
 
 ```
 ros2 run sobits_vla_common gamepad_clt_node --ros-args -p gamepad.command_service:=vla_rosbag_collection/command
-ros2 run sobits_vla_common new_robot --help
 ```
 
 In practice these are brought up by `rosbag_collection.launch.py` /

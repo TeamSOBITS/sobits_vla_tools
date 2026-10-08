@@ -35,10 +35,8 @@ truth for joint groups, command topics, sensors, and mobile base. Scaffold a
 new one with:
 
 ```bash
-ros2 run sobits_vla_common new_robot \
-  --robot_id sobit_mini --dof 7 --cameras head,hand_left --mobile_base diff \
-  --gen_collection_config
-ros2 run sobits_vla_common new_robot --robot_id sobit_mini --validate_only
+ros2 run sobits_robot_descriptor new_robot --robot-id sobit_mini
+ros2 run sobits_robot_descriptor validate sobit_mini
 ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
