@@ -29,10 +29,15 @@ must follow.
 | `sobits_vla_deploy` | Real-time VLA inference + offline eval | [README](sobits_vla_deploy/README.md) |
 | `sobits_vla_visualization` | Reserved for future debug/viz nodes (empty skeleton) | [README](sobits_vla_visualization/README.md) |
 
-All pipeline stages read robot morphology from one **robot descriptor**
-(`sobits_vla_common/robots/<robot_id>.robot.yaml`) — the single source of
-truth for joint groups, command topics, sensors, and mobile base. Scaffold a
-new one with:
+All pipeline stages read robot morphology from the robot's shared **robot
+descriptor** (`<robot_id>_description/config/<robot_id>.robot.yaml`, schema v2,
+loaded via `sobits_robot_descriptor`) — joint
+groups, controllers, topics, sensors, mobile base, end effectors. VLA-only
+settings (group `active`/`max_joint_delta`/`relative_exclude`/feature names,
+mobile-base features/limits/deadbands, camera `active`/`compressed`/encoding incl.
+depth, ee `active`) live in `sobits_vla_common/config/robot_overrides_<robot_id>.yaml`;
+a stage config can add a `robot_overrides:` block with the same schema. Scaffold
+and check a new descriptor with:
 
 ```bash
 ros2 run sobits_robot_descriptor new_robot --robot-id sobit_mini

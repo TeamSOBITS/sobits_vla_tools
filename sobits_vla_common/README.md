@@ -21,6 +21,27 @@ None of these are meant to be run standalone in production — they are
 brought up by the collection/deploy launch files (see those packages'
 READMEs).
 
+## Robot descriptor
+
+`robot_descriptor.load_robot_descriptor(robot_id, overrides=None)` loads
+`<robot_id>_description/config/<robot_id>.robot.yaml` through
+`sobits_robot_descriptor` and applies `config/robot_overrides_<robot_id>.yaml`
+(VLA-only values keyed by descriptor names), with a stage's `robot_overrides`
+block deep-merged on top:
+
+```yaml
+descriptor_package: sobit_home_description   # only when it is not <robot_id>_description
+groups:      {<group>: {active, max_joint_delta, relative_exclude, features}}
+mobile_base: {active, features, max_vel_x/y/z/theta, linear_deadband, angular_deadband}
+cameras:     {<camera>: {active, compressed, encoding, depth: {active, compressed, encoding}}}
+ee:          {<ee>: {active}}
+```
+
+Defaults: groups/colour cameras/ee active, `features` = joint names,
+`max_joint_delta`/`max_vel_*`/deadbands 0, `compressed` when a compressed topic
+exists, depth inactive. A depth stream appears as the camera entry
+`<camera>_depth` (`is_depth`). Unknown names or keys raise.
+
 ## Parameters
 
 `sobits_vla_common/param_schema.py` is the schema loader every other

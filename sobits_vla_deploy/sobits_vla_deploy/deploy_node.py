@@ -743,7 +743,7 @@ class LeRobotDeployNode(Node):
             raise RuntimeError(
                 'robot.descriptor_id is unset -- refusing to default to a '
                 'robot-specific profile. Set it to a descriptor id under '
-                'sobits_vla_common/robots/<id>.robot.yaml.'
+                '<id>_description/config/<id>.robot.yaml.'
             )
 
         from sobits_vla_common.robot_descriptor import load_robot_descriptor

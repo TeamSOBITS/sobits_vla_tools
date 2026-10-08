@@ -243,7 +243,7 @@ class RosbagConversionNode(Node):
         if not self.robot_descriptor_id:
             raise RuntimeError(
                 'robot_descriptor_id is required: set it to a descriptor in '
-                'sobits_vla_common/robots/<id>.robot.yaml.'
+                '<id>_description/config/<id>.robot.yaml.'
             )
 
         from sobits_vla_common.robot_descriptor import load_robot_descriptor

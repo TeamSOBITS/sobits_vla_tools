@@ -28,10 +28,15 @@ SOBITS VLA Toolsは，SOBITSが開発したロボットをVision-Language-Action
 | `sobits_vla_deploy` | リアルタイムVLA推論 + オフライン評価 | [README](sobits_vla_deploy/README.md) |
 | `sobits_vla_visualization` | 将来のデバッグ/可視化ノード用の予約領域（空のスケルトン） | [README](sobits_vla_visualization/README.md) |
 
-すべてのパイプライン段階は，1つの**ロボット記述子**
-（`sobits_vla_common/robots/<robot_id>.robot.yaml`）からロボットの構造を
-読み込みます — 関節グループ，コマンドトピック，センサー，モバイルベースの
-唯一の情報源です。新規記述子は以下でスキャフォールドできます:
+すべてのパイプライン段階は，ロボット共通の**ロボット記述子**
+（`<robot_id>_description/config/<robot_id>.robot.yaml`，スキーマv2，
+`sobits_robot_descriptor`で読み込み）から
+関節グループ，コントローラ，トピック，センサー，モバイルベース，エンドエフェクタを
+読み込みます。VLA固有の設定（グループの`active`/`max_joint_delta`/`relative_exclude`/
+特徴量名，モバイルベースの特徴量/上限/デッドバンド，カメラの`active`/`compressed`/
+エンコーディング（深度含む），eeの`active`）は
+`sobits_vla_common/config/robot_overrides_<robot_id>.yaml`にあり，各段階の設定ファイルで
+同じスキーマの`robot_overrides:`ブロックを上書きできます。新規記述子の作成と検証:
 
 ```bash
 ros2 run sobits_robot_descriptor new_robot --robot-id sobit_mini

@@ -1,7 +1,7 @@
 /**:
   ros__parameters:
     # Morphology (joint groups, command topics, sensors, mobile_base) is loaded
-    # from sobits_vla_common/robots/sobit_home.robot.yaml via robot_descriptor_id.
+    # from sobit_home_description/config/sobit_home.robot.yaml via robot_descriptor_id.
     # This is the single source of truth shared across collection, conversion,
     # training, and deploy. Do NOT duplicate joint/topic lists here.
     robot_descriptor_id: "sobit_home"
