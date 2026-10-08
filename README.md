@@ -31,7 +31,7 @@ must follow.
 
 All pipeline stages read robot morphology from the robot's shared **robot
 descriptor** (`<robot_id>_description/config/<robot_id>.robot.yaml`, schema v2,
-loaded via `sobits_robot_descriptor`) — joint
+loaded via [`sobits_robot_descriptor`](https://github.com/TeamSOBITS/sobits_robot_descriptor)) — joint
 groups, controllers, topics, sensors, mobile base, end effectors. VLA-only
 settings (group `active`/`max_joint_delta`/`relative_exclude`/feature names,
 mobile-base features/limits/deadbands, camera `active`/`compressed`/encoding incl.

@@ -36,6 +36,7 @@ cd ../
 
 src_packages=(
     "sobits_interfaces"
+    "sobits_robot_descriptor"
 )
 
 for ((i = 0; i < ${#src_packages[@]}; i++)); do

@@ -30,7 +30,7 @@ SOBITS VLA Toolsは，SOBITSが開発したロボットをVision-Language-Action
 
 すべてのパイプライン段階は，ロボット共通の**ロボット記述子**
 （`<robot_id>_description/config/<robot_id>.robot.yaml`，スキーマv2，
-`sobits_robot_descriptor`で読み込み）から
+[`sobits_robot_descriptor`](https://github.com/TeamSOBITS/sobits_robot_descriptor)で読み込み）から
 関節グループ，コントローラ，トピック，センサー，モバイルベース，エンドエフェクタを
 読み込みます。VLA固有の設定（グループの`active`/`max_joint_delta`/`relative_exclude`/
 特徴量名，モバイルベースの特徴量/上限/デッドバンド，カメラの`active`/`compressed`/
