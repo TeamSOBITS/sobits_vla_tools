@@ -25,7 +25,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""Unit tests for RobotDescriptor.filtered(), focused on exclude_joints."""
+"""Unit tests for the VLA RobotDescriptor: shared-descriptor adapter, overrides, filtered()."""
 
 from dataclasses import replace
 import os
@@ -37,10 +37,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pytest  # noqa: E402
 
 from sobits_vla_common.robot_descriptor import (  # noqa: E402
-    _parse_descriptor_file, CameraSpec, ee_action_features, EEControlSpec,
-    EEPoseSpec, GroupSpec, JointSpec, load_robot_descriptor, MobileBaseSpec,
+    CameraSpec, ee_action_features, EEControlSpec, EEPoseSpec, from_descriptor,
+    GroupSpec, JointSpec, load_robot_descriptor, MobileBaseSpec,
     resolve_ee_action_specs, RobotDescriptor, validate_descriptor,
 )
+from sobits_vla_common.robot_overrides import import_loader  # noqa: E402
 
 
 def _joint(feature, ros_name=None):
@@ -157,24 +158,19 @@ def test_exclude_joints_empty_list_is_noop():
 
 
 _MINIMAL_YAML = """
-schema_version: 1
+schema_version: 2
 robot_id: test_robot
-joint_states_topic: /joint_states
+namespace: ""
+urdf: {xacro: robot.urdf.xacro}
+base_frame: base_footprint
+joint_states_topic: joint_states
 groups:
   - name: arm_left
-    command_topic: /arm_left/cmd
-    max_joint_delta: 0.0
-    active: true
-    joints:
-      - ros_name: shoulder
-        feature: shoulder
+    controller: arm_left_controller
+    joints: [shoulder]
   - name: arm_right
-    command_topic: /arm_right/cmd
-    max_joint_delta: 0.0
-    active: true
-    joints:
-      - ros_name: shoulder_r
-        feature: shoulder_r
+    controller: arm_right_controller
+    joints: [shoulder_r]
 ee:
   - name: left
     ee_link: hand_left_link
@@ -200,6 +196,10 @@ def _write_yaml(tmp_path, text):
     return path
 
 
+def _parse_descriptor_file(path, overrides=None):
+    return from_descriptor(import_loader().load_file(path), overrides)
+
+
 def test_ee_control_parses_from_yaml():
     with tempfile.TemporaryDirectory() as tmp:
         path = _write_yaml(tmp, _MINIMAL_YAML)
@@ -217,17 +217,7 @@ def test_ee_control_missing_key_defaults_to_empty_list():
         path = _write_yaml(tmp, text)
         desc = _parse_descriptor_file(path)
     assert desc.ee_control == []
-    assert desc.ee_poses is None
-
-
-def test_ee_missing_key_yields_none_poses_and_empty_control():
-    """No 'ee:' key at all -> ee_poses stays None, ee_control stays []."""
-    text = _MINIMAL_YAML.split('ee:')[0]
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _write_yaml(tmp, text)
-        desc = _parse_descriptor_file(path)
-    assert desc.ee_poses is None
-    assert desc.ee_control == []
+    assert desc.ee_poses == []
 
 
 def test_ee_empty_list_yields_empty_poses_and_empty_control():
@@ -254,31 +244,6 @@ def test_ee_entry_without_control_parses_pose_only():
     assert left.source_frame == 'hand_left_link'
     assert left.target_frame == 'base_footprint'
     assert desc.ee_control == []
-
-
-def test_old_ee_poses_key_raises_value_error():
-    text = _MINIMAL_YAML.split('ee:')[0] + """ee_poses:
-  - name: left
-    source_frame: hand_left_link
-    target_frame: base_footprint
-"""
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _write_yaml(tmp, text)
-        with pytest.raises(ValueError, match="removed 'ee_poses'"):
-            _parse_descriptor_file(path)
-
-
-def test_old_ee_control_key_raises_value_error():
-    text = _MINIMAL_YAML.split('ee:')[0] + """ee_control:
-  - ee_pose: left
-    group: arm_left
-    target_frame: left_target_link
-    enable_topic: arm_left/moveit_track_enabled
-"""
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _write_yaml(tmp, text)
-        with pytest.raises(ValueError, match="removed 'ee_poses'"):
-            _parse_descriptor_file(path)
 
 
 def test_ee_control_validate_unknown_ee_pose():

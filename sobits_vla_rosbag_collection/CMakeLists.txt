@@ -26,6 +26,7 @@ find_package(yaml_cpp_vendor REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(rosbag2_transport REQUIRED)
 find_package(sobits_vla_common REQUIRED)
+find_package(sobits_robot_descriptor REQUIRED)
 
 
 # Find libraries
@@ -66,7 +67,7 @@ ament_target_dependencies(${PROJECT_NAME}
 
 # yaml-cpp is found above and its headers are included directly; link it
 # explicitly rather than relying on yaml_cpp_vendor to propagate it.
-target_link_libraries(${PROJECT_NAME} yaml-cpp)
+target_link_libraries(${PROJECT_NAME} yaml-cpp sobits_robot_descriptor::sobits_robot_descriptor)
 
 install(TARGETS ${PROJECT_NAME}
   ARCHIVE DESTINATION lib
@@ -114,6 +115,15 @@ if(BUILD_TESTING)
     rclcpp sensor_msgs rcl_interfaces sobits_interfaces
     rosbag2_storage rosbag2_transport)
   target_link_libraries(test_bag_metadata_manager yaml-cpp)
+
+  ament_add_gtest(test_robot_descriptor_loader test/test_robot_descriptor_loader.cpp
+    src/robot_descriptor_loader.cpp)
+  target_include_directories(test_robot_descriptor_loader PRIVATE include)
+  ament_target_dependencies(test_robot_descriptor_loader
+    rclcpp sensor_msgs rcl_interfaces sobits_interfaces
+    rosbag2_storage rosbag2_transport)
+  target_link_libraries(test_robot_descriptor_loader
+    yaml-cpp sobits_robot_descriptor::sobits_robot_descriptor)
 endif()
 
 ament_package()

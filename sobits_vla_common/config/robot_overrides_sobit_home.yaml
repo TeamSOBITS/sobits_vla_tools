@@ -1,0 +1,37 @@
+# VLA-only settings keyed by the names in sobit_home_description/config/sobit_home.robot.yaml;
+# a stage config robot_overrides: block (same schema) is merged on top.
+
+groups:
+  head:       {active: true, max_joint_delta: 0.0}
+  body:       {active: true, max_joint_delta: 0.0}
+  arm_left:   {active: true, max_joint_delta: 0.0}
+  arm_right:  {active: true, max_joint_delta: 0.0}
+  # Grippers stay absolute, never delta-converted in relative-action mode.
+  hand_left:  {active: true, max_joint_delta: 0.0, relative_exclude: true}
+  hand_right: {active: true, max_joint_delta: 0.0, relative_exclude: true}
+
+mobile_base:
+  active: true
+  features: [x.vel, y.vel, theta.vel]
+  max_vel_x: 0.0
+  max_vel_y: 0.0
+  max_vel_z: 0.0
+  max_vel_theta: 0.0
+  # Commands below these are sent as zero (base creep suppression).
+  linear_deadband: 0.015
+  angular_deadband: 0.005
+
+# encoding "" = from the message (rgb8 fallback); depth (16UC1 mm, lossless
+# compressedDepth) becomes the camera entry <camera>_depth.
+cameras:
+  head_camera:
+    active: true
+    compressed: true
+    encoding: ""
+    depth: {active: false, compressed: true, encoding: 16UC1}
+  hand_left_camera:  {active: true, compressed: true, encoding: ""}
+  hand_right_camera: {active: true, compressed: true, encoding: ""}
+
+ee:
+  left:  {active: true}
+  right: {active: true}

@@ -26,6 +26,9 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+#include <cstdint>
+#include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -34,6 +37,50 @@
 
 namespace sobits_vla
 {
+
+namespace
+{
+
+YAML::Node toYaml(const rclcpp::ParameterValue & v)
+{
+  using T = rclcpp::ParameterType;
+  switch (v.get_type()) {
+    case T::PARAMETER_BOOL: return YAML::Node(v.get<bool>());
+    case T::PARAMETER_INTEGER: return YAML::Node(v.get<int64_t>());
+    case T::PARAMETER_DOUBLE: return YAML::Node(v.get<double>());
+    case T::PARAMETER_STRING: return YAML::Node(v.get<std::string>());
+    case T::PARAMETER_BOOL_ARRAY: return YAML::Node(v.get<std::vector<bool>>());
+    case T::PARAMETER_INTEGER_ARRAY: return YAML::Node(v.get<std::vector<int64_t>>());
+    case T::PARAMETER_DOUBLE_ARRAY: return YAML::Node(v.get<std::vector<double>>());
+    case T::PARAMETER_STRING_ARRAY: return YAML::Node(v.get<std::vector<std::string>>());
+    default: return YAML::Node();
+  }
+}
+
+// Undeclared robot_overrides.* params from the stage YAML, rebuilt as a tree.
+YAML::Node stageRobotOverrides(const std::map<std::string, rclcpp::ParameterValue> & params)
+{
+  const std::string prefix = "robot_overrides.";
+  YAML::Node root(YAML::NodeType::Map);
+  for (const auto & [name, value] : params) {
+    const YAML::Node leaf = toYaml(value);
+    if (name.rfind(prefix, 0) != 0 || !leaf) {continue;}
+    std::vector<std::string> keys;
+    std::stringstream ss(name.substr(prefix.size()));
+    for (std::string k; std::getline(ss, k, '.'); ) {
+      keys.push_back(k);
+    }
+    YAML::Node node = root;
+    for (size_t i = 0; i + 1 < keys.size(); ++i) {
+      if (!node[keys[i]]) {node[keys[i]] = YAML::Node(YAML::NodeType::Map);}
+      node.reset(node[keys[i]]);
+    }
+    node[keys.back()] = leaf;
+  }
+  return root;
+}
+
+}  // namespace
 
 // Pure move of the constructor's 41 declare_parameter/get_parameter calls;
 // same names, defaults, order, and dynamic per-part loop as before.
@@ -45,8 +92,8 @@ void RosbagCollection::declareAndReadParameters()
   if (!robot_descriptor_id.empty()) {
     RCLCPP_INFO(this->get_logger(), "Loading robot descriptor: %s", robot_descriptor_id.c_str());
     try {
-      RobotDescriptorCpp desc = loadRobotDescriptor(robot_descriptor_id);
-      robot_info_ = toRobotInfo(desc);
+      robot_info_ = loadRobotInfo(robot_descriptor_id,
+          stageRobotOverrides(this->get_node_parameters_interface()->get_parameter_overrides()));
     } catch (const std::exception & e) {
       RCLCPP_FATAL(this->get_logger(), "Failed to load robot descriptor: %s", e.what());
       throw;

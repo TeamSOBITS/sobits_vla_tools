@@ -28,7 +28,8 @@ Hand-declared C++ params (no schema loader yet in this package), grouped:
 
 | Group | Examples |
 |---|---|
-| `robot_descriptor_id` | Selects the shared descriptor under `sobits_vla_common/robots/`; falls back to a legacy inline `robot_info.*` tree if empty. |
+| `robot_descriptor_id` | Robot id: loads `<id>_description/config/<id>.robot.yaml` via `sobits_robot_descriptor` plus `sobits_vla_common/config/robot_overrides_<id>.yaml`; falls back to a legacy inline `robot_info.*` tree if empty. |
+| `robot_overrides.*` | Optional per-stage overrides (same schema as `robot_overrides_<id>.yaml`), merged on top. |
 | `rosbag_config.*` | `record_directory`, `min_episode_duration`, `max_episode_duration`, `expected_sensor_fps`, `min_disk_space_mb`, `additional_topics`, `conversion_format`, `world_reset_service`. |
 | `user_info.*` | `name`, `email`, `location` — written into `recorded_bags_meta.yaml`. |
 | `gamepad.*` | `command_service` (the service this node itself advertises, `~/command`), `controller`. |
@@ -87,4 +88,5 @@ colcon test-result --test-result-base build/sobits_vla_rosbag_collection
 ```
 
 gtest suites: `test_episode_lifecycle.cpp`, `test_record_status.cpp`,
-`test_topic_builder.cpp`, `test_bag_metadata_manager.cpp` (`sobits_vla_rosbag_collection/test/`).
+`test_topic_builder.cpp`, `test_bag_metadata_manager.cpp`, `test_robot_descriptor_loader.cpp`
+(`sobits_vla_rosbag_collection/test/`).

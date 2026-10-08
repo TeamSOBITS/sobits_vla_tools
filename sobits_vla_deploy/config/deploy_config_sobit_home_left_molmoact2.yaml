@@ -62,7 +62,7 @@
     robot:
       # Morphology (joint groups, command topics, joints, max_joint_delta,
       # mobile_base, cameras) is loaded from the shared robot descriptor:
-      #   sobits_vla_common/robots/sobit_home.robot.yaml
+      #   sobit_home_description/config/sobit_home.robot.yaml
       # exclude trims it to the subset this task uses (left-arm pickup)
       # without re-listing joints/topics. Unknown names raise.
       descriptor_id: sobit_home

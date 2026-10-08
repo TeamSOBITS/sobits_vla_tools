@@ -243,11 +243,14 @@ class RosbagConversionNode(Node):
         if not self.robot_descriptor_id:
             raise RuntimeError(
                 'robot_descriptor_id is required: set it to a descriptor in '
-                'sobits_vla_common/robots/<id>.robot.yaml.'
+                '<id>_description/config/<id>.robot.yaml.'
             )
 
         from sobits_vla_common.robot_descriptor import load_robot_descriptor
-        desc = load_robot_descriptor(self.robot_descriptor_id)
+        from sobits_vla_common.robot_overrides import robot_overrides_from_params
+        desc = load_robot_descriptor(
+            self.robot_descriptor_id, overrides=robot_overrides_from_params(
+                getattr(self, '_parameter_overrides', None) or {}))
 
         # Per-config trim of the shared descriptor (e.g. left-arm-only runs),
         # so the descriptor keeps describing the whole robot.

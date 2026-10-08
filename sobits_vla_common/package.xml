@@ -30,6 +30,7 @@
   <depend>sensor_msgs</depend>
   <depend>sobits_interfaces</depend>
   <depend>python3-yaml</depend>
+  <depend>sobits_robot_descriptor</depend>
   <!-- image_codec decodes ROS images with cv2; apt build stays ABI-matched
        with cv_bridge. Consumers get it transitively via this package. -->
   <exec_depend>python3-opencv</exec_depend>
