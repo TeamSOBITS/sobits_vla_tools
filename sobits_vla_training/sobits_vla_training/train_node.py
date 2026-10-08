@@ -257,6 +257,9 @@ class TrainNode(Node):
                 self.get_logger().warning(f'policy_overrides discovery failed: {exc}')
         # Strip the [''] empty-list sentinel (see param_schema._read_leaf) --
         # this hand-written path bypasses the schema reader's filtering.
+        from sobits_vla_common.robot_overrides import robot_overrides_from_params
+        params['robot_overrides'] = robot_overrides_from_params(
+            getattr(self, '_parameter_overrides', None) or {})
         params['policy_overrides'] = {
             k: [x for x in v if x != ''] if isinstance(v, list) else v
             for k, v in po.items()

@@ -77,20 +77,21 @@ _CASES = [
         'sobits_vla_deploy',
         'sobits_vla_deploy/config/deploy_config*.yaml',
         # robot.* is declared in _load_robot_profile from the descriptor.
-        [r'^robot\..+'],
+        [r'^robot\..+', r'^robot_overrides\..+'],
     ),
     (
         'sobits_vla_training/sobits_vla_training/train_node.py',
         'sobits_vla_training',
         'sobits_vla_training/config/training_config*.yaml',
-        [r'^peft\.full_training_modules$', r'^policy_overrides($|\..+)'],
+        [r'^peft\.full_training_modules$', r'^policy_overrides($|\..+)',
+         r'^robot_overrides\..+'],
     ),
     (
         'sobits_vla_rosbag_conversion/sobits_vla_rosbag_conversion/'
         'conversion_node.py',
         'rosbag_conversion_node',
         'sobits_vla_rosbag_conversion/config/conversion_config*.yaml',
-        [],
+        [r'^robot_overrides\..+'],
     ),
 ]
 

@@ -169,7 +169,7 @@ def build_train_config(params: dict[str, Any], output_dir: Path):
             raise ValueError('robot.exclude.ee_poses was renamed to robot.exclude.ee')
 
         from sobits_vla_common.robot_descriptor import load_robot_descriptor
-        desc = load_robot_descriptor(desc_id)
+        desc = load_robot_descriptor(desc_id, overrides=params.get('robot_overrides'))
 
         desc = desc.filtered(
             exclude_groups=params.get('robot.exclude.groups', []),

@@ -747,7 +747,9 @@ class LeRobotDeployNode(Node):
             )
 
         from sobits_vla_common.robot_descriptor import load_robot_descriptor
-        desc = load_robot_descriptor(desc_id)
+        from sobits_vla_common.robot_overrides import robot_overrides_from_params
+        desc = load_robot_descriptor(desc_id, overrides=robot_overrides_from_params(
+            getattr(self, '_parameter_overrides', None) or {}))
         self._active_profile = desc_id
 
         # Trim the shared descriptor to the subset this model drives. Unknown
