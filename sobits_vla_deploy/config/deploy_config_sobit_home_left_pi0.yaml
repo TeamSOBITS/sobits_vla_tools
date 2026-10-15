@@ -26,7 +26,7 @@
       async_enabled: true
       single_step_mode: false
       # NOTE: per-group joint rate limiting (max_joint_delta) comes from the
-      # robot descriptor (sobits_vla_common/robots/sobit_home.robot.yaml).
+      # robot descriptor (sobit_home_description/config/sobit_home.robot.yaml).
 
     rtc:
       # pi0 exposes predict_action_chunk + rtc_config (registry supports_rtc).

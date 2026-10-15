@@ -39,7 +39,7 @@
     skip_static_threshold: 0.0
 
     # Robot morphology, joints, EE frames, and cameras all come from this
-    # descriptor, loaded from sobits_vla_common/robots/<id>.robot.yaml.
+    # descriptor, <id>_description/config/<id>.robot.yaml (+ robot_overrides_<id>.yaml).
     robot_descriptor_id: "sobit_home"
 
     # Trim the shared descriptor to the subset this dataset uses, leaving the

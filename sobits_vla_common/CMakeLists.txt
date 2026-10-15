@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.28)
 project(sobits_vla_common)
 
 # Default to C++17
@@ -56,14 +56,13 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
-# Install robot descriptors and gamepad config files
-install(DIRECTORY robots config
+# Install robot overrides, gamepad and world-reset config files
+install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME}
 )
 
 # Install executable scripts
 install(PROGRAMS
-  scripts/new_robot
   scripts/world_reset_node
   DESTINATION lib/${PROJECT_NAME}
 )

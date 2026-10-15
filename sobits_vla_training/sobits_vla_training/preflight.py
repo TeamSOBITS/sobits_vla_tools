@@ -176,7 +176,8 @@ def _check_ee_frames(repo_id: str, ee_frames: dict, params: dict, arms: list) ->
             'frames can be checked against the descriptor.'
         )
     from sobits_vla_common.robot_descriptor import load_robot_descriptor
-    by_name = {e.name: e for e in (load_robot_descriptor(desc_id).ee_poses or [])}
+    desc = load_robot_descriptor(desc_id, overrides=params.get('robot_overrides'))
+    by_name = {e.name: e for e in (desc.ee_poses or [])}
     for arm in arms:
         frames = ee_frames.get(arm)
         if frames is None:
@@ -266,7 +267,7 @@ def run_preflight_checks(params: dict, ros_logger=None) -> None:
                 raise ValueError('robot.exclude.ee_poses was renamed to robot.exclude.ee')
 
             from sobits_vla_common.robot_descriptor import load_robot_descriptor
-            desc = load_robot_descriptor(desc_id)
+            desc = load_robot_descriptor(desc_id, overrides=params.get('robot_overrides'))
 
             desc = desc.filtered(
                 exclude_groups=params.get('robot.exclude.groups', []),

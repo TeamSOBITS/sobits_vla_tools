@@ -30,77 +30,31 @@
 
 #include <yaml-cpp/yaml.h>
 
-#include <map>
 #include <string>
 #include <vector>
+
+#include <sobits_robot_descriptor/loader.hpp>
 
 #include "sobits_vla_rosbag_collection/rosbag_collection.hpp"
 
 namespace sobits_vla
 {
 
-struct JointSpecCpp
-{
-  std::string ros_name;
-  std::string feature;
-};
+// Same layering as sobits_vla_common.robot_descriptor: shared descriptor
+// (sobits_robot_descriptor) + config/robot_overrides_<robot_id>.yaml.
 
-struct GroupSpecCpp
-{
-  std::string name;
-  std::string command_topic;
-  std::string command_action;
-  // Empty means "derive from command_topic" (ros2_control naming fallback).
-  std::string state_topic;
-  double max_joint_delta;
-  bool active;
-  std::vector<JointSpecCpp> joints;
-};
+// Installed share/sobits_vla_common/config file, else the source tree; "" if absent.
+std::string resolveRobotOverridesPath(const std::string & robot_id);
 
-struct MobileBaseSpecCpp
-{
-  std::string command_topic;
-  std::string odom_topic;
-  bool has_vel_x;
-  bool has_vel_y;
-  bool has_vel_z;
-  bool has_vel_theta;
-  double max_vel_x;
-  double max_vel_y;
-  double max_vel_z;
-  double max_vel_theta;
-  std::vector<std::string> features;
-};
+// Deep merge by key: mappings merge, anything else in `extra` replaces.
+YAML::Node mergeOverrides(const YAML::Node & base, const YAML::Node & extra);
 
-struct CameraSpecCpp
-{
-  std::string name;
-  std::string compressed_topic;
-  std::string raw_topic;
-  std::string info_topic;
-  std::string encoding;
-  bool compressed;
-  bool active;
-  bool is_depth{false};
-};
+YAML::Node loadRobotOverrides(const std::string & robot_id, const YAML::Node & extra = {});
 
-struct RobotDescriptorCpp
-{
-  std::string robot_id;
-  std::string joint_states_topic;
-  // Optional descriptor keys; defaults preserve the pre-existing literals.
-  std::string version{"1.0.0"};
-  std::string morphology{"mobile_manipulator"};
-  std::string mobile_base_name{"mobile_base"};
-  std::vector<GroupSpecCpp> groups;
-  bool has_mobile_base{false};
-  MobileBaseSpecCpp mobile_base;
-  std::vector<CameraSpecCpp> cameras;
-  std::vector<std::string> excluded_joints;
-};
+RobotInfo toRobotInfo(
+  const sobits_robot_descriptor::RobotDescriptor & desc, const YAML::Node & overrides);
 
-RobotDescriptorCpp loadRobotDescriptor(const std::string & robot_id);
-RobotInfo toRobotInfo(const RobotDescriptorCpp & desc);
+RobotInfo loadRobotInfo(const std::string & robot_id, const YAML::Node & stage_overrides = {});
 
 }  // namespace sobits_vla
 

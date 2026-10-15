@@ -1,0 +1,39 @@
+# VLA-only settings keyed by the names in sobit_light_description/config/sobit_light.robot.yaml;
+# a stage config robot_overrides: block (same schema) is merged on top.
+
+groups:
+  head:         {active: true, max_joint_delta: 0.10}
+  manipulator:  {active: true, max_joint_delta: 0.15}
+  # Gripper stays absolute, never delta-converted in relative-action mode.
+  end_effector: {active: true, max_joint_delta: 0.30, relative_exclude: true}
+
+mobile_base:
+  active: true
+  features: [x.vel, theta.vel]
+  max_vel_x: 0.0
+  max_vel_y: 0.0
+  max_vel_z: 0.0
+  max_vel_theta: 0.0
+  # Commands below these are sent as zero (base creep suppression).
+  linear_deadband: 0.015
+  angular_deadband: 0.005
+
+# encoding "" = from the message (rgb8 fallback); depth (16UC1 mm, lossless
+# compressedDepth) becomes the camera entry <camera>_depth.
+cameras:
+  head_camera:
+    active: true
+    compressed: true
+    encoding: ""
+    depth: {active: false, compressed: true, encoding: 16UC1}
+  hand_camera:
+    active: true
+    compressed: true
+    encoding: ""
+    depth: {active: false, compressed: true, encoding: 16UC1}
+  camera_front: {active: false, compressed: true, encoding: ""}
+  camera_rear:  {active: false, compressed: true, encoding: ""}
+
+# The v1 descriptor declared no EE; keep EE poses off until datasets use them.
+ee:
+  hand: {active: false}

@@ -46,7 +46,7 @@
 
     robot:
       # Morphology is loaded from the shared robot descriptor:
-      #   sobits_vla_common/robots/sobit_home.robot.yaml
+      #   sobit_home_description/config/sobit_home.robot.yaml
       descriptor_id: sobit_home
       exclude:
         groups: ["arm_right", "hand_right"]

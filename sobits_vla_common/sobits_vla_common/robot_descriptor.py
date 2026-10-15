@@ -31,10 +31,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
-import yaml
+from sobits_vla_common.robot_overrides import (
+    check_overrides, descriptor_search_dirs, import_loader, load_robot_overrides,
+)
 
 
 # Dataset action feature name -> mobile_base velocity key. Single source of
@@ -59,6 +60,9 @@ EE_ROTATION_AXES: Dict[str, tuple] = {
     'quat': EE_ACTION_AXES_QUAT,
 }
 EE_ROTATION_DEFAULT = 'rotvec'
+
+# A depth stream becomes its own camera entry; the name keeps dataset keys apart.
+DEPTH_SUFFIX = '_depth'
 
 
 def ee_action_features(name: str, rotation: str = EE_ROTATION_DEFAULT) -> List[str]:
@@ -407,152 +411,133 @@ class RobotDescriptor:
         return features
 
 
-# refactor-exempt: yaml schema parse, one block per section
-def _parse_descriptor_file(path: Path) -> RobotDescriptor:
-    with open(path) as f:
-        data = yaml.safe_load(f)
+def _abs(desc: Any, rel: Optional[str]) -> str:
+    return desc.topic(rel) if rel else ''
 
-    groups = []
-    for g in (data.get('groups') or []):
-        joints = [
-            JointSpec(ros_name=j['ros_name'], feature=j['feature'])
-            for j in (g.get('joints') or [])
-        ]
-        groups.append(GroupSpec(
-            name=g['name'],
-            command_topic=g['command_topic'],
-            command_action=g.get('command_action'),
-            state_topic=str(g.get('state_topic', '')),
-            max_joint_delta=float(g.get('max_joint_delta', 0.0)),
-            active=bool(g.get('active', True)),
-            joints=joints,
-            relative_exclude=bool(g.get('relative_exclude', False)),
-        ))
 
-    mb = data.get('mobile_base')
-    mobile_base = None
-    if mb:
-        mobile_base = MobileBaseSpec(
-            name=str(mb.get('name', 'mobile_base')),
-            command_topic=mb['command_topic'],
-            odom_topic=mb['odom_topic'],
-            has_vel_x=bool(mb.get('has_vel_x', False)),
-            has_vel_y=bool(mb.get('has_vel_y', False)),
-            has_vel_z=bool(mb.get('has_vel_z', False)),
-            has_vel_theta=bool(mb.get('has_vel_theta', False)),
-            max_vel_x=float(mb.get('max_vel_x', 0.0)),
-            max_vel_y=float(mb.get('max_vel_y', 0.0)),
-            max_vel_z=float(mb.get('max_vel_z', 0.0)),
-            max_vel_theta=float(mb.get('max_vel_theta', 0.0)),
-            features=list(mb.get('features') or []),
-            linear_deadband=float(mb.get('linear_deadband', 0.0)),
-            angular_deadband=float(mb.get('angular_deadband', 0.0)),
-        )
-    sensors = {}
-    s_dict = data.get('sensors') or {}
-    for s_type, s_list in s_dict.items():
-        if s_type == 'cameras':
-            cameras = []
-            for c in (s_list or []):
-                cameras.append(CameraSpec(
-                    name=c['name'],
-                    compressed_topic=c.get('compressed_topic', ''),
-                    raw_topic=c.get('raw_topic', ''),
-                    info_topic=c.get('info_topic', ''),
-                    encoding=c.get('encoding', ''),
-                    compressed=bool(c.get('compressed', False)),
-                    active=bool(c.get('active', True)),
-                    is_depth=bool(c.get('is_depth', False))
-                ))
-            sensors['cameras'] = cameras
-        else:
-            sensors[s_type] = s_list
-
-    if 'ee_poses' in data or 'ee_control' in data:
+def _group_spec(desc: Any, g: Any, o: Dict[str, Any]) -> GroupSpec:
+    features = list(o.get('features') or g.joints)
+    if len(features) != len(g.joints):
         raise ValueError(
-            "descriptor uses removed 'ee_poses'/'ee_control' blocks; migrate "
-            "to the merged 'ee:' block (name/ee_link/reference_frame + "
-            'optional control.group/command_frame/enable_topic)'
-        )
+            f'robot_overrides groups.{g.name}.features has {len(features)} names for '
+            f'{len(g.joints)} joints {g.joints}')
+    return GroupSpec(
+        name=g.name,
+        command_topic=_abs(desc, g.command_topic),
+        command_action=_abs(desc, g.command_action) or None,
+        state_topic=_abs(desc, g.state_topic),
+        max_joint_delta=float(o.get('max_joint_delta', 0.0)),
+        active=bool(o.get('active', True)),
+        joints=[JointSpec(ros_name=j, feature=f) for j, f in zip(g.joints, features)],
+        relative_exclude=bool(o.get('relative_exclude', False)),
+    )
 
-    ee_poses = None
-    ee_control = []
-    ee_list = data.get('ee')
-    if ee_list is not None:
-        ee_poses = []
-        for e in ee_list:
-            ee_poses.append(EEPoseSpec(
-                name=e['name'],
-                source_frame=e['ee_link'],
-                target_frame=e['reference_frame'],
-                active=bool(e.get('active', True)),
-            ))
-            c = e.get('control')
-            if c:
-                ee_control.append(EEControlSpec(
-                    ee_pose=e['name'],
-                    group=c['group'],
-                    target_frame=c['command_frame'],
-                    enable_topic=c['enable_topic'],
-                ))
 
+def _mobile_base_spec(desc: Any, o: Dict[str, Any]) -> Optional[MobileBaseSpec]:
+    mb = desc.mobile_base
+    if mb is None or not o.get('active', True):
+        return None
+    axes = ('x', 'y', 'z', 'theta')
+    default_features = [f'{a}.vel' for a in axes if getattr(mb, f'has_vel_{a}')]
+    return MobileBaseSpec(
+        name='mobile_base',
+        command_topic=_abs(desc, mb.command_topic),
+        odom_topic=_abs(desc, mb.odom_topic),
+        **{f'has_vel_{a}': bool(getattr(mb, f'has_vel_{a}')) for a in axes},
+        **{f'max_vel_{a}': float(o.get(f'max_vel_{a}', 0.0)) for a in axes},
+        features=list(o.get('features') or default_features),
+        linear_deadband=float(o.get('linear_deadband', 0.0)),
+        angular_deadband=float(o.get('angular_deadband', 0.0)),
+    )
+
+
+def _stream_spec(desc: Any, name: str, s: Any, o: Dict[str, Any],
+                 is_depth: bool) -> CameraSpec:
+    return CameraSpec(
+        name=name,
+        compressed_topic=_abs(desc, s.compressed_topic),
+        raw_topic=_abs(desc, s.raw_topic),
+        info_topic=_abs(desc, s.info_topic),
+        encoding=str(o.get('encoding', s.encoding) or ''),
+        compressed=bool(o.get('compressed', bool(s.compressed_topic))),
+        # Depth is opt-in: it multiplies bag size and few policies consume it.
+        active=bool(o.get('active', not is_depth)),
+        is_depth=is_depth,
+    )
+
+
+def _camera_specs(desc: Any, ov: Dict[str, Any]) -> List[CameraSpec]:
+    """v1 shape: colour entry under the camera name, depth as '<name>_depth' with is_depth."""
+    out = []
+    for cam in desc.cameras:
+        o = ov.get(cam.name) or {}
+        if cam.color is not None:
+            out.append(_stream_spec(desc, cam.name, cam.color, o, is_depth=False))
+        if cam.depth is not None:
+            out.append(_stream_spec(desc, f'{cam.name}{DEPTH_SUFFIX}', cam.depth,
+                                    o.get('depth') or {}, is_depth=True))
+    return out
+
+
+def from_descriptor(desc: Any, overrides: Optional[Mapping[str, Any]] = None) -> RobotDescriptor:
+    """Map a shared (schema v2) descriptor plus VLA overrides onto the VLA dataclasses."""
+    ov = dict(overrides or {})
+    errors = check_overrides(
+        ov, [g.name for g in desc.groups], [c.name for c in desc.cameras],
+        [e.name for e in desc.ee], desc.mobile_base is not None)
+    if errors:
+        raise ValueError(f'Invalid robot_overrides for {desc.robot_id!r}:\n  - '
+                         + '\n  - '.join(errors))
+    group_ov = ov.get('groups') or {}
+    ee_ov = ov.get('ee') or {}
+    ee_poses = [
+        EEPoseSpec(name=e.name, source_frame=desc.frame(e.ee_link),
+                   target_frame=desc.frame(e.reference_frame),
+                   active=bool((ee_ov.get(e.name) or {}).get('active', True)))
+        for e in desc.ee
+    ]
+    ee_control = [
+        EEControlSpec(ee_pose=e.name, group=e.control.group,
+                      target_frame=desc.frame(e.control.command_frame),
+                      enable_topic=e.control.enable_topic)
+        for e in desc.ee if e.control is not None
+    ]
     return RobotDescriptor(
-        robot_id=data['robot_id'],
-        joint_states_topic=data['joint_states_topic'],
-        version=str(data.get('version', '1.0.0')),
-        morphology=str(data.get('morphology', 'mobile_manipulator')),
-        groups=groups,
-        mobile_base=mobile_base,
-        sensors=sensors,
+        robot_id=desc.robot_id,
+        joint_states_topic=desc.topic(desc.joint_states_topic),
+        version=desc.version,
+        morphology=str(ov.get('morphology', 'mobile_manipulator')),
+        groups=[_group_spec(desc, g, group_ov.get(g.name) or {}) for g in desc.groups],
+        mobile_base=_mobile_base_spec(desc, ov.get('mobile_base') or {}),
+        sensors={'cameras': _camera_specs(desc, ov.get('cameras') or {})},
         ee_poses=ee_poses,
         ee_control=ee_control,
-        excluded_joints=list(data.get('excluded_joints') or [])
+        # Mimic joints appear in joint_states but are never dataset features.
+        excluded_joints=desc.all_excluded_joints + [
+            j for g in desc.groups for j in g.uncommanded_joints],
     )
 
 
-def resolve_descriptor_path(robot_id: str) -> Path:
-    """Return the path to ``<robot_id>.robot.yaml`` or raise FileNotFoundError."""
-    # 1. Try ament index if available
-    try:
-        from ament_index_python.packages import get_package_share_directory
-        share = Path(get_package_share_directory('sobits_vla_common'))
-        candidate = share / 'robots' / f'{robot_id}.robot.yaml'
-        if candidate.is_file():
-            return candidate
-    except Exception:
-        pass
+def load_robot_descriptor(
+    robot_id: str, validate: bool = True, overrides: Optional[Mapping[str, Any]] = None,
+) -> RobotDescriptor:
+    """
+    Load the shared ``<robot_id>.robot.yaml`` and apply the VLA overrides.
 
-    # 2. Try source tree lookup relative to this file
-    current_file = Path(__file__).resolve()
-    for parent in current_file.parents:
-        candidate = parent / 'robots' / f'{robot_id}.robot.yaml'
-        if candidate.is_file():
-            return candidate
-        candidate = parent / 'sobits_vla_common' / 'robots' / f'{robot_id}.robot.yaml'
-        if candidate.is_file():
-            return candidate
-
-    # 3. FileNotFoundError with a hint to new_robot scaffolder
-    raise FileNotFoundError(
-        f"Could not find robot descriptor for '{robot_id}'. "
-        f'Ensure it exists at <share>/robots/{robot_id}.robot.yaml. '
-        'You can generate a new scaffold with: '
-        f'`ros2 run sobits_vla_common new_robot --robot_id {robot_id}`'
-    )
-
-
-def load_robot_descriptor(robot_id: str, validate: bool = True) -> RobotDescriptor:
-    """Load ``<robot_id>.robot.yaml``, raising on a structurally invalid descriptor."""
-    path = resolve_descriptor_path(robot_id)
-    desc = _parse_descriptor_file(path)
+    ``overrides`` (a stage config's ``robot_overrides`` block) is merged over
+    ``config/robot_overrides_<robot_id>.yaml``.
+    """
+    srd = import_loader()
+    ov = load_robot_overrides(robot_id, overrides)
+    package = ov.get('descriptor_package') or f'{robot_id}_description'
+    shared = srd.load(robot_id, validate=validate,
+                      search_dirs=descriptor_search_dirs(package))
+    desc = from_descriptor(shared, ov)
     if validate:
         errors = validate_descriptor(desc)
         if errors:
-            raise ValueError(
-                'Invalid robot descriptor {}:\n  - {}'.format(
-                    path, '\n  - '.join(errors)
-                )
-            )
+            raise ValueError('Invalid robot descriptor {}:\n  - {}'.format(
+                shared.path, '\n  - '.join(errors)))
     return desc
 
 
